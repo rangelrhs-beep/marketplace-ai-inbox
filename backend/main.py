@@ -1,12 +1,16 @@
 from datetime import datetime
 from enum import Enum
 import os
-from typing import List
+from typing import Any, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from integrations.errors import ApiFailureError, ConnectorError, ConnectorErrorCode, serialize_connector_error
+from integrations.models import ConnectionTestResult, IntegrationHealth, NormalizedQuestion
+from integrations.registry import services as integration_services
 
 
 load_dotenv()
@@ -45,6 +49,7 @@ class Question(BaseModel):
     ai_suggestion: str
     sku: str
     price: str
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class SuggestionResponse(BaseModel):
@@ -65,6 +70,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def raise_connector_http_error(error: ConnectorError) -> None:
+    status_by_code = {
+        ConnectorErrorCode.missing_fields: 502,
+        ConnectorErrorCode.token_expired: 401,
+        ConnectorErrorCode.rate_limited: 429,
+        ConnectorErrorCode.api_failure: 502,
+    }
+    raise HTTPException(
+        status_code=status_by_code.get(error.code, 502),
+        detail=serialize_connector_error(error),
+    )
 
 
 questions: List[Question] = [
@@ -218,6 +236,54 @@ def find_question(question_id: int) -> Question:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/integrations/health", response_model=List[IntegrationHealth])
+def list_integrations_health():
+    health_items = []
+    for service in integration_services.values():
+        try:
+            health_items.append(service.get_health())
+        except ConnectorError as error:
+            health_items.append(
+                IntegrationHealth(
+                    id=service.client.id,
+                    channel=service.client.channel,
+                    api_status="down",
+                    last_sync=None,
+                    last_error=error.message,
+                    token_status="missing",
+                )
+            )
+    return health_items
+
+
+@app.post("/integrations/{integration_id}/test", response_model=ConnectionTestResult)
+def test_integration_connection(integration_id: str):
+    service = integration_services.get(integration_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Integracao nao encontrada")
+
+    try:
+        return service.test_connection()
+    except ConnectorError as error:
+        raise_connector_http_error(error)
+    except Exception as error:
+        raise_connector_http_error(ApiFailureError("Unexpected connector failure.", details={"error": str(error)}))
+
+
+@app.get("/integrations/{integration_id}/questions", response_model=List[NormalizedQuestion])
+def list_integration_questions(integration_id: str):
+    service = integration_services.get(integration_id)
+    if not service:
+        raise HTTPException(status_code=404, detail="Integracao nao encontrada")
+
+    try:
+        return service.list_questions()
+    except ConnectorError as error:
+        raise_connector_http_error(error)
+    except Exception as error:
+        raise_connector_http_error(ApiFailureError("Unexpected connector failure.", details={"error": str(error)}))
 
 
 @app.get("/questions", response_model=List[Question])
