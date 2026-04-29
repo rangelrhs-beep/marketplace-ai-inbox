@@ -32,6 +32,75 @@ button:disabled {
   opacity: 0.58;
 }
 
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 12%, rgba(124, 58, 237, 0.14), transparent 30%),
+    linear-gradient(135deg, #f8fbff, #eef4ff);
+}
+
+.login-panel {
+  width: min(100%, 520px);
+  border: 1px solid rgba(126, 139, 168, 0.18);
+  border-radius: 26px;
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 28px 70px rgba(32, 43, 69, 0.14);
+}
+
+.login-brand {
+  margin-bottom: 24px;
+}
+
+.login-panel h1 {
+  margin: 0 0 8px;
+  font-size: 34px;
+  letter-spacing: 0;
+}
+
+.login-panel p {
+  margin: 0;
+  color: #647189;
+  line-height: 1.55;
+}
+
+.login-options {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.login-option {
+  border: 1px solid #dce3f1;
+  border-radius: 18px;
+  padding: 16px;
+  background: white;
+  color: #172033;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.login-option:hover {
+  border-color: rgba(79, 70, 229, 0.42);
+  box-shadow: 0 16px 34px rgba(79, 70, 229, 0.12);
+}
+
+.login-option strong,
+.login-option span {
+  display: block;
+}
+
+.login-option span,
+.login-option small {
+  color: #647189;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -157,6 +226,29 @@ button:disabled {
   gap: 16px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.company-switcher {
+  color: #647189;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.company-switcher select {
+  min-width: 190px;
+  height: 44px;
+  margin-left: 8px;
+  border: 1px solid #dce3f1;
+  border-radius: 14px;
+  padding: 0 12px;
+  background: white;
+  color: #172033;
+}
+
 .topbar h1,
 .conversation-header h2 {
   margin: 3px 0;
@@ -208,6 +300,23 @@ button:disabled {
   display: block;
   font-size: 26px;
   margin-top: 6px;
+}
+
+.tenant-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -8px 0 16px;
+}
+
+.tenant-strip span {
+  border: 1px solid #dce3f1;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #566176;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .filters {
@@ -1088,6 +1197,21 @@ button:disabled {
 
   .topbar {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-actions,
+  .company-switcher,
+  .company-switcher select {
+    width: 100%;
+  }
+
+  .topbar-actions {
+    display: grid;
+  }
+
+  .company-switcher select {
+    margin: 7px 0 0;
   }
 
   .topbar h1 {
@@ -1095,12 +1219,12 @@ button:disabled {
   }
 
   .new-rule {
-    width: 46px;
+    width: 100%;
     padding: 0;
   }
 
   .new-rule {
-    font-size: 0;
+    font-size: inherit;
   }
 
   .metrics,

@@ -265,6 +265,79 @@ const initialIntegrationHealth = [
   },
 ];
 
+const mockCompanies = [
+  { id: "atlas-commerce", name: "Atlas Commerce", plan: "Pro" },
+  { id: "nova-casa", name: "Nova Casa Imports", plan: "Starter" },
+];
+
+const mockUsers = [
+  {
+    id: "u-admin",
+    name: "Ana Admin",
+    email: "admin@atlas.demo",
+    role: "admin",
+    companyId: "atlas-commerce",
+  },
+  {
+    id: "u-agent",
+    name: "Bruno Atendente",
+    email: "bruno@novacasa.demo",
+    role: "user",
+    companyId: "nova-casa",
+  },
+];
+
+function cloneQuestionsForCompany(companyId) {
+  if (companyId === "nova-casa") {
+    return demoQuestions.slice(0, 6).map((question) => ({
+      ...question,
+      id: question.id + 100,
+      company_id: companyId,
+      product:
+        question.id % 2 === 0
+          ? question.product.replace("Premium", "Casa")
+          : question.product,
+    }));
+  }
+
+  return demoQuestions.map((question) => ({ ...question, company_id: companyId }));
+}
+
+const initialTenantData = {
+  "atlas-commerce": {
+    users: mockUsers.filter((user) => user.companyId === "atlas-commerce"),
+    integrations: initialIntegrations,
+    questions: cloneQuestionsForCompany("atlas-commerce"),
+    aiSettings: {
+      tone: "Profissional e consultivo",
+      autoApprove: false,
+      maxRewriteAttempts: 3,
+    },
+    usageLogs: [
+      { id: 1, action: "ai_rewrite", count: 42, created_at: "2026-04-29T08:30:00" },
+      { id: 2, action: "approved_answer", count: 18, created_at: "2026-04-29T09:10:00" },
+    ],
+  },
+  "nova-casa": {
+    users: mockUsers.filter((user) => user.companyId === "nova-casa"),
+    integrations: initialIntegrations.map((integration) =>
+      ["mercado-livre", "shopee"].includes(integration.id)
+        ? { ...integration, status: "Conectado", store: `${integration.name} Nova Casa` }
+        : { ...integration, status: integration.id === "tiny-erp" ? "Em breve" : "Não conectado", store: "", lastSync: "" }
+    ),
+    questions: cloneQuestionsForCompany("nova-casa"),
+    aiSettings: {
+      tone: "Direto e vendedor",
+      autoApprove: false,
+      maxRewriteAttempts: 2,
+    },
+    usageLogs: [
+      { id: 1, action: "ai_rewrite", count: 9, created_at: "2026-04-29T07:20:00" },
+      { id: 2, action: "approved_answer", count: 4, created_at: "2026-04-29T08:05:00" },
+    ],
+  },
+};
+
 const statusClass = {
   Pendente: "pending",
   Aprovada: "approved",
@@ -370,6 +443,62 @@ function Sidebar({ active, setActive }) {
   );
 }
 
+function LoginScreen({ onLogin }) {
+  return (
+    <main className="login-screen">
+      <section className="login-panel">
+        <div className="brand login-brand">
+          <div className="brand-mark">
+            <Sparkles size={22} />
+          </div>
+          <div>
+            <strong>Marketplace AI</strong>
+            <span>Multi-tenant Inbox</span>
+          </div>
+        </div>
+        <h1>Entrar no painel</h1>
+        <p>Escolha um perfil mockado para testar contas por empresa, permissões e dados isolados.</p>
+
+        <div className="login-options">
+          {mockUsers.map((user) => {
+            const company = mockCompanies.find((item) => item.id === user.companyId);
+            return (
+              <button className="login-option" key={user.id} onClick={() => onLogin(user)}>
+                <div>
+                  <strong>{user.name}</strong>
+                  <span>{user.email}</span>
+                </div>
+                <small>
+                  {user.role === "admin" ? "Admin" : "Usuario"} · {company?.name}
+                </small>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function CompanySwitcher({ currentUser, activeCompanyId, onChange }) {
+  if (!currentUser || currentUser.role !== "admin") {
+    return null;
+  }
+
+  return (
+    <label className="company-switcher">
+      Empresa
+      <select value={activeCompanyId} onChange={(event) => onChange(event.target.value)}>
+        {mockCompanies.map((company) => (
+          <option value={company.id} key={company.id}>
+            {company.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function IntegrationLogo({ integration }) {
   return (
     <div className="integration-logo" style={{ "--integration-color": integration.color }}>
@@ -465,6 +594,10 @@ function ConnectModal({ integration, onCancel, onConfirm }) {
 function IntegrationsPage({
   integrations,
   integrationHealth,
+  currentUser,
+  activeCompanyId,
+  activeCompany,
+  onCompanyChange,
   onConnect,
   onDisconnect,
   onSync,
@@ -481,13 +614,20 @@ function IntegrationsPage({
     <section className="integrations-page">
       <header className="topbar">
         <div>
-          <span>Marketplaces e operacao</span>
+          <span>{activeCompany?.name || "Empresa"} · Marketplaces e operacao</span>
           <h1>Integrações</h1>
         </div>
-        <button className="new-rule">
-          <Plus size={18} />
-          Adicionar
-        </button>
+        <div className="topbar-actions">
+          <CompanySwitcher
+            currentUser={currentUser}
+            activeCompanyId={activeCompanyId}
+            onChange={onCompanyChange}
+          />
+          <button className="new-rule">
+            <Plus size={18} />
+            Adicionar
+          </button>
+        </div>
       </header>
 
       <div className="integration-hero">
@@ -906,9 +1046,10 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
 }
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activeCompanyId, setActiveCompanyId] = useState(null);
+  const [tenantData, setTenantData] = useState(initialTenantData);
   const [active, setActive] = useState("Inbox");
-  const [questions, setQuestions] = useState([]);
-  const [integrations, setIntegrations] = useState(initialIntegrations);
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
@@ -918,22 +1059,67 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [showConversation, setShowConversation] = useState(false);
 
+  const activeCompany = mockCompanies.find((company) => company.id === activeCompanyId);
+  const activeTenant = tenantData[activeCompanyId] || {
+    users: [],
+    integrations: [],
+    questions: [],
+    aiSettings: {},
+    usageLogs: [],
+  };
+  const questions = activeTenant.questions;
+  const integrations = activeTenant.integrations;
+
+  function updateActiveTenant(updater) {
+    setTenantData((current) => ({
+      ...current,
+      [activeCompanyId]: updater(current[activeCompanyId]),
+    }));
+  }
+
+  function setQuestions(nextQuestions) {
+    updateActiveTenant((tenant) => ({
+      ...tenant,
+      questions:
+        typeof nextQuestions === "function" ? nextQuestions(tenant.questions) : nextQuestions,
+    }));
+  }
+
+  function setIntegrations(nextIntegrations) {
+    updateActiveTenant((tenant) => ({
+      ...tenant,
+      integrations:
+        typeof nextIntegrations === "function" ? nextIntegrations(tenant.integrations) : nextIntegrations,
+    }));
+  }
+
   useEffect(() => {
+    if (!currentUser || !activeCompanyId) return;
+    const existingQuestions = tenantData[activeCompanyId]?.questions || [];
+    if (existingQuestions.length > 0) {
+      setSelectedId(existingQuestions[0]?.id || null);
+      return;
+    }
+
     async function loadQuestions() {
       try {
         const response = await fetch(`${API_URL}/questions`);
         const data = await response.json();
-        const loadedQuestions = data.length >= 10 ? data : demoQuestions;
+        const loadedQuestions =
+          data.length >= 10
+            ? data.map((question) => ({ ...question, company_id: activeCompanyId }))
+            : cloneQuestionsForCompany(activeCompanyId);
         setQuestions(loadedQuestions);
         setSelectedId(loadedQuestions[0]?.id || null);
       } catch {
-        setQuestions(demoQuestions);
-        setSelectedId(demoQuestions[0]?.id || null);
+        const fallbackQuestions = cloneQuestionsForCompany(activeCompanyId);
+        setQuestions(fallbackQuestions);
+        setSelectedId(fallbackQuestions[0]?.id || null);
       }
     }
 
     loadQuestions();
-  }, []);
+  }, [currentUser, activeCompanyId]);
 
   useEffect(() => {
     async function loadIntegrationHealth() {
@@ -1022,7 +1208,8 @@ export default function App() {
   }
 
   function loadDemoQuestions() {
-    setQuestions(demoQuestions);
+    const companyQuestions = cloneQuestionsForCompany(activeCompanyId);
+    setQuestions(companyQuestions);
     setIntegrations((current) =>
       current.map((integration) =>
         ["mercado-livre", "shopee", "magalu", "amazon"].includes(integration.id)
@@ -1037,8 +1224,23 @@ export default function App() {
     );
     setMarketplaceFilter("Todos");
     setStatusFilter("Todos");
-    setSelectedId(demoQuestions[0].id);
+    setSelectedId(companyQuestions[0].id);
     setShowConversation(false);
+  }
+
+  function handleLogin(user) {
+    setCurrentUser(user);
+    setActiveCompanyId(user.companyId);
+    setSelectedId((tenantData[user.companyId]?.questions || [])[0]?.id || null);
+  }
+
+  function handleCompanyChange(companyId) {
+    if (currentUser?.role !== "admin") return;
+    setActiveCompanyId(companyId);
+    setMarketplaceFilter("Todos");
+    setStatusFilter("Todos");
+    setShowConversation(false);
+    setSelectedId((tenantData[companyId]?.questions || [])[0]?.id || null);
   }
 
   async function generateSuggestion(id) {
@@ -1171,6 +1373,10 @@ export default function App() {
 
   const isIntegrations = active === "Integrações";
 
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
   return (
     <div className="app-shell">
       <Sidebar active={active} setActive={changeSection} />
@@ -1180,6 +1386,10 @@ export default function App() {
           <IntegrationsPage
             integrations={integrations}
             integrationHealth={integrationHealth}
+            currentUser={currentUser}
+            activeCompanyId={activeCompanyId}
+            activeCompany={activeCompany}
+            onCompanyChange={handleCompanyChange}
             onConnect={openConnectModal}
             onDisconnect={disconnectIntegration}
             onSync={syncIntegration}
@@ -1195,13 +1405,20 @@ export default function App() {
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
           <header className="topbar">
             <div>
-              <span>Atendimento com IA</span>
+              <span>{activeCompany?.name || "Empresa"} · {currentUser.role === "admin" ? "Admin" : "Usuario"}</span>
               <h1>{active}</h1>
             </div>
-            <button className="new-rule">
-              <Sparkles size={18} />
-              Nova regra IA
-            </button>
+            <div className="topbar-actions">
+              <CompanySwitcher
+                currentUser={currentUser}
+                activeCompanyId={activeCompanyId}
+                onChange={handleCompanyChange}
+              />
+              <button className="new-rule">
+                <Sparkles size={18} />
+                Nova regra IA
+              </button>
+            </div>
           </header>
 
           <div className="metrics">
@@ -1217,6 +1434,14 @@ export default function App() {
               <span>Prioridade alta</span>
               <strong>{metrics.high}</strong>
             </article>
+          </div>
+
+          <div className="tenant-strip">
+            <span>{activeTenant.users.length} usuario(s)</span>
+            <span>IA: {activeTenant.aiSettings.tone}</span>
+            <span>
+              Uso: {activeTenant.usageLogs.reduce((total, log) => total + log.count, 0)} eventos
+            </span>
           </div>
 
           <div className="filters">
