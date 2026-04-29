@@ -78,6 +78,49 @@ const initialIntegrations = [
   },
 ];
 
+const initialIntegrationHealth = [
+  {
+    id: "mercado-livre",
+    channel: "Mercado Livre",
+    api_status: "operational",
+    last_sync: "2026-04-29T08:42:00",
+    last_error: null,
+    token_status: "valid",
+  },
+  {
+    id: "shopee",
+    channel: "Shopee",
+    api_status: "degraded",
+    last_sync: "2026-04-28T15:23:00",
+    last_error: "Rate limit warning on questions endpoint.",
+    token_status: "valid",
+  },
+  {
+    id: "magalu",
+    channel: "Magalu",
+    api_status: "operational",
+    last_sync: "2026-04-28T19:15:00",
+    last_error: null,
+    token_status: "valid",
+  },
+  {
+    id: "amazon",
+    channel: "Amazon",
+    api_status: "down",
+    last_sync: "2026-04-27T08:30:00",
+    last_error: "Mocked API failure: Amazon SP-API credentials not configured.",
+    token_status: "missing",
+  },
+  {
+    id: "tiny-erp",
+    channel: "Tiny ERP",
+    api_status: "degraded",
+    last_sync: null,
+    last_error: "Question sync is not available for Tiny ERP yet.",
+    token_status: "not_required",
+  },
+];
+
 const statusClass = {
   Pendente: "pending",
   Aprovada: "approved",
@@ -243,10 +286,13 @@ function ConnectModal({ integration, onCancel, onConfirm }) {
 
 function IntegrationsPage({
   integrations,
+  integrationHealth,
   onConnect,
   onDisconnect,
   onSync,
+  onTestHealth,
   syncingIntegrationId,
+  testingIntegrationId,
   pendingIntegration,
   onCancelConnect,
   onConfirmConnect,
@@ -309,6 +355,48 @@ function IntegrationsPage({
           <Plus size={17} />
           Solicitar integracao
         </button>
+      </section>
+
+      <section className="integration-health-section">
+        <div className="section-heading">
+          <div>
+            <span>Monitoramento mockado</span>
+            <h2>Integration Health</h2>
+          </div>
+        </div>
+
+        <div className="health-grid">
+          {integrationHealth.map((health) => (
+            <article className="health-card" key={health.id}>
+              <div className="health-card-top">
+                <strong>{health.channel}</strong>
+                <span className={`health-status ${health.api_status}`}>{health.api_status}</span>
+              </div>
+              <dl>
+                <div>
+                  <dt>Ultimo sync</dt>
+                  <dd>{health.last_sync ? formatDate(health.last_sync) : "Ainda nao sincronizado"}</dd>
+                </div>
+                <div>
+                  <dt>Token</dt>
+                  <dd>{health.token_status}</dd>
+                </div>
+                <div>
+                  <dt>Ultimo erro</dt>
+                  <dd>{health.last_error || "Sem erros recentes"}</dd>
+                </div>
+              </dl>
+              <button
+                className="secondary"
+                onClick={() => onTestHealth(health.id)}
+                disabled={testingIntegrationId === health.id}
+              >
+                <RefreshCw size={17} className={testingIntegrationId === health.id ? "spin" : ""} />
+                {testingIntegrationId === health.id ? "Testando..." : "Testar conexao"}
+              </button>
+            </article>
+          ))}
+        </div>
       </section>
 
       <ConnectModal
@@ -441,8 +529,10 @@ export default function App() {
   const [active, setActive] = useState("Inbox");
   const [questions, setQuestions] = useState([]);
   const [integrations, setIntegrations] = useState(initialIntegrations);
+  const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
+  const [testingIntegrationId, setTestingIntegrationId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
@@ -457,6 +547,20 @@ export default function App() {
     }
 
     loadQuestions();
+  }, []);
+
+  useEffect(() => {
+    async function loadIntegrationHealth() {
+      try {
+        const response = await fetch(`${API_URL}/integrations/health`);
+        const data = await response.json();
+        setIntegrationHealth(data);
+      } catch {
+        setIntegrationHealth(initialIntegrationHealth);
+      }
+    }
+
+    loadIntegrationHealth();
   }, []);
 
   const connectedMarketplaces = useMemo(
@@ -592,6 +696,40 @@ export default function App() {
     }, 900);
   }
 
+  async function testIntegrationHealth(id) {
+    setTestingIntegrationId(id);
+    try {
+      const response = await fetch(`${API_URL}/integrations/${id}/test`, { method: "POST" });
+      const result = await response.json();
+      setIntegrationHealth((current) =>
+        current.map((health) =>
+          health.id === id
+            ? {
+                ...health,
+                api_status: result.ok ? "operational" : "down",
+                last_error: result.ok ? null : result.message,
+                last_sync: result.checked_at,
+              }
+            : health
+        )
+      );
+    } catch {
+      setIntegrationHealth((current) =>
+        current.map((health) =>
+          health.id === id
+            ? {
+                ...health,
+                api_status: "down",
+                last_error: "Nao foi possivel testar a conexao com a API local.",
+              }
+            : health
+        )
+      );
+    } finally {
+      window.setTimeout(() => setTestingIntegrationId(null), 500);
+    }
+  }
+
   const isIntegrations = active === "Integrações";
 
   return (
@@ -602,10 +740,13 @@ export default function App() {
         {isIntegrations ? (
           <IntegrationsPage
             integrations={integrations}
+            integrationHealth={integrationHealth}
             onConnect={openConnectModal}
             onDisconnect={disconnectIntegration}
             onSync={syncIntegration}
+            onTestHealth={testIntegrationHealth}
             syncingIntegrationId={syncingIntegrationId}
+            testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
             onCancelConnect={() => setPendingIntegration(null)}
             onConfirmConnect={confirmConnect}

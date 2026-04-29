@@ -732,6 +732,92 @@ button:disabled {
   line-height: 1.5;
 }
 
+.integration-health-section {
+  margin-top: 16px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 24px 0 12px;
+}
+
+.section-heading span {
+  color: #647189;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.section-heading h2 {
+  margin: 3px 0 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.health-card {
+  border: 1px solid rgba(126, 139, 168, 0.16);
+  border-radius: 20px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 38px rgba(32, 43, 69, 0.08);
+}
+
+.health-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.health-status {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.health-status.operational {
+  background: #e9f8ef;
+  color: #167442;
+}
+
+.health-status.degraded {
+  background: #fff7df;
+  color: #9a6500;
+}
+
+.health-status.down {
+  background: #ffebee;
+  color: #b4232f;
+}
+
+.health-card dl {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.health-card dt {
+  color: #7d889d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.health-card dd {
+  margin: 3px 0 0;
+  color: #293456;
+  line-height: 1.35;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -823,7 +909,8 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .integrations-grid {
+  .integrations-grid,
+  .health-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -899,6 +986,7 @@ button:disabled {
   .metrics,
   .filters,
   .integrations-grid,
+  .health-grid,
   .add-marketplace {
     grid-template-columns: 1fr;
   }
