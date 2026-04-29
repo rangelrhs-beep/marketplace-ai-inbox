@@ -45,9 +45,9 @@ const initialIntegrations = [
     name: "Shopee",
     shortName: "Shopee",
     color: "#ee4d2d",
-    status: "Não conectado",
-    store: "",
-    lastSync: "",
+    status: "Conectado",
+    store: "Shopee Seller Demo",
+    lastSync: "2026-04-29T08:36:00",
   },
   {
     id: "magalu",
@@ -63,9 +63,9 @@ const initialIntegrations = [
     name: "Amazon",
     shortName: "Amazon",
     color: "#ff9900",
-    status: "Não conectado",
-    store: "",
-    lastSync: "",
+    status: "Conectado",
+    store: "Amazon Store Demo",
+    lastSync: "2026-04-29T08:28:00",
   },
   {
     id: "tiny-erp",
@@ -75,6 +75,149 @@ const initialIntegrations = [
     status: "Em breve",
     store: "",
     lastSync: "",
+  },
+];
+
+const demoQuestions = [
+  {
+    id: 1,
+    marketplace: "Mercado Livre",
+    product: "Kit 3 Camisetas Premium Algodao",
+    customer_name: "Mariana",
+    question: "Boa tarde! Esse kit tem a camiseta preta no tamanho M? Entrega chega antes de sexta?",
+    created_at: "2026-04-25T10:42:00",
+    status: "Pendente",
+    priority: "Alta",
+    ai_suggestion:
+      "Ola, Mariana! Temos sim a camiseta preta no tamanho M. Para confirmar o prazo de chegada antes de sexta, basta inserir seu CEP no anuncio que o Mercado Livre mostra a estimativa atualizada.",
+    sku: "CAM-KIT-003",
+    price: "R$ 129,90",
+  },
+  {
+    id: 2,
+    marketplace: "Mercado Livre",
+    product: "Fone Bluetooth Noise Canceling Pro",
+    customer_name: "Diego",
+    question: "O produto e original? Tem garantia?",
+    created_at: "2026-04-25T09:18:00",
+    status: "Pendente",
+    priority: "Media",
+    ai_suggestion:
+      "Ola, Diego! Sim, o produto e original, acompanha nota fiscal e possui garantia de 12 meses contra defeitos de fabricacao.",
+    sku: "FON-BT-PRO",
+    price: "R$ 249,00",
+  },
+  {
+    id: 3,
+    marketplace: "Mercado Livre",
+    product: "Suporte Articulado para Monitor",
+    customer_name: "Carla",
+    question: "Serve para monitor ultrawide de 34 polegadas?",
+    created_at: "2026-04-24T17:05:00",
+    status: "Aprovada",
+    priority: "Baixa",
+    ai_suggestion:
+      "Ola, Carla! Esse suporte e compativel com monitores de ate 32 polegadas. Para ultrawide de 34 polegadas, recomendamos verificar peso e padrao VESA.",
+    sku: "SUP-MON-ARM",
+    price: "R$ 189,90",
+  },
+  {
+    id: 4,
+    marketplace: "Mercado Livre",
+    product: "Mochila Executiva Impermeavel USB",
+    customer_name: "Renato",
+    question: "Cabe notebook de 15.6 e tem divisoria acolchoada?",
+    created_at: "2026-04-24T14:32:00",
+    status: "Respondida",
+    priority: "Media",
+    ai_suggestion:
+      "Ola, Renato! Cabe notebook de ate 15.6 polegadas e possui divisoria acolchoada para melhor protecao.",
+    sku: "MOC-EXEC-USB",
+    price: "R$ 159,90",
+  },
+  {
+    id: 5,
+    marketplace: "Shopee",
+    product: "Organizador de Cabos Mesa Home Office",
+    customer_name: "Luciana",
+    question: "Vem com fita dupla face para instalar?",
+    created_at: "2026-04-23T11:20:00",
+    status: "Pendente",
+    priority: "Baixa",
+    ai_suggestion:
+      "Ola, Luciana! Sim, o organizador acompanha fita dupla face para uma instalacao pratica na mesa.",
+    sku: "ORG-CAB-HO",
+    price: "R$ 39,90",
+  },
+  {
+    id: 6,
+    marketplace: "Shopee",
+    product: "Luminaria LED Articulada para Mesa",
+    customer_name: "Paulo",
+    question: "A luz tem ajuste de intensidade? Funciona ligada no USB do notebook?",
+    created_at: "2026-04-26T16:10:00",
+    status: "Aprovada",
+    priority: "Media",
+    ai_suggestion:
+      "Ola, Paulo! Sim, a luminaria possui ajuste de intensidade e funciona via USB, inclusive conectada ao notebook.",
+    sku: "LUM-LED-USB",
+    price: "R$ 74,90",
+  },
+  {
+    id: 7,
+    marketplace: "Magalu",
+    product: "Cafeteira Espresso Compacta 20 Bar",
+    customer_name: "Bianca",
+    question: "Ela aceita capsula ou somente po de cafe?",
+    created_at: "2026-04-26T13:48:00",
+    status: "Pendente",
+    priority: "Alta",
+    ai_suggestion:
+      "Ola, Bianca! Esse modelo utiliza po de cafe e acompanha filtro proprio. Ele nao e compativel com capsulas.",
+    sku: "CAF-ESP-20B",
+    price: "R$ 599,00",
+  },
+  {
+    id: 8,
+    marketplace: "Amazon",
+    product: "Echo Speaker Smart Home Hub",
+    customer_name: "Andre",
+    question: "Consigo controlar lampadas inteligentes de outras marcas?",
+    created_at: "2026-04-26T08:25:00",
+    status: "Respondida",
+    priority: "Baixa",
+    ai_suggestion:
+      "Ola, Andre! Sim, voce consegue controlar lampadas inteligentes compativeis com Alexa.",
+    sku: "ECH-HUB-5G",
+    price: "R$ 429,00",
+  },
+  {
+    id: 9,
+    marketplace: "Magalu",
+    product: "Aspirador Robo Smart Mapeamento",
+    customer_name: "Fernanda",
+    question: "Ele passa pano tambem ou so aspira?",
+    created_at: "2026-04-25T19:04:00",
+    status: "Pendente",
+    priority: "Media",
+    ai_suggestion:
+      "Ola, Fernanda! Esse modelo aspira e tambem passa pano com reservatorio de agua.",
+    sku: "ASP-ROB-MAP",
+    price: "R$ 899,90",
+  },
+  {
+    id: 10,
+    marketplace: "Amazon",
+    product: "Kindle Paperwhite 16 GB",
+    customer_name: "Roberto",
+    question: "O aparelho vem com anuncios na tela de bloqueio?",
+    created_at: "2026-04-25T15:36:00",
+    status: "Aprovada",
+    priority: "Baixa",
+    ai_suggestion:
+      "Ola, Roberto! Este anuncio e da versao sem ofertas especiais, portanto nao exibe anuncios na tela de bloqueio.",
+    sku: "KDL-PW-16",
+    price: "R$ 699,00",
   },
 ];
 
@@ -682,10 +825,16 @@ export default function App() {
 
   useEffect(() => {
     async function loadQuestions() {
-      const response = await fetch(`${API_URL}/questions`);
-      const data = await response.json();
-      setQuestions(data);
-      setSelectedId(data[0]?.id || null);
+      try {
+        const response = await fetch(`${API_URL}/questions`);
+        const data = await response.json();
+        const loadedQuestions = data.length >= 10 ? data : demoQuestions;
+        setQuestions(loadedQuestions);
+        setSelectedId(loadedQuestions[0]?.id || null);
+      } catch {
+        setQuestions(demoQuestions);
+        setSelectedId(demoQuestions[0]?.id || null);
+      }
     }
 
     loadQuestions();
@@ -762,6 +911,26 @@ export default function App() {
 
   function changeSection(section) {
     setActive(section);
+    setShowConversation(false);
+  }
+
+  function loadDemoQuestions() {
+    setQuestions(demoQuestions);
+    setIntegrations((current) =>
+      current.map((integration) =>
+        ["mercado-livre", "shopee", "magalu", "amazon"].includes(integration.id)
+          ? {
+              ...integration,
+              status: "Conectado",
+              store: integration.store || `${integration.name} Demo Store`,
+              lastSync: new Date().toISOString(),
+            }
+          : integration
+      )
+    );
+    setMarketplaceFilter("Todos");
+    setStatusFilter("Todos");
+    setSelectedId(demoQuestions[0].id);
     setShowConversation(false);
   }
 
@@ -979,6 +1148,10 @@ export default function App() {
                   <PlugZap size={17} />
                   Abrir integrações
                 </button>
+                <button className="secondary" onClick={loadDemoQuestions}>
+                  <Inbox size={17} />
+                  Carregar perguntas demo
+                </button>
               </div>
             ) : filteredQuestions.length === 0 ? (
               <div className="inbox-empty">
@@ -987,6 +1160,10 @@ export default function App() {
                 </div>
                 <h2>Nenhuma pergunta encontrada</h2>
                 <p>Ajuste os filtros ou sincronize os marketplaces conectados.</p>
+                <button className="primary" onClick={loadDemoQuestions}>
+                  <Inbox size={17} />
+                  Carregar perguntas demo
+                </button>
               </div>
             ) : (
               filteredQuestions.map((question) => (

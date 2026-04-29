@@ -601,6 +601,7 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
   text-align: center;
   box-shadow: 0 14px 34px rgba(32, 43, 69, 0.06);
 }
