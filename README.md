@@ -45,6 +45,9 @@ Endpoints simulados:
 - `GET /questions/{id}`
 - `POST /questions/{id}/suggest`
 - `POST /questions/{id}/approve`
+- `GET /integrations/health`
+- `POST /integrations/{id}/test`
+- `GET /integrations/{id}/questions`
 
 ### Frontend
 
@@ -152,6 +155,7 @@ Para producao mais simples com FastAPI, Render ou Railway tendem a ser caminhos 
 - OpenAI: substituir a logica mockada de `POST /questions/{id}/suggest` por uma chamada usando `OPENAI_API_KEY`.
 - Mercado Livre: criar fluxo OAuth com `MERCADO_LIVRE_CLIENT_ID`, `MERCADO_LIVRE_CLIENT_SECRET` e `MERCADO_LIVRE_REDIRECT_URI`, depois buscar perguntas reais pela API.
 - MySQL: trocar a lista em memoria `questions` por modelos e repositorios usando as variaveis `MYSQL_*`.
+- Conectores: a pasta `backend/integrations/` ja separa `client.py`, `mapper.py` e `service.py` por canal. Cada mapper converte payloads externos para `NormalizedQuestion` e preserva `raw_payload`.
 
 ## Notas do MVP
 
