@@ -17,6 +17,7 @@ body {
 }
 
 button,
+input,
 select,
 textarea {
   font: inherit;
@@ -463,8 +464,16 @@ button:disabled {
 }
 
 .ai-card p,
+.ai-card input,
 .ai-card textarea {
   line-height: 1.58;
+}
+
+.ai-response-text {
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(240, 237, 255, 0.46);
+  border: 1px solid rgba(95, 61, 196, 0.12);
 }
 
 .ai-card textarea {
@@ -476,6 +485,59 @@ button:disabled {
   padding: 14px;
   color: #172033;
   background: white;
+}
+
+.manual-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rewrite-box {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.rewrite-box input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #cfd8ea;
+  border-radius: 14px;
+  padding: 0 14px;
+  background: white;
+  color: #172033;
+}
+
+.revision-history {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.revision-history button {
+  min-height: 32px;
+  border: 1px solid #dce3f1;
+  border-radius: 999px;
+  padding: 0 11px;
+  background: white;
+  color: #566176;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.revision-history button.active {
+  color: #5f3dc4;
+  background: #f0edff;
+  border-color: rgba(95, 61, 196, 0.28);
 }
 
 .ai-actions {
@@ -1043,7 +1105,9 @@ button:disabled {
     width: 100%;
   }
 
-  .ai-actions {
+  .ai-actions,
+  .editor-actions,
+  .rewrite-box {
     display: grid;
   }
 

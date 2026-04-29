@@ -437,13 +437,31 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
 
 function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [editDraft, setEditDraft] = useState("");
+  const [rewriteInstruction, setRewriteInstruction] = useState("");
+  const [versions, setVersions] = useState([]);
+  const [selectedVersionId, setSelectedVersionId] = useState("original");
   const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
-    setDraft(question?.ai_suggestion || "");
+    const originalText = question?.ai_suggestion || "";
+    setVersions([
+      {
+        id: "original",
+        label: "Versão original",
+        text: originalText,
+        instruction: "",
+        wasEdited: false,
+      },
+    ]);
+    setSelectedVersionId("original");
+    setEditDraft(originalText);
+    setRewriteInstruction("");
     setIsEditing(false);
   }, [question]);
+
+  const selectedVersion = versions.find((version) => version.id === selectedVersionId) || versions[0];
+  const currentText = selectedVersion?.text || "";
 
   if (!question) {
     return (
@@ -457,11 +475,94 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
     );
   }
 
+  function summarizeInstruction(instruction) {
+    const lower = instruction.toLowerCase();
+    if (lower.includes("tecnic")) return "mais técnico";
+    if (lower.includes("curt")) return "mais curto";
+    if (lower.includes("garantia")) return "garantia";
+    if (lower.includes("vendedor") || lower.includes("venda")) return "mais vendedor";
+    return instruction.slice(0, 34);
+  }
+
+  function rewriteText(baseText, instruction) {
+    const lower = instruction.toLowerCase();
+    if (lower.includes("tecnic")) {
+      return `${baseText} Informacao tecnica adicional: o produto segue as especificacoes do anuncio e recomendamos validar compatibilidade, dimensoes e prazo pelo checkout antes da compra.`;
+    }
+    if (lower.includes("curt")) {
+      return baseText.split(".").slice(0, 2).join(".").trim() + ".";
+    }
+    if (lower.includes("garantia")) {
+      return `${baseText} O produto possui garantia de 12 meses contra defeitos de fabricacao, conforme condicoes do vendedor.`;
+    }
+    if (lower.includes("vendedor") || lower.includes("venda")) {
+      return `${baseText} Pode comprar com tranquilidade: estamos prontos para enviar rapidamente e ajudar no que precisar.`;
+    }
+    return `${baseText} Ajuste solicitado: ${instruction}.`;
+  }
+
+  function startEditing() {
+    setEditDraft(currentText);
+    setIsEditing(true);
+  }
+
+  function saveManualEdit() {
+    if (!editDraft.trim()) return;
+    const nextVersion = {
+      id: `manual-${Date.now()}`,
+      label: `Edição manual ${versions.filter((version) => version.wasEdited).length + 1}`,
+      text: editDraft.trim(),
+      instruction: "Edição manual",
+      wasEdited: true,
+    };
+    setVersions((current) => [...current, nextVersion]);
+    setSelectedVersionId(nextVersion.id);
+    setIsEditing(false);
+  }
+
+  function cancelManualEdit() {
+    setEditDraft(currentText);
+    setIsEditing(false);
+  }
+
+  function handleRewrite() {
+    const instruction = rewriteInstruction.trim();
+    if (!instruction) return;
+    const revisionNumber = versions.filter((version) => version.instruction && !version.wasEdited).length + 1;
+    const nextVersion = {
+      id: `rewrite-${Date.now()}`,
+      label: `Ajuste ${revisionNumber}: ${summarizeInstruction(instruction)}`,
+      text: rewriteText(currentText, instruction),
+      instruction,
+      wasEdited: false,
+    };
+    setVersions((current) => [...current, nextVersion]);
+    setSelectedVersionId(nextVersion.id);
+    setRewriteInstruction("");
+  }
+
   async function handleGenerate() {
     setIsGenerating(true);
     const suggestion = await onGenerate(question.id);
-    setDraft(suggestion);
+    const nextVersion = {
+      id: `generated-${Date.now()}`,
+      label: `Ajuste ${versions.length}: nova sugestão`,
+      text: suggestion,
+      instruction: "Gerar nova sugestão",
+      wasEdited: false,
+    };
+    setVersions((current) => [...current, nextVersion]);
+    setSelectedVersionId(nextVersion.id);
     setIsGenerating(false);
+  }
+
+  function approveSelectedVersion() {
+    onApprove(question.id, {
+      ai_suggestion: question.ai_suggestion,
+      final_response: currentText,
+      was_edited: selectedVersion?.wasEdited || selectedVersionId !== "original",
+      instruction_used: selectedVersion?.instruction || "",
+    });
   }
 
   return (
@@ -491,24 +592,65 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
           <div className="ai-card-header">
             <div>
               <Sparkles size={18} />
-              <strong>Sugestao da IA</strong>
+              <strong>Sugestão da IA</strong>
             </div>
             <span>pronta para revisar</span>
           </div>
 
           {isEditing ? (
-            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
+            <div className="manual-editor">
+              <textarea value={editDraft} onChange={(event) => setEditDraft(event.target.value)} />
+              <div className="editor-actions">
+                <button className="primary" onClick={saveManualEdit} disabled={!editDraft.trim()}>
+                  <Check size={17} />
+                  Salvar edição
+                </button>
+                <button className="secondary" onClick={cancelManualEdit}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
           ) : (
-            <p>{draft}</p>
+            <p className="ai-response-text">{currentText}</p>
           )}
 
+          <div className="rewrite-box">
+            <input
+              value={rewriteInstruction}
+              onChange={(event) => setRewriteInstruction(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleRewrite();
+              }}
+              placeholder="Peça uma alteração para a IA (ex: deixe mais técnico, mais curto, mais vendedor...)"
+            />
+            <button className="secondary" onClick={handleRewrite} disabled={!rewriteInstruction.trim()}>
+              <Sparkles size={17} />
+              Reescrever
+            </button>
+          </div>
+
+          <div className="revision-history">
+            {versions.map((version) => (
+              <button
+                key={version.id}
+                className={selectedVersionId === version.id ? "active" : ""}
+                onClick={() => {
+                  setSelectedVersionId(version.id);
+                  setIsEditing(false);
+                }}
+              >
+                {version.label}
+              </button>
+            ))}
+          </div>
+
           <div className="ai-actions">
-            <button className="primary" onClick={() => onApprove(question.id, draft)}>
+            <button className="primary" onClick={approveSelectedVersion}>
               <Check size={18} />
               Aprovar e enviar
             </button>
-            <button className="secondary" onClick={() => setIsEditing((value) => !value)}>
-              {isEditing ? "Concluir edicao" : "Editar resposta"}
+            <button className="secondary" onClick={startEditing}>
+              Editar texto
             </button>
             <button className="secondary" onClick={handleGenerate} disabled={isGenerating}>
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
@@ -634,15 +776,36 @@ export default function App() {
     return data.suggestion;
   }
 
-  async function approveQuestion(id, answer) {
+  async function approveQuestion(id, approval) {
+    const approvalData =
+      typeof approval === "string"
+        ? {
+            ai_suggestion: approval,
+            final_response: approval,
+            was_edited: false,
+            instruction_used: "",
+          }
+        : approval;
+    const finalResponse =
+      approvalData.final_response || approvalData.ai_suggestion;
     const response = await fetch(`${API_URL}/questions/${id}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer }),
+      body: JSON.stringify({ answer: finalResponse }),
     });
     const updated = await response.json();
     setQuestions((current) =>
-      current.map((question) => (question.id === id ? updated : question))
+      current.map((question) =>
+        question.id === id
+          ? {
+              ...updated,
+              ai_suggestion: approvalData.ai_suggestion || updated.ai_suggestion,
+              final_response: finalResponse,
+              was_edited: Boolean(approvalData.was_edited),
+              instruction_used: approvalData.instruction_used || "",
+            }
+          : question
+      )
     );
   }
 
