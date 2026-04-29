@@ -619,6 +619,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
   const [versions, setVersions] = useState([]);
   const [selectedVersionId, setSelectedVersionId] = useState("original");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRewriting, setIsRewriting] = useState(false);
+  const [rewriteError, setRewriteError] = useState("");
 
   useEffect(() => {
     const originalText = question?.ai_suggestion || "";
@@ -634,6 +636,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
     setSelectedVersionId("original");
     setEditDraft(originalText);
     setRewriteInstruction("");
+    setRewriteError("");
     setIsEditing(false);
   }, [question]);
 
@@ -685,20 +688,55 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
     setIsEditing(false);
   }
 
-  function handleRewrite() {
+  async function requestAiRewrite(originalResponse, instruction) {
+    const response = await fetch(`${API_URL}/ai/rewrite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: question.question,
+        original_response: originalResponse,
+        instruction,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      throw new Error(errorBody.detail || "Falha ao chamar a IA");
+    }
+
+    const data = await response.json();
+    if (!data.revised_response) {
+      throw new Error("A IA retornou uma resposta vazia");
+    }
+    return data.revised_response;
+  }
+
+  async function handleRewrite() {
     const instruction = rewriteInstruction.trim();
     if (!instruction) return;
+    setIsRewriting(true);
+    setRewriteError("");
+    let revisedText = "";
+
+    try {
+      revisedText = await requestAiRewrite(currentText, instruction);
+    } catch (error) {
+      revisedText = generateMockAiRewrite(currentText, instruction, question);
+      setRewriteError("Nao foi possivel usar a IA real agora. Aplicamos uma versao mockada.");
+    }
+
     const revisionNumber = versions.filter((version) => version.instruction && !version.wasEdited).length + 1;
     const nextVersion = {
       id: `rewrite-${Date.now()}`,
       label: `Ajuste ${revisionNumber}: ${summarizeInstruction(instruction)}`,
-      text: generateMockAiRewrite(currentText, instruction, question),
+      text: revisedText,
       instruction,
       wasEdited: false,
     };
     setVersions((current) => [...current, nextVersion]);
     setSelectedVersionId(nextVersion.id);
     setRewriteInstruction("");
+    setIsRewriting(false);
   }
 
   async function handleGenerate() {
@@ -779,15 +817,16 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
               value={rewriteInstruction}
               onChange={(event) => setRewriteInstruction(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") handleRewrite();
+                if (event.key === "Enter" && !isRewriting) handleRewrite();
               }}
               placeholder="Peça uma alteração para a IA (ex: deixe mais técnico, mais curto, mais vendedor...)"
             />
-            <button className="secondary" onClick={handleRewrite} disabled={!rewriteInstruction.trim()}>
-              <Sparkles size={17} />
-              Reescrever
+            <button className="secondary" onClick={handleRewrite} disabled={!rewriteInstruction.trim() || isRewriting}>
+              <RefreshCw size={17} className={isRewriting ? "spin" : ""} />
+              {isRewriting ? "Reescrevendo..." : "Reescrever"}
             </button>
           </div>
+          {rewriteError ? <p className="rewrite-error">{rewriteError}</p> : null}
 
           <div className="revision-history">
             {versions.map((version) => (

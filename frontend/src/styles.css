@@ -523,6 +523,17 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.rewrite-error {
+  margin: 10px 0 0;
+  border: 1px solid #ffd2d8;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff1f2;
+  color: #b4232f;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .revision-history button {
   min-height: 32px;
   border: 1px solid #dce3f1;
