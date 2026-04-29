@@ -264,6 +264,7 @@ button:disabled {
 
 .row-top,
 .row-meta,
+.source-line,
 .ai-card-header,
 .ai-card-header div {
   display: flex;
@@ -279,6 +280,19 @@ button:disabled {
   color: #2563eb;
   font-size: 13px;
   font-weight: 800;
+}
+
+.source-tag {
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #172033;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.22)),
+    var(--source-color);
+  font-size: 11px;
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(32, 43, 69, 0.1);
 }
 
 .time {
@@ -515,6 +529,33 @@ button:disabled {
   color: #647189;
 }
 
+.inbox-empty {
+  min-height: 340px;
+  border: 1px dashed rgba(126, 139, 168, 0.28);
+  border-radius: 22px;
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-shadow: 0 14px 34px rgba(32, 43, 69, 0.06);
+}
+
+.inbox-empty h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.inbox-empty p {
+  max-width: 360px;
+  margin: 0 0 16px;
+  color: #647189;
+  line-height: 1.5;
+}
+
 .integrations-page {
   min-height: calc(100vh - 48px);
 }
@@ -603,8 +644,11 @@ button:disabled {
 }
 
 .integration-logo span {
-  font-size: 14px;
+  max-width: 46px;
+  font-size: 12px;
   font-weight: 900;
+  text-align: center;
+  line-height: 1.05;
 }
 
 .integration-status {
@@ -882,6 +926,19 @@ button:disabled {
 
   .conversation-header {
     align-items: flex-start;
+  }
+
+  .row-top,
+  .source-line {
+    align-items: flex-start;
+  }
+
+  .row-top {
+    gap: 10px;
+  }
+
+  .source-line {
+    flex-wrap: wrap;
   }
 
   .conversation-header .pill {

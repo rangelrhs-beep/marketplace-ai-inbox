@@ -43,7 +43,7 @@ const initialIntegrations = [
   {
     id: "shopee",
     name: "Shopee",
-    shortName: "SP",
+    shortName: "Shopee",
     color: "#ee4d2d",
     status: "Não conectado",
     store: "",
@@ -52,7 +52,7 @@ const initialIntegrations = [
   {
     id: "magalu",
     name: "Magalu",
-    shortName: "MG",
+    shortName: "Magalu",
     color: "#0086ff",
     status: "Conectado",
     store: "Magazine Seller Pro",
@@ -61,7 +61,7 @@ const initialIntegrations = [
   {
     id: "amazon",
     name: "Amazon",
-    shortName: "AZ",
+    shortName: "Amazon",
     color: "#ff9900",
     status: "Não conectado",
     store: "",
@@ -70,7 +70,7 @@ const initialIntegrations = [
   {
     id: "tiny-erp",
     name: "Tiny ERP",
-    shortName: "TY",
+    shortName: "Tiny",
     color: "#16a34a",
     status: "Em breve",
     store: "",
@@ -101,6 +101,14 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function getMarketplaceShortName(marketplace, integrations) {
+  return integrations.find((integration) => integration.name === marketplace)?.shortName || marketplace;
+}
+
+function getMarketplaceColor(marketplace, integrations) {
+  return integrations.find((integration) => integration.name === marketplace)?.color || "#2563eb";
 }
 
 function Sidebar({ active, setActive }) {
@@ -149,7 +157,7 @@ function IntegrationLogo({ integration }) {
   );
 }
 
-function IntegrationCard({ integration, onConnect, onDisconnect, onSync }) {
+function IntegrationCard({ integration, onConnect, onDisconnect, onSync, isSyncing }) {
   const isConnected = integration.status === "Conectado";
   const isComingSoon = integration.status === "Em breve";
 
@@ -181,9 +189,9 @@ function IntegrationCard({ integration, onConnect, onDisconnect, onSync }) {
       <div className="integration-actions">
         {isConnected ? (
           <>
-            <button className="secondary" onClick={() => onSync(integration.id)}>
-              <RefreshCw size={17} />
-              Sincronizar agora
+            <button className="secondary" onClick={() => onSync(integration.id)} disabled={isSyncing}>
+              <RefreshCw size={17} className={isSyncing ? "spin" : ""} />
+              {isSyncing ? "Sincronizando..." : "Sincronizar agora"}
             </button>
             <button className="danger" onClick={() => onDisconnect(integration.id)}>
               <X size={17} />
@@ -238,6 +246,7 @@ function IntegrationsPage({
   onConnect,
   onDisconnect,
   onSync,
+  syncingIntegrationId,
   pendingIntegration,
   onCancelConnect,
   onConfirmConnect,
@@ -279,6 +288,7 @@ function IntegrationsPage({
             onConnect={onConnect}
             onDisconnect={onDisconnect}
             onSync={onSync}
+            isSyncing={syncingIntegrationId === integration.id}
           />
         ))}
       </div>
@@ -310,11 +320,16 @@ function IntegrationsPage({
   );
 }
 
-function QuestionRow({ question, selected, onSelect }) {
+function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor }) {
   return (
     <button className={`question-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <div className="row-top">
-        <span className="marketplace">{question.marketplace}</span>
+        <div className="source-line">
+          <span className="marketplace">{question.marketplace}</span>
+          <span className="source-tag" style={{ "--source-color": sourceColor }}>
+            {sourceLabel}
+          </span>
+        </div>
         <span className="time">
           <Clock3 size={14} />
           {formatDate(question.created_at)}
@@ -427,6 +442,7 @@ export default function App() {
   const [questions, setQuestions] = useState([]);
   const [integrations, setIntegrations] = useState(initialIntegrations);
   const [pendingIntegration, setPendingIntegration] = useState(null);
+  const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
@@ -443,15 +459,28 @@ export default function App() {
     loadQuestions();
   }, []);
 
-  const selectedQuestion = questions.find((question) => question.id === selectedId);
-  const marketplaces = ["Todos", ...new Set(questions.map((question) => question.marketplace))];
-  const statuses = ["Todos", ...new Set(questions.map((question) => question.status))];
+  const connectedMarketplaces = useMemo(
+    () =>
+      integrations
+        .filter((integration) => integration.status === "Conectado")
+        .map((integration) => integration.name),
+    [integrations]
+  );
+
+  const visibleQuestions = useMemo(
+    () => questions.filter((question) => connectedMarketplaces.includes(question.marketplace)),
+    [questions, connectedMarketplaces]
+  );
+
+  const selectedQuestion = visibleQuestions.find((question) => question.id === selectedId);
+  const marketplaces = ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))];
+  const statuses = ["Todos", ...new Set(visibleQuestions.map((question) => question.status))];
 
   const filteredQuestions = useMemo(() => {
     const forcedStatus =
       active === "Aprovadas" ? "Aprovada" : active === "Respondidas" ? "Respondida" : null;
 
-    return questions.filter((question) => {
+    return visibleQuestions.filter((question) => {
       const marketplaceMatches =
         marketplaceFilter === "Todos" || question.marketplace === marketplaceFilter;
       const statusMatches = forcedStatus
@@ -459,13 +488,26 @@ export default function App() {
         : statusFilter === "Todos" || question.status === statusFilter;
       return marketplaceMatches && statusMatches;
     });
-  }, [active, questions, marketplaceFilter, statusFilter]);
+  }, [active, visibleQuestions, marketplaceFilter, statusFilter]);
 
   const metrics = {
-    pending: questions.filter((question) => question.status === "Pendente").length,
-    answered: questions.filter((question) => question.status === "Respondida").length,
-    high: questions.filter((question) => question.priority === "Alta").length,
+    pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
+    answered: visibleQuestions.filter((question) => question.status === "Respondida").length,
+    high: visibleQuestions.filter((question) => question.priority === "Alta").length,
   };
+
+  const hasConnectedIntegrations = connectedMarketplaces.length > 0;
+
+  useEffect(() => {
+    if (selectedId && !visibleQuestions.some((question) => question.id === selectedId)) {
+      setSelectedId(visibleQuestions[0]?.id || null);
+      setShowConversation(false);
+    }
+
+    if (marketplaceFilter !== "Todos" && !connectedMarketplaces.includes(marketplaceFilter)) {
+      setMarketplaceFilter("Todos");
+    }
+  }, [connectedMarketplaces, marketplaceFilter, selectedId, visibleQuestions]);
 
   function selectQuestion(id) {
     setSelectedId(id);
@@ -539,11 +581,15 @@ export default function App() {
   }
 
   function syncIntegration(id) {
-    setIntegrations((current) =>
-      current.map((integration) =>
-        integration.id === id ? { ...integration, lastSync: new Date().toISOString() } : integration
-      )
-    );
+    setSyncingIntegrationId(id);
+    window.setTimeout(() => {
+      setIntegrations((current) =>
+        current.map((integration) =>
+          integration.id === id ? { ...integration, lastSync: new Date().toISOString() } : integration
+        )
+      );
+      setSyncingIntegrationId(null);
+    }, 900);
   }
 
   const isIntegrations = active === "Integrações";
@@ -559,6 +605,7 @@ export default function App() {
             onConnect={openConnectModal}
             onDisconnect={disconnectIntegration}
             onSync={syncIntegration}
+            syncingIntegrationId={syncingIntegrationId}
             pendingIntegration={pendingIntegration}
             onCancelConnect={() => setPendingIntegration(null)}
             onConfirmConnect={confirmConnect}
@@ -615,14 +662,40 @@ export default function App() {
           </div>
 
           <div className="question-list">
-            {filteredQuestions.map((question) => (
-              <QuestionRow
-                key={question.id}
-                question={question}
-                selected={selectedId === question.id}
-                onSelect={() => selectQuestion(question.id)}
-              />
-            ))}
+            {!hasConnectedIntegrations ? (
+              <div className="inbox-empty">
+                <div className="empty-icon">
+                  <PlugZap size={30} />
+                </div>
+                <h2>Nenhuma integração conectada</h2>
+                <p>
+                  Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox.
+                </p>
+                <button className="primary" onClick={() => changeSection("Integrações")}>
+                  <PlugZap size={17} />
+                  Abrir integrações
+                </button>
+              </div>
+            ) : filteredQuestions.length === 0 ? (
+              <div className="inbox-empty">
+                <div className="empty-icon">
+                  <Inbox size={30} />
+                </div>
+                <h2>Nenhuma pergunta encontrada</h2>
+                <p>Ajuste os filtros ou sincronize os marketplaces conectados.</p>
+              </div>
+            ) : (
+              filteredQuestions.map((question) => (
+                <QuestionRow
+                  key={question.id}
+                  question={question}
+                  selected={selectedId === question.id}
+                  onSelect={() => selectQuestion(question.id)}
+                  sourceLabel={getMarketplaceShortName(question.marketplace, integrations)}
+                  sourceColor={getMarketplaceColor(question.marketplace, integrations)}
+                />
+              ))
+            )}
           </div>
             </section>
 
