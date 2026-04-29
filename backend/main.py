@@ -60,6 +60,16 @@ class ApprovePayload(BaseModel):
     answer: str
 
 
+class AIRewriteRequest(BaseModel):
+    question: str
+    original_response: str
+    instruction: str
+
+
+class AIRewriteResponse(BaseModel):
+    revised_response: str
+
+
 app = FastAPI(title="Marketplace AI Inbox API", version="0.1.0")
 
 app.add_middleware(
@@ -236,6 +246,50 @@ def find_question(question_id: int) -> Question:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+def generate_openai_rewrite(payload: AIRewriteRequest) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+
+    try:
+        from openai import OpenAI
+    except ImportError as error:
+        raise HTTPException(status_code=500, detail="OpenAI Python package is not installed") from error
+
+    client = OpenAI(api_key=api_key)
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    response = client.responses.create(
+        model=model,
+        instructions=(
+            "You are a professional e-commerce support agent. "
+            "Rewrite the response based on the instruction. "
+            "Be clear, professional and natural. Answer as a seller. "
+            "Respect requests to be more technical, shorter, more persuasive, "
+            "or to include warranty information. Return only the rewritten response."
+        ),
+        input=(
+            f"Customer question:\n{payload.question}\n\n"
+            f"Original seller response:\n{payload.original_response}\n\n"
+            f"Rewrite instruction:\n{payload.instruction}"
+        ),
+    )
+    revised_response = response.output_text.strip()
+    if not revised_response:
+        raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
+    return revised_response
+
+
+@app.post("/ai/rewrite", response_model=AIRewriteResponse)
+def rewrite_ai_response(payload: AIRewriteRequest):
+    try:
+        return AIRewriteResponse(revised_response=generate_openai_rewrite(payload))
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"OpenAI rewrite failed: {error}") from error
 
 
 @app.get("/integrations/health", response_model=List[IntegrationHealth])
