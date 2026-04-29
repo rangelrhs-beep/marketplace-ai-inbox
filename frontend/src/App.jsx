@@ -297,6 +297,40 @@ function getMarketplaceColor(marketplace, integrations) {
   return integrations.find((integration) => integration.name === marketplace)?.color || "#2563eb";
 }
 
+function normalizeInstruction(instruction) {
+  return instruction
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function generateMockAiRewrite(originalResponse, instruction, question) {
+  const normalizedInstruction = normalizeInstruction(instruction);
+  const product = question?.product || "produto";
+  const customerName = question?.customer_name || "cliente";
+
+  // Future integration point: replace these branches with a backend call to an OpenAI rewrite endpoint.
+  if (normalizedInstruction.includes("tecnica") || normalizedInstruction.includes("tecnico")) {
+    return `Ola, ${customerName}! Sobre o ${product}, confirmamos as informacoes conforme as especificacoes do anuncio. Recomendamos verificar compatibilidade, dimensoes, variacoes disponiveis e prazo de entrega diretamente no checkout antes da compra. Ficamos a disposicao para ajudar com qualquer detalhe tecnico.`;
+  }
+
+  if (normalizedInstruction.includes("curta") || normalizedInstruction.includes("curto")) {
+    return `Ola, ${customerName}! Sim, as informacoes do anuncio estao atualizadas. Para prazo e disponibilidade, confira pelo CEP no checkout. Ficamos a disposicao!`;
+  }
+
+  if (normalizedInstruction.includes("vendedor") || normalizedInstruction.includes("comercial") || normalizedInstruction.includes("venda")) {
+    return `Ola, ${customerName}! Esse ${product} e uma otima escolha. As informacoes estao atualizadas no anuncio e nosso time esta pronto para enviar com agilidade. Pode comprar com tranquilidade, seguimos a disposicao para ajudar.`;
+  }
+
+  if (normalizedInstruction.includes("garantia")) {
+    return `Ola, ${customerName}! O ${product} acompanha garantia de 12 meses contra defeitos de fabricacao, conforme as condicoes do vendedor. Tambem recomendamos conferir prazo de entrega e disponibilidade pelo checkout antes de finalizar a compra.`;
+  }
+
+  return originalResponse
+    .replace("Ficamos a disposicao!", "Seguimos a disposicao para ajudar.")
+    .replace("Pode comprar com tranquilidade.", "A compra pode ser feita com tranquilidade.");
+}
+
 function Sidebar({ active, setActive }) {
   return (
     <aside className="sidebar">
@@ -619,29 +653,12 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
   }
 
   function summarizeInstruction(instruction) {
-    const lower = instruction.toLowerCase();
+    const lower = normalizeInstruction(instruction);
     if (lower.includes("tecnic")) return "mais técnico";
     if (lower.includes("curt")) return "mais curto";
     if (lower.includes("garantia")) return "garantia";
     if (lower.includes("vendedor") || lower.includes("venda")) return "mais vendedor";
     return instruction.slice(0, 34);
-  }
-
-  function rewriteText(baseText, instruction) {
-    const lower = instruction.toLowerCase();
-    if (lower.includes("tecnic")) {
-      return `${baseText} Informacao tecnica adicional: o produto segue as especificacoes do anuncio e recomendamos validar compatibilidade, dimensoes e prazo pelo checkout antes da compra.`;
-    }
-    if (lower.includes("curt")) {
-      return baseText.split(".").slice(0, 2).join(".").trim() + ".";
-    }
-    if (lower.includes("garantia")) {
-      return `${baseText} O produto possui garantia de 12 meses contra defeitos de fabricacao, conforme condicoes do vendedor.`;
-    }
-    if (lower.includes("vendedor") || lower.includes("venda")) {
-      return `${baseText} Pode comprar com tranquilidade: estamos prontos para enviar rapidamente e ajudar no que precisar.`;
-    }
-    return `${baseText} Ajuste solicitado: ${instruction}.`;
   }
 
   function startEditing() {
@@ -675,7 +692,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
     const nextVersion = {
       id: `rewrite-${Date.now()}`,
       label: `Ajuste ${revisionNumber}: ${summarizeInstruction(instruction)}`,
-      text: rewriteText(currentText, instruction),
+      text: generateMockAiRewrite(currentText, instruction, question),
       instruction,
       wasEdited: false,
     };
