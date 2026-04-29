@@ -316,6 +316,52 @@ button:disabled {
   margin: 8px 0 14px;
 }
 
+.pending-card {
+  border: 1px solid rgba(126, 139, 168, 0.16);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 16px;
+  box-shadow: 0 14px 34px rgba(32, 43, 69, 0.07);
+}
+
+.pending-card h3 {
+  margin: 12px 0 8px;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.pending-question {
+  margin: 0 0 12px;
+  color: #566176;
+  line-height: 1.45;
+}
+
+.suggestion-preview {
+  border: 1px solid rgba(95, 61, 196, 0.13);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(240, 237, 255, 0.46);
+}
+
+.suggestion-preview span {
+  color: #5f3dc4;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.suggestion-preview p {
+  margin: 6px 0 0;
+  color: #293456;
+  line-height: 1.45;
+}
+
+.pending-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .pill {
   min-height: 28px;
   border-radius: 999px;
@@ -1074,6 +1120,7 @@ button:disabled {
   }
 
   .integration-actions,
+  .pending-actions,
   .modal-actions {
     display: grid;
   }

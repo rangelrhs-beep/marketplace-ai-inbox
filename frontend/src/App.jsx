@@ -23,6 +23,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const navItems = [
   { label: "Inbox", icon: Inbox },
+  { label: "Pendentes", icon: Clock3 },
   { label: "Aprovadas", icon: ShieldCheck },
   { label: "Respondidas", icon: Send },
   { label: "Integrações", icon: PlugZap },
@@ -612,6 +613,44 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
   );
 }
 
+function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit }) {
+  return (
+    <article className="pending-card">
+      <div className="row-top">
+        <div className="source-line">
+          <span className="marketplace">{question.marketplace}</span>
+          <span className="source-tag" style={{ "--source-color": sourceColor }}>
+            {sourceLabel}
+          </span>
+        </div>
+        <span className="time">
+          <Clock3 size={14} />
+          {formatDate(question.created_at)}
+        </span>
+      </div>
+
+      <h3>{question.product}</h3>
+      <p className="pending-question">{question.question}</p>
+
+      <div className="suggestion-preview">
+        <span>Sugestão da IA</span>
+        <p>{question.ai_suggestion}</p>
+      </div>
+
+      <div className="pending-actions">
+        <button className="primary" onClick={() => onApprove(question.id, question.ai_suggestion)}>
+          <Check size={18} />
+          Aprovar e enviar
+        </button>
+        <button className="secondary" onClick={() => onEdit(question.id)}>
+          <Sparkles size={17} />
+          Editar / melhorar
+        </button>
+      </div>
+    </article>
+  );
+}
+
 function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState("");
@@ -929,7 +968,13 @@ export default function App() {
 
   const filteredQuestions = useMemo(() => {
     const forcedStatus =
-      active === "Aprovadas" ? "Aprovada" : active === "Respondidas" ? "Respondida" : null;
+      active === "Aprovadas"
+        ? "Aprovada"
+        : active === "Respondidas"
+          ? "Respondida"
+          : active === "Pendentes"
+            ? "Pendente"
+            : null;
 
     return visibleQuestions.filter((question) => {
       const marketplaceMatches =
@@ -948,6 +993,7 @@ export default function App() {
   };
 
   const hasConnectedIntegrations = connectedMarketplaces.length > 0;
+  const isPendingScreen = active === "Pendentes";
 
   useEffect(() => {
     if (selectedId && !visibleQuestions.some((question) => question.id === selectedId)) {
@@ -961,6 +1007,11 @@ export default function App() {
   }, [connectedMarketplaces, marketplaceFilter, selectedId, visibleQuestions]);
 
   function selectQuestion(id) {
+    setSelectedId(id);
+    setShowConversation(true);
+  }
+
+  function openEditorForQuestion(id) {
     setSelectedId(id);
     setShowConversation(true);
   }
@@ -1221,6 +1272,17 @@ export default function App() {
                   Carregar perguntas demo
                 </button>
               </div>
+            ) : isPendingScreen ? (
+              filteredQuestions.map((question) => (
+                <PendingQuestionCard
+                  key={question.id}
+                  question={question}
+                  sourceLabel={getMarketplaceShortName(question.marketplace, integrations)}
+                  sourceColor={getMarketplaceColor(question.marketplace, integrations)}
+                  onApprove={approveQuestion}
+                  onEdit={openEditorForQuestion}
+                />
+              ))
             ) : (
               filteredQuestions.map((question) => (
                 <QuestionRow
