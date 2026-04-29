@@ -45,6 +45,7 @@ Endpoints simulados:
 - `GET /questions/{id}`
 - `POST /questions/{id}/suggest`
 - `POST /questions/{id}/approve`
+- `POST /ai/rewrite`
 - `GET /integrations/health`
 - `POST /integrations/{id}/test`
 - `GET /integrations/{id}/questions`
@@ -72,6 +73,7 @@ Configure em `backend/.env` localmente, ou no painel do Render/Railway em produc
 - `CORS_ORIGINS`: URLs do frontend separadas por virgula. Exemplo: `https://marketplace-ai-inbox.vercel.app`.
 - `CORS_ORIGIN_REGEX`: opcional para previews da Vercel. Exemplo: `https://.*\.vercel\.app`.
 - `OPENAI_API_KEY`: futura chave da OpenAI para gerar respostas reais.
+- `OPENAI_MODEL`: modelo usado no endpoint `/ai/rewrite`. Padrao: `gpt-4o-mini`.
 - `MERCADO_LIVRE_CLIENT_ID`, `MERCADO_LIVRE_CLIENT_SECRET`, `MERCADO_LIVRE_REDIRECT_URI`: futuras credenciais OAuth do Mercado Livre.
 - `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`: futura conexao MySQL.
 
