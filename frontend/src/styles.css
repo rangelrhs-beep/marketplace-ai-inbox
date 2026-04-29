@@ -26,6 +26,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -132,6 +137,10 @@ button {
   grid-template-columns: minmax(420px, 0.9fr) minmax(420px, 1.1fr);
   gap: 24px;
   padding: 24px;
+}
+
+.workspace.single-view {
+  display: block;
 }
 
 .inbox-panel,
@@ -320,6 +329,16 @@ button {
   color: #b4232f;
 }
 
+.integration-status.disconnected {
+  background: #f3f6fb;
+  color: #647189;
+}
+
+.integration-status.soon {
+  background: #f0edff;
+  color: #5f3dc4;
+}
+
 .priority.high {
   background: #ffedf0;
   color: #c21f3a;
@@ -496,6 +515,238 @@ button {
   color: #647189;
 }
 
+.integrations-page {
+  min-height: calc(100vh - 48px);
+}
+
+.integration-hero {
+  margin: 22px 0;
+  border-radius: 24px;
+  padding: 24px;
+  color: white;
+  background:
+    linear-gradient(135deg, rgba(37, 99, 235, 0.96), rgba(124, 58, 237, 0.96)),
+    #2563eb;
+  box-shadow: 0 24px 58px rgba(79, 70, 229, 0.24);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.integration-hero span {
+  color: #dbe7ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.integration-hero h2 {
+  margin: 6px 0 8px;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.integration-hero p {
+  margin: 0;
+  max-width: 660px;
+  color: #edf3ff;
+  line-height: 1.55;
+}
+
+.hero-icon {
+  width: 78px;
+  height: 78px;
+  flex: 0 0 auto;
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.integration-card {
+  min-height: 250px;
+  border: 1px solid rgba(126, 139, 168, 0.16);
+  border-radius: 22px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 38px rgba(32, 43, 69, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.integration-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.integration-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.22)),
+    var(--integration-color);
+  color: #172033;
+  box-shadow: 0 14px 28px rgba(32, 43, 69, 0.14);
+}
+
+.integration-logo span {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.integration-status {
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.integration-status.approved {
+  background: #e9f8ef;
+  color: #167442;
+}
+
+.integration-body {
+  flex: 1;
+}
+
+.integration-body h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.integration-body p {
+  margin: 0;
+  color: #566176;
+  line-height: 1.5;
+}
+
+.integration-body small {
+  display: block;
+  margin-top: 8px;
+  color: #7d889d;
+}
+
+.integration-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.add-marketplace {
+  margin-top: 16px;
+  border: 1px dashed rgba(79, 70, 229, 0.34);
+  border-radius: 22px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.72);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.add-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  color: #5f3dc4;
+  background: #f0edff;
+}
+
+.add-marketplace span {
+  color: #5f3dc4;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.add-marketplace h2 {
+  margin: 4px 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.add-marketplace p {
+  margin: 0;
+  color: #647189;
+  line-height: 1.5;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  padding: 20px;
+  background: rgba(17, 24, 39, 0.42);
+  display: grid;
+  place-items: center;
+}
+
+.connect-modal {
+  position: relative;
+  width: min(100%, 480px);
+  border-radius: 24px;
+  padding: 24px;
+  background: white;
+  box-shadow: 0 30px 80px rgba(17, 24, 39, 0.28);
+}
+
+.connect-modal > span {
+  display: block;
+  margin-top: 16px;
+  color: #5f3dc4;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.connect-modal h2 {
+  margin: 6px 0 8px;
+  letter-spacing: 0;
+}
+
+.connect-modal p {
+  margin: 0;
+  color: #566176;
+  line-height: 1.55;
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #dce3f1;
+  border-radius: 12px;
+  background: white;
+  color: #293456;
+  display: grid;
+  place-items: center;
+}
+
+.modal-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -526,6 +777,10 @@ button {
 
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .integrations-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .conversation-panel {
@@ -598,8 +853,23 @@ button {
   }
 
   .metrics,
-  .filters {
+  .filters,
+  .integrations-grid,
+  .add-marketplace {
     grid-template-columns: 1fr;
+  }
+
+  .integration-hero {
+    align-items: flex-start;
+  }
+
+  .hero-icon {
+    display: none;
+  }
+
+  .integration-actions,
+  .modal-actions {
+    display: grid;
   }
 
   .question-list {

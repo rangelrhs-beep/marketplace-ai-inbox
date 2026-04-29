@@ -4,14 +4,19 @@ import {
   Check,
   ChevronLeft,
   Clock3,
+  ExternalLink,
   Inbox,
   MessageCircle,
+  Plus,
+  PlugZap,
   RefreshCw,
   Send,
   Settings,
   ShieldCheck,
   Sparkles,
+  Store,
   ThumbsDown,
+  X,
 } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -20,8 +25,57 @@ const navItems = [
   { label: "Inbox", icon: Inbox },
   { label: "Aprovadas", icon: ShieldCheck },
   { label: "Respondidas", icon: Send },
+  { label: "Integrações", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
   { label: "Configuracoes", icon: Settings },
+];
+
+const initialIntegrations = [
+  {
+    id: "mercado-livre",
+    name: "Mercado Livre",
+    shortName: "ML",
+    color: "#ffe600",
+    status: "Conectado",
+    store: "Loja Oficial Atlas Commerce",
+    lastSync: "2026-04-29T08:42:00",
+  },
+  {
+    id: "shopee",
+    name: "Shopee",
+    shortName: "SP",
+    color: "#ee4d2d",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
+  },
+  {
+    id: "magalu",
+    name: "Magalu",
+    shortName: "MG",
+    color: "#0086ff",
+    status: "Conectado",
+    store: "Magazine Seller Pro",
+    lastSync: "2026-04-28T19:15:00",
+  },
+  {
+    id: "amazon",
+    name: "Amazon",
+    shortName: "AZ",
+    color: "#ff9900",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
+  },
+  {
+    id: "tiny-erp",
+    name: "Tiny ERP",
+    shortName: "TY",
+    color: "#16a34a",
+    status: "Em breve",
+    store: "",
+    lastSync: "",
+  },
 ];
 
 const statusClass = {
@@ -29,6 +83,9 @@ const statusClass = {
   Aprovada: "approved",
   Respondida: "answered",
   Rejeitada: "rejected",
+  Conectado: "approved",
+  "Não conectado": "disconnected",
+  "Em breve": "soon",
 };
 
 const priorityClass = {
@@ -81,6 +138,175 @@ function Sidebar({ active, setActive }) {
         <p>das perguntas com sugestao pronta para revisao.</p>
       </div>
     </aside>
+  );
+}
+
+function IntegrationLogo({ integration }) {
+  return (
+    <div className="integration-logo" style={{ "--integration-color": integration.color }}>
+      <span>{integration.shortName}</span>
+    </div>
+  );
+}
+
+function IntegrationCard({ integration, onConnect, onDisconnect, onSync }) {
+  const isConnected = integration.status === "Conectado";
+  const isComingSoon = integration.status === "Em breve";
+
+  return (
+    <article className="integration-card">
+      <div className="integration-card-top">
+        <IntegrationLogo integration={integration} />
+        <span className={`integration-status ${statusClass[integration.status] || "soon"}`}>
+          {integration.status}
+        </span>
+      </div>
+
+      <div className="integration-body">
+        <h3>{integration.name}</h3>
+        {isConnected ? (
+          <>
+            <p>{integration.store}</p>
+            <small>Ultima sincronizacao: {formatDate(integration.lastSync)}</small>
+          </>
+        ) : (
+          <p>
+            {isComingSoon
+              ? "Integracao planejada para uma proxima etapa do produto."
+              : "Conecte por autorizacao oficial para importar perguntas e manter a inbox atualizada."}
+          </p>
+        )}
+      </div>
+
+      <div className="integration-actions">
+        {isConnected ? (
+          <>
+            <button className="secondary" onClick={() => onSync(integration.id)}>
+              <RefreshCw size={17} />
+              Sincronizar agora
+            </button>
+            <button className="danger" onClick={() => onDisconnect(integration.id)}>
+              <X size={17} />
+              Desconectar
+            </button>
+          </>
+        ) : (
+          <button className="primary" onClick={() => onConnect(integration)} disabled={isComingSoon}>
+            <ExternalLink size={17} />
+            Conectar
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ConnectModal({ integration, onCancel, onConfirm }) {
+  if (!integration) {
+    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="connect-modal" role="dialog" aria-modal="true">
+        <button className="modal-close" onClick={onCancel} aria-label="Fechar modal">
+          <X size={20} />
+        </button>
+        <IntegrationLogo integration={integration} />
+        <span>Conexao segura via OAuth</span>
+        <h2>Conectar {integration.name}</h2>
+        <p>
+          Ao continuar, voce sera redirecionado para a pagina oficial de login e autorizacao do
+          marketplace. O Marketplace AI Inbox nunca pede nem armazena sua senha.
+        </p>
+        <div className="modal-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancelar
+          </button>
+          <button className="primary" onClick={() => onConfirm(integration.id)}>
+            <ExternalLink size={17} />
+            Continuar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationsPage({
+  integrations,
+  onConnect,
+  onDisconnect,
+  onSync,
+  pendingIntegration,
+  onCancelConnect,
+  onConfirmConnect,
+}) {
+  const connectedCount = integrations.filter((item) => item.status === "Conectado").length;
+
+  return (
+    <section className="integrations-page">
+      <header className="topbar">
+        <div>
+          <span>Marketplaces e operacao</span>
+          <h1>Integrações</h1>
+        </div>
+        <button className="new-rule">
+          <Plus size={18} />
+          Adicionar
+        </button>
+      </header>
+
+      <div className="integration-hero">
+        <div>
+          <span>Central de canais</span>
+          <h2>{connectedCount} integrações conectadas</h2>
+          <p>
+            Autorize canais oficiais, sincronize perguntas e deixe a IA pronta para responder sem
+            pedir senha do marketplace.
+          </p>
+        </div>
+        <div className="hero-icon">
+          <Store size={34} />
+        </div>
+      </div>
+
+      <div className="integrations-grid">
+        {integrations.map((integration) => (
+          <IntegrationCard
+            key={integration.id}
+            integration={integration}
+            onConnect={onConnect}
+            onDisconnect={onDisconnect}
+            onSync={onSync}
+          />
+        ))}
+      </div>
+
+      <section className="add-marketplace">
+        <div className="add-icon">
+          <Plus size={24} />
+        </div>
+        <div>
+          <span>Adicionar marketplace</span>
+          <h2>Quer conectar outro canal?</h2>
+          <p>
+            Cadastre uma solicitacao para priorizar novos marketplaces, ERPs ou hubs de venda no
+            roadmap de integracoes.
+          </p>
+        </div>
+        <button className="secondary">
+          <Plus size={17} />
+          Solicitar integracao
+        </button>
+      </section>
+
+      <ConnectModal
+        integration={pendingIntegration}
+        onCancel={onCancelConnect}
+        onConfirm={onConfirmConnect}
+      />
+    </section>
   );
 }
 
@@ -183,7 +409,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
             </button>
             <button className="secondary" onClick={handleGenerate} disabled={isGenerating}>
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
-              Gerar nova
+              Gerar nova sugestão
             </button>
             <button className="danger" onClick={() => onReject(question.id)}>
               <ThumbsDown size={17} />
@@ -199,6 +425,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
 export default function App() {
   const [active, setActive] = useState("Inbox");
   const [questions, setQuestions] = useState([]);
+  const [integrations, setIntegrations] = useState(initialIntegrations);
+  const [pendingIntegration, setPendingIntegration] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
@@ -244,6 +472,11 @@ export default function App() {
     setShowConversation(true);
   }
 
+  function changeSection(section) {
+    setActive(section);
+    setShowConversation(false);
+  }
+
   async function generateSuggestion(id) {
     const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
     const data = await response.json();
@@ -275,12 +508,64 @@ export default function App() {
     );
   }
 
+  function openConnectModal(integration) {
+    setPendingIntegration(integration);
+  }
+
+  function confirmConnect(id) {
+    setIntegrations((current) =>
+      current.map((integration) =>
+        integration.id === id
+          ? {
+              ...integration,
+              status: "Conectado",
+              store: `${integration.name} Store Oficial`,
+              lastSync: new Date().toISOString(),
+            }
+          : integration
+      )
+    );
+    setPendingIntegration(null);
+  }
+
+  function disconnectIntegration(id) {
+    setIntegrations((current) =>
+      current.map((integration) =>
+        integration.id === id
+          ? { ...integration, status: "Não conectado", store: "", lastSync: "" }
+          : integration
+      )
+    );
+  }
+
+  function syncIntegration(id) {
+    setIntegrations((current) =>
+      current.map((integration) =>
+        integration.id === id ? { ...integration, lastSync: new Date().toISOString() } : integration
+      )
+    );
+  }
+
+  const isIntegrations = active === "Integrações";
+
   return (
     <div className="app-shell">
-      <Sidebar active={active} setActive={setActive} />
+      <Sidebar active={active} setActive={changeSection} />
 
-      <main className="workspace">
-        <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
+      <main className={`workspace ${isIntegrations ? "single-view" : ""}`}>
+        {isIntegrations ? (
+          <IntegrationsPage
+            integrations={integrations}
+            onConnect={openConnectModal}
+            onDisconnect={disconnectIntegration}
+            onSync={syncIntegration}
+            pendingIntegration={pendingIntegration}
+            onCancelConnect={() => setPendingIntegration(null)}
+            onConfirmConnect={confirmConnect}
+          />
+        ) : (
+          <>
+            <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
           <header className="topbar">
             <div>
               <span>Atendimento com IA</span>
@@ -339,17 +624,19 @@ export default function App() {
               />
             ))}
           </div>
-        </section>
+            </section>
 
-        <div className={`conversation-panel ${showConversation ? "show-mobile" : ""}`}>
-          <Conversation
-            question={selectedQuestion}
-            onBack={() => setShowConversation(false)}
-            onApprove={approveQuestion}
-            onGenerate={generateSuggestion}
-            onReject={rejectQuestion}
-          />
-        </div>
+            <div className={`conversation-panel ${showConversation ? "show-mobile" : ""}`}>
+              <Conversation
+                question={selectedQuestion}
+                onBack={() => setShowConversation(false)}
+                onApprove={approveQuestion}
+                onGenerate={generateSuggestion}
+                onReject={rejectQuestion}
+              />
+            </div>
+          </>
+        )}
       </main>
     </div>
   );
