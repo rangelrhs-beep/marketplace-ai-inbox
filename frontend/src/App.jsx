@@ -19,7 +19,8 @@ import {
   X,
 } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
+const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
 
 const navItems = [
   { label: "Inbox", icon: Inbox },
@@ -868,7 +869,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
   }
 
   async function requestAiRewrite(originalResponse, instruction) {
-    const response = await fetch(`${API_URL}/ai/rewrite`, {
+    const response = await fetch(AI_REWRITE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
