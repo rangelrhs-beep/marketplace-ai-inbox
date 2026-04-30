@@ -81,7 +81,7 @@ Configure em `backend/.env` localmente, ou no painel do Render/Railway em produc
 
 Configure em `frontend/.env` localmente, ou nas Environment Variables da Vercel:
 
-- `VITE_API_URL`: URL publica do backend. Exemplo: `https://marketplace-ai-inbox-api.onrender.com`.
+- `VITE_API_URL`: URL publica do backend. Exemplo: `https://marketplace-ai-backend-ky72.onrender.com`.
 
 ## Deploy do backend no Render
 
