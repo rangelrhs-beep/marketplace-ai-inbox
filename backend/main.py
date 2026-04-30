@@ -249,21 +249,17 @@ def generate_openai_rewrite(question: str, original_response: str, instruction: 
     client = OpenAI(api_key=api_key)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    response = client.responses.create(
-        model=model,
-        instructions=(
-            "You are a professional e-commerce support agent. "
-            "Rewrite the response based on the instruction. "
-            "Be clear, professional and natural. Answer as a seller. "
-            "Respect requests to be more technical, shorter, more persuasive, "
-            "or to include warranty information. Return only the rewritten response."
-        ),
-        input=(
-            f"Customer question:\n{question}\n\n"
-            f"Original seller response:\n{original_response}\n\n"
-            f"Rewrite instruction:\n{instruction}"
-        ),
+    prompt = (
+        "You are a professional e-commerce support agent. "
+        "Rewrite the response based on the instruction. "
+        "Be clear, professional and natural. Answer as a seller. "
+        "Respect requests to be more technical, shorter, more persuasive, "
+        "or to include warranty information. Return only the rewritten response.\n\n"
+        f"Customer question:\n{question}\n\n"
+        f"Original seller response:\n{original_response}\n\n"
+        f"Rewrite instruction:\n{instruction}"
     )
+    response = client.responses.create(model=model, input=prompt)
     revised_response = response.output_text.strip()
     if not revised_response:
         raise RuntimeError("OpenAI returned an empty response")
