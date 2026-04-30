@@ -1137,6 +1137,25 @@ export default function App() {
     loadIntegrationHealth();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!activeCompanyId || params.get("ml_connected") !== "true") return;
+
+    setIntegrations((current) =>
+      current.map((integration) =>
+        integration.id === "mercado-livre"
+          ? {
+              ...integration,
+              status: "Conectado",
+              store: integration.store || "Mercado Livre conectado",
+              lastSync: new Date().toISOString(),
+            }
+          : integration
+      )
+    );
+    window.history.replaceState({}, "", window.location.pathname);
+  }, [activeCompanyId]);
+
   const connectedMarketplaces = useMemo(
     () =>
       integrations
@@ -1297,7 +1316,19 @@ export default function App() {
     );
   }
 
-  function openConnectModal(integration) {
+  async function openConnectModal(integration) {
+    if (integration.id === "mercado-livre") {
+      try {
+        const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
+        const data = await response.json();
+        if (data.configured && data.auth_url) {
+          window.location.href = data.auth_url;
+          return;
+        }
+      } catch {
+        // Keep mock fallback below when OAuth is unavailable.
+      }
+    }
     setPendingIntegration(integration);
   }
 
