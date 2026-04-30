@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+import logging
 import os
 from typing import Any, List
 
@@ -14,6 +15,7 @@ from integrations.registry import services as integration_services
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 def get_cors_origins() -> list[str]:
@@ -58,16 +60,6 @@ class SuggestionResponse(BaseModel):
 
 class ApprovePayload(BaseModel):
     answer: str
-
-
-class AIRewriteRequest(BaseModel):
-    question: str
-    original_response: str
-    instruction: str
-
-
-class AIRewriteResponse(BaseModel):
-    revised_response: str
 
 
 app = FastAPI(title="Marketplace AI Inbox API", version="0.1.0")
@@ -247,15 +239,12 @@ def health():
     return {"status": "ok"}
 
 
-def generate_openai_rewrite(payload: AIRewriteRequest) -> str:
+def generate_openai_rewrite(question: str, original_response: str, instruction: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+        raise RuntimeError("OPENAI_API_KEY is not configured")
 
-    try:
-        from openai import OpenAI
-    except ImportError as error:
-        raise HTTPException(status_code=500, detail="OpenAI Python package is not installed") from error
+    from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -270,25 +259,53 @@ def generate_openai_rewrite(payload: AIRewriteRequest) -> str:
             "or to include warranty information. Return only the rewritten response."
         ),
         input=(
-            f"Customer question:\n{payload.question}\n\n"
-            f"Original seller response:\n{payload.original_response}\n\n"
-            f"Rewrite instruction:\n{payload.instruction}"
+            f"Customer question:\n{question}\n\n"
+            f"Original seller response:\n{original_response}\n\n"
+            f"Rewrite instruction:\n{instruction}"
         ),
     )
     revised_response = response.output_text.strip()
     if not revised_response:
-        raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
+        raise RuntimeError("OpenAI returned an empty response")
     return revised_response
 
 
-@app.post("/ai/rewrite", response_model=AIRewriteResponse)
-def rewrite_ai_response(payload: AIRewriteRequest):
+@app.get("/ai/health")
+def ai_health():
+    return {
+        "openai_key_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        "status": "ok",
+    }
+
+
+@app.post("/ai/rewrite")
+def rewrite_ai_response(payload: dict[str, Any]):
+    original_response = (payload.get("text") or payload.get("original_response") or "").strip()
+    instruction = (payload.get("instruction") or "").strip()
+    question = (payload.get("question") or "").strip()
+
+    if not original_response:
+        return {
+            "error": True,
+            "message": "Missing required field: text or original_response",
+            "fallback_available": True,
+        }
+
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Missing required field: instruction")
+
     try:
-        return AIRewriteResponse(revised_response=generate_openai_rewrite(payload))
-    except HTTPException:
-        raise
+        rewritten_text = generate_openai_rewrite(question, original_response, instruction)
+        return {"rewritten_text": rewritten_text}
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"OpenAI rewrite failed: {error}") from error
+        logger.exception("OpenAI rewrite failed")
+        print(f"OpenAI rewrite failed: {error}")
+        return {
+            "error": True,
+            "message": f"OpenAI rewrite failed: {error}",
+            "fallback_available": True,
+        }
 
 
 @app.get("/integrations/health", response_model=List[IntegrationHealth])
