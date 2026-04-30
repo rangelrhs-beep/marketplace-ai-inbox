@@ -885,10 +885,11 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject }) {
     }
 
     const data = await response.json();
-    if (!data.revised_response) {
+    const rewrittenText = data.rewritten_text || data.revised_response;
+    if (!rewrittenText || data.error) {
       throw new Error("A IA retornou uma resposta vazia");
     }
-    return data.revised_response;
+    return rewrittenText;
   }
 
   async function handleRewrite() {
