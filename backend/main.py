@@ -74,8 +74,7 @@ app = FastAPI(title="Marketplace AI Inbox API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
-    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX") or None,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
