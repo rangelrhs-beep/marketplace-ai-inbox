@@ -1,11 +1,18 @@
 from datetime import datetime
 from enum import Enum
+import json
 import logging
 import os
+from pathlib import Path
+import time
 from typing import Any, List
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -16,6 +23,9 @@ from integrations.registry import services as integration_services
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+ML_TOKEN_PATH = Path(__file__).with_name("mercadolivre_tokens.json")
+ML_AUTH_BASE_URL = "https://auth.mercadolivre.com.br/authorization"
+ML_API_BASE_URL = "https://api.mercadolibre.com"
 
 
 def get_cors_origins() -> list[str]:
@@ -24,6 +34,81 @@ def get_cors_origins() -> list[str]:
         "http://localhost:5173,http://127.0.0.1:5173",
     )
     return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+
+def get_ml_config() -> dict[str, str]:
+    return {
+        "client_id": os.getenv("ML_CLIENT_ID") or os.getenv("MERCADO_LIVRE_CLIENT_ID") or "",
+        "client_secret": os.getenv("ML_CLIENT_SECRET") or os.getenv("MERCADO_LIVRE_CLIENT_SECRET") or "",
+        "redirect_uri": os.getenv("ML_REDIRECT_URI") or os.getenv("MERCADO_LIVRE_REDIRECT_URI") or "",
+    }
+
+
+def ml_is_configured() -> bool:
+    config = get_ml_config()
+    return all(config.values())
+
+
+def read_ml_tokens() -> dict[str, Any]:
+    if not ML_TOKEN_PATH.exists():
+        return {}
+    try:
+        return json.loads(ML_TOKEN_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
+    token_data["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 0))
+    ML_TOKEN_PATH.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
+    return token_data
+
+
+def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | None = None, access_token: str | None = None) -> dict[str, Any]:
+    body = None
+    headers = {"Accept": "application/json"}
+    if data is not None:
+        body = urlencode(data).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+
+    request = Request(url, data=body, method=method, headers=headers)
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=error.code, detail=f"Mercado Livre API error: {details}") from error
+    except URLError as error:
+        raise HTTPException(status_code=502, detail=f"Mercado Livre API unavailable: {error}") from error
+
+
+def refresh_ml_token_if_needed(force: bool = False) -> dict[str, Any]:
+    tokens = read_ml_tokens()
+    if not tokens:
+        raise HTTPException(status_code=401, detail="Mercado Livre is not connected")
+
+    should_refresh = force or int(tokens.get("expires_at", 0)) <= int(time.time()) + 120
+    if not should_refresh:
+        return tokens
+
+    refresh_token = tokens.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Mercado Livre refresh_token is missing")
+
+    config = get_ml_config()
+    refreshed = ml_request_json(
+        f"{ML_API_BASE_URL}/oauth/token",
+        method="POST",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "refresh_token": refresh_token,
+        },
+    )
+    return save_ml_tokens(refreshed)
 
 
 class Status(str, Enum):
@@ -278,6 +363,73 @@ def ai_health():
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         "status": "ok",
     }
+
+
+@app.get("/integrations/mercadolivre/auth-url")
+def mercadolivre_auth_url():
+    config = get_ml_config()
+    if not ml_is_configured():
+        return {
+            "configured": False,
+            "auth_url": None,
+            "fallback_available": True,
+            "message": "Mercado Livre OAuth is not configured. Set ML_CLIENT_ID, ML_CLIENT_SECRET and ML_REDIRECT_URI.",
+        }
+
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": config["client_id"],
+            "redirect_uri": config["redirect_uri"],
+            "state": "marketplace-ai-inbox",
+        }
+    )
+    return {"configured": True, "auth_url": f"{ML_AUTH_BASE_URL}?{query}"}
+
+
+@app.get("/integrations/mercadolivre/callback")
+def mercadolivre_callback(code: str = Query(...)):
+    config = get_ml_config()
+    if not ml_is_configured():
+        raise HTTPException(status_code=400, detail="Mercado Livre OAuth is not configured")
+
+    token_data = ml_request_json(
+        f"{ML_API_BASE_URL}/oauth/token",
+        method="POST",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "code": code,
+            "redirect_uri": config["redirect_uri"],
+        },
+    )
+    save_ml_tokens(token_data)
+    frontend_url = os.getenv("FRONTEND_URL")
+    if frontend_url:
+        return RedirectResponse(f"{frontend_url.rstrip('/')}/?ml_connected=true")
+    return {
+        "connected": True,
+        "message": "Mercado Livre connected. You can close this tab and return to the app.",
+    }
+
+
+@app.get("/integrations/mercadolivre/questions")
+def mercadolivre_questions():
+    tokens = refresh_ml_token_if_needed()
+    try:
+        return ml_request_json(
+            f"{ML_API_BASE_URL}/my/received_questions/search?api_version=4",
+            access_token=tokens["access_token"],
+        )
+    except HTTPException as error:
+        if error.status_code == 401:
+            tokens = refresh_ml_token_if_needed(force=True)
+            return ml_request_json(
+                f"{ML_API_BASE_URL}/my/received_questions/search?api_version=4",
+                access_token=tokens["access_token"],
+            )
+        raise
 
 
 @app.post("/ai/rewrite")
