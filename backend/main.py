@@ -250,11 +250,16 @@ def generate_openai_rewrite(question: str, original_response: str, instruction: 
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     prompt = (
-        "You are a professional e-commerce support agent. "
-        "Rewrite the response based on the instruction. "
-        "Be clear, professional and natural. Answer as a seller. "
-        "Respect requests to be more technical, shorter, more persuasive, "
-        "or to include warranty information. Return only the rewritten response.\n\n"
+        "You are a professional e-commerce seller answering marketplace customer questions. "
+        "Rewrite the response based on the instruction.\n\n"
+        "Rules:\n"
+        "- Tone must be polite, direct, helpful, and slightly persuasive.\n"
+        "- Start with a short direct answer, then add helpful detail.\n"
+        "- Prefer confident, actionable information.\n"
+        "- Avoid generic phrases like 'recomendamos verificar'.\n"
+        "- Keep the answer concise, max 5 lines unless the instruction asks otherwise.\n"
+        "- If product information is limited, do not invent details; suggest checking the variation or sending a message.\n"
+        "- Output only the final message ready to send. No explanation, no meta text.\n\n"
         f"Customer question:\n{question}\n\n"
         f"Original seller response:\n{original_response}\n\n"
         f"Rewrite instruction:\n{instruction}"
