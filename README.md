@@ -49,6 +49,9 @@ Endpoints simulados:
 - `GET /integrations/health`
 - `POST /integrations/{id}/test`
 - `GET /integrations/{id}/questions`
+- `GET /integrations/mercadolivre/auth-url`
+- `GET /integrations/mercadolivre/callback`
+- `GET /integrations/mercadolivre/questions`
 
 ### Frontend
 
@@ -75,6 +78,8 @@ Configure em `backend/.env` localmente, ou no painel do Render/Railway em produc
 - `OPENAI_API_KEY`: futura chave da OpenAI para gerar respostas reais.
 - `OPENAI_MODEL`: modelo usado no endpoint `/ai/rewrite`. Padrao: `gpt-4o-mini`.
 - `MERCADO_LIVRE_CLIENT_ID`, `MERCADO_LIVRE_CLIENT_SECRET`, `MERCADO_LIVRE_REDIRECT_URI`: futuras credenciais OAuth do Mercado Livre.
+- `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ML_REDIRECT_URI`: credenciais OAuth reais do Mercado Livre. `ML_REDIRECT_URI` deve ser exatamente a URL cadastrada no app Mercado Livre, por exemplo `https://SUA-API.onrender.com/integrations/mercadolivre/callback`.
+- `FRONTEND_URL`: URL do frontend para voltar apos callback OAuth, por exemplo `https://SEU-FRONTEND.vercel.app`.
 - `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`: futura conexao MySQL.
 
 ### Frontend
@@ -156,6 +161,7 @@ Para producao mais simples com FastAPI, Render ou Railway tendem a ser caminhos 
 
 - OpenAI: substituir a logica mockada de `POST /questions/{id}/suggest` por uma chamada usando `OPENAI_API_KEY`.
 - Mercado Livre: criar fluxo OAuth com `MERCADO_LIVRE_CLIENT_ID`, `MERCADO_LIVRE_CLIENT_SECRET` e `MERCADO_LIVRE_REDIRECT_URI`, depois buscar perguntas reais pela API.
+- Mercado Livre OAuth: o backend ja possui endpoints iniciais para gerar URL de autorizacao, receber callback, salvar tokens temporariamente em `backend/mercadolivre_tokens.json`, renovar token e buscar perguntas recebidas.
 - MySQL: trocar a lista em memoria `questions` por modelos e repositorios usando as variaveis `MYSQL_*`.
 - Conectores: a pasta `backend/integrations/` ja separa `client.py`, `mapper.py` e `service.py` por canal. Cada mapper converte payloads externos para `NormalizedQuestion` e preserva `raw_payload`.
 
