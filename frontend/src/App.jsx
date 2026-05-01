@@ -469,6 +469,29 @@ function generateMockAiRewrite(originalResponse, instruction, question) {
     .replace("Pode comprar com tranquilidade.", "A compra pode ser feita com tranquilidade.");
 }
 
+function mapMercadoLivreQuestionToUi(question, index) {
+  const rawPayload = question.raw_payload || {};
+  const externalId = question.external_id || rawPayload.id || index + 1;
+
+  return {
+    id: `ml-${externalId}`,
+    company_id: "cpap_express",
+    marketplace: "Mercado Livre",
+    product: question.product_title || rawPayload.item_id || "Produto Mercado Livre",
+    customer_name: "Cliente Mercado Livre",
+    question: question.question_text || rawPayload.text || "",
+    created_at: question.created_at || rawPayload.date_created || new Date().toISOString(),
+    status: question.status || "Pendente",
+    priority: "Media",
+    ai_suggestion:
+      "Olá! Obrigado pela pergunta. Vamos te responder com as informações disponíveis do anúncio.",
+    sku: rawPayload.item_id || "ML",
+    price: "",
+    raw_payload: rawPayload,
+    external_id: String(externalId),
+  };
+}
+
 function Sidebar({ active, setActive }) {
   return (
     <aside className="sidebar">
@@ -577,7 +600,16 @@ function IntegrationLogo({ integration }) {
   );
 }
 
-function IntegrationCard({ integration, onConnect, onDisconnect, onSync, isSyncing }) {
+function IntegrationCard({
+  integration,
+  onConnect,
+  onDisconnect,
+  onSync,
+  onFetchRealQuestions,
+  isSyncing,
+  canFetchRealQuestions,
+  isFetchingRealQuestions,
+}) {
   const isConnected = integration.status === "Conectado";
   const isComingSoon = integration.status === "Em breve";
 
@@ -610,6 +642,16 @@ function IntegrationCard({ integration, onConnect, onDisconnect, onSync, isSynci
       <div className="integration-actions">
         {isConnected ? (
           <>
+            {canFetchRealQuestions ? (
+              <button
+                className="primary"
+                onClick={onFetchRealQuestions}
+                disabled={isFetchingRealQuestions}
+              >
+                <RefreshCw size={17} className={isFetchingRealQuestions ? "spin" : ""} />
+                {isFetchingRealQuestions ? "Buscando..." : "Buscar perguntas reais"}
+              </button>
+            ) : null}
             <button className="secondary" onClick={() => onSync(integration.id)} disabled={isSyncing}>
               <RefreshCw size={17} className={isSyncing ? "spin" : ""} />
               {isSyncing ? "Sincronizando..." : "Sincronizar agora"}
@@ -672,8 +714,10 @@ function IntegrationsPage({
   onConnect,
   onDisconnect,
   onSync,
+  onFetchRealQuestions,
   onTestHealth,
   syncingIntegrationId,
+  fetchingRealQuestions,
   testingIntegrationId,
   pendingIntegration,
   onCancelConnect,
@@ -724,7 +768,14 @@ function IntegrationsPage({
             onConnect={onConnect}
             onDisconnect={onDisconnect}
             onSync={onSync}
+            onFetchRealQuestions={onFetchRealQuestions}
             isSyncing={syncingIntegrationId === integration.id}
+            canFetchRealQuestions={
+              activeCompanyId === "cpap_express" &&
+              integration.id === "mercado-livre" &&
+              integration.status === "Conectado"
+            }
+            isFetchingRealQuestions={fetchingRealQuestions}
           />
         ))}
       </div>
@@ -1233,6 +1284,8 @@ export default function App() {
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
+  const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
+  const [questionNotice, setQuestionNotice] = useState("");
   const [testingIntegrationId, setTestingIntegrationId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
@@ -1394,6 +1447,7 @@ export default function App() {
   }, [connectedMarketplaces, marketplaceFilter, selectedId, visibleQuestions]);
 
   function selectQuestion(id) {
+    setQuestionNotice("");
     setSelectedId(id);
     setShowConversation(true);
   }
@@ -1409,6 +1463,7 @@ export default function App() {
   }
 
   function loadDemoQuestions() {
+    setQuestionNotice("");
     const companyQuestions = getDemoQuestionsForCompany(activeCompanyId);
     const companyMarketplaces = new Set(companyQuestions.map((question) => question.marketplace));
     setQuestions(companyQuestions);
@@ -1441,6 +1496,7 @@ export default function App() {
   function handleCompanyChange(companyId) {
     if (currentUser?.role !== "admin") return;
     setActiveCompanyId(companyId);
+    setQuestionNotice("");
     setMarketplaceFilter("Todos");
     setStatusFilter("Todos");
     setShowConversation(false);
@@ -1592,6 +1648,66 @@ export default function App() {
     }, 900);
   }
 
+  async function fetchMercadoLivreQuestions() {
+    if (activeCompanyId !== "cpap_express") {
+      return;
+    }
+
+    setFetchingMlQuestions(true);
+    setQuestionNotice("");
+    try {
+      const response = await fetch(`${API_URL}/integrations/mercadolivre/questions`);
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const fallbackMessage =
+          response.status === 401
+            ? "Mercado Livre não conectado."
+            : response.status === 403
+              ? "Permissão insuficiente para acessar perguntas."
+              : typeof data?.detail === "string"
+                ? data.detail
+                : data?.message || "Não foi possível buscar perguntas do Mercado Livre.";
+        setQuestions([]);
+        setSelectedId(null);
+        setShowConversation(false);
+        setQuestionNotice(fallbackMessage);
+        return;
+      }
+
+      const realQuestions = Array.isArray(data) ? data.map(mapMercadoLivreQuestionToUi) : [];
+      setQuestions(realQuestions);
+      setSelectedId(realQuestions[0]?.id || null);
+      setShowConversation(false);
+      setMarketplaceFilter("Todos");
+      setStatusFilter("Todos");
+      setIntegrations((current) =>
+        current.map((integration) =>
+          integration.id === "mercado-livre"
+            ? {
+                ...integration,
+                status: "Conectado",
+                store: integration.store || "CPAP Express Mercado Livre",
+                lastSync: new Date().toISOString(),
+                token_status: "valid",
+              }
+            : integration
+        )
+      );
+
+      if (realQuestions.length === 0) {
+        setQuestionNotice("Nenhuma pergunta pendente encontrada no Mercado Livre.");
+      }
+    } catch {
+      setQuestions([]);
+      setSelectedId(null);
+      setShowConversation(false);
+      setQuestionNotice("Não foi possível buscar perguntas do Mercado Livre.");
+    } finally {
+      setFetchingMlQuestions(false);
+    }
+  }
+
   async function testIntegrationHealth(id) {
     setTestingIntegrationId(id);
     try {
@@ -1649,8 +1765,10 @@ export default function App() {
             onConnect={openConnectModal}
             onDisconnect={disconnectIntegration}
             onSync={syncIntegration}
+            onFetchRealQuestions={fetchMercadoLivreQuestions}
             onTestHealth={testIntegrationHealth}
             syncingIntegrationId={syncingIntegrationId}
+            fetchingRealQuestions={fetchingMlQuestions}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
             onCancelConnect={() => setPendingIntegration(null)}
@@ -1756,7 +1874,7 @@ export default function App() {
                   <Inbox size={30} />
                 </div>
                 <h2>Nenhuma pergunta encontrada</h2>
-                <p>Ajuste os filtros ou sincronize os marketplaces conectados.</p>
+                <p>{questionNotice || "Ajuste os filtros ou sincronize os marketplaces conectados."}</p>
                 <button className="primary" onClick={loadDemoQuestions}>
                   <Inbox size={17} />
                   Carregar perguntas demo
