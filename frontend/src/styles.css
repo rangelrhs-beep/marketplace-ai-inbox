@@ -249,6 +249,18 @@ button:disabled {
   color: #172033;
 }
 
+.user-badge {
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: #eef3ff;
+  color: #2457c5;
+  font-size: 12px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+}
+
 .topbar h1,
 .conversation-header h2 {
   margin: 3px 0;
@@ -713,6 +725,82 @@ button:disabled {
   margin-top: 16px;
 }
 
+.read-only-answer {
+  align-self: flex-end;
+  width: min(92%, 620px);
+  border-radius: 22px 22px 4px 22px;
+  padding: 18px;
+  background: white;
+  border: 1px solid rgba(22, 163, 74, 0.2);
+  box-shadow: 0 20px 50px rgba(22, 163, 74, 0.12);
+}
+
+.read-only-answer p {
+  margin: 10px 0 16px;
+  line-height: 1.58;
+}
+
+.read-only-answer dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+}
+
+.read-only-answer dt {
+  color: #7d889d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.read-only-answer dd {
+  margin: 3px 0 0;
+  color: #293456;
+}
+
+.settings-page {
+  min-height: calc(100vh - 48px);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.settings-card {
+  border: 1px solid rgba(126, 139, 168, 0.16);
+  border-radius: 22px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 38px rgba(32, 43, 69, 0.08);
+}
+
+.settings-card span {
+  color: #647189;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-card h2 {
+  margin: 8px 0;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.settings-card p {
+  margin: 0;
+  color: #566176;
+  line-height: 1.5;
+}
+
+.onboarding-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 .primary {
   color: white;
   background: #16a34a;
@@ -1139,6 +1227,7 @@ button:disabled {
   }
 
   .integrations-grid,
+  .settings-grid,
   .health-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1230,6 +1319,7 @@ button:disabled {
   .metrics,
   .filters,
   .integrations-grid,
+  .settings-grid,
   .health-grid,
   .add-marketplace {
     grid-template-columns: 1fr;
@@ -1283,9 +1373,16 @@ button:disabled {
   }
 
   .message,
-  .ai-card {
+  .ai-card,
+  .read-only-answer {
     max-width: 100%;
     width: 100%;
+  }
+
+  .read-only-answer dl,
+  .onboarding-actions {
+    grid-template-columns: 1fr;
+    display: grid;
   }
 
   .ai-actions,
