@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Check,
@@ -27,7 +27,7 @@ const navItems = [
   { label: "Pendentes", icon: Clock3 },
   { label: "Aprovadas", icon: ShieldCheck },
   { label: "Respondidas", icon: Send },
-  { label: "Integrações", icon: PlugZap },
+  { label: "IntegraÃ§Ãµes", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
   { label: "Configuracoes", icon: Settings },
 ];
@@ -38,36 +38,36 @@ const initialIntegrations = [
     name: "Mercado Livre",
     shortName: "ML",
     color: "#ffe600",
-    status: "Conectado",
-    store: "Loja Oficial Atlas Commerce",
-    lastSync: "2026-04-29T08:42:00",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
   },
   {
     id: "shopee",
     name: "Shopee",
     shortName: "Shopee",
     color: "#ee4d2d",
-    status: "Conectado",
-    store: "Shopee Seller Demo",
-    lastSync: "2026-04-29T08:36:00",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
   },
   {
     id: "magalu",
     name: "Magalu",
     shortName: "Magalu",
     color: "#0086ff",
-    status: "Conectado",
-    store: "Magazine Seller Pro",
-    lastSync: "2026-04-28T19:15:00",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
   },
   {
     id: "amazon",
     name: "Amazon",
     shortName: "Amazon",
     color: "#ff9900",
-    status: "Conectado",
-    store: "Amazon Store Demo",
-    lastSync: "2026-04-29T08:28:00",
+    status: "Não conectado",
+    store: "",
+    lastSync: "",
   },
   {
     id: "tiny-erp",
@@ -227,38 +227,43 @@ const initialIntegrationHealth = [
   {
     id: "mercado-livre",
     channel: "Mercado Livre",
-    api_status: "operational",
-    last_sync: "2026-04-29T08:42:00",
-    last_error: null,
-    token_status: "valid",
+    connected: false,
+    api_status: "down",
+    last_sync: null,
+    last_error: "Aguardando leitura do backend.",
+    token_status: "missing",
   },
   {
     id: "shopee",
     channel: "Shopee",
+    connected: false,
     api_status: "degraded",
-    last_sync: "2026-04-28T15:23:00",
-    last_error: "Rate limit warning on questions endpoint.",
-    token_status: "valid",
+    last_sync: null,
+    last_error: "IntegraÃ§Ã£o mockada atÃ© conectar API real.",
+    token_status: "missing",
   },
   {
     id: "magalu",
     channel: "Magalu",
-    api_status: "operational",
-    last_sync: "2026-04-28T19:15:00",
-    last_error: null,
-    token_status: "valid",
+    connected: false,
+    api_status: "down",
+    last_sync: null,
+    last_error: "IntegraÃ§Ã£o mockada atÃ© conectar API real.",
+    token_status: "missing",
   },
   {
     id: "amazon",
     channel: "Amazon",
+    connected: false,
     api_status: "down",
-    last_sync: "2026-04-27T08:30:00",
+    last_sync: null,
     last_error: "Mocked API failure: Amazon SP-API credentials not configured.",
     token_status: "missing",
   },
   {
     id: "tiny-erp",
     channel: "Tiny ERP",
+    connected: false,
     api_status: "degraded",
     last_sync: null,
     last_error: "Question sync is not available for Tiny ERP yet.",
@@ -333,20 +338,7 @@ function getDemoQuestionsForCompany(companyId) {
 const initialTenantData = {
   "atlas-commerce": {
     users: [],
-    integrations: integrationState({
-      shopee: {
-        status: "Conectado",
-        store: "Shopee Atlas Commerce",
-        lastSync: "2026-04-29T08:36:00",
-        token_status: "valid",
-      },
-      magalu: {
-        status: "Conectado",
-        store: "Magalu Atlas Commerce",
-        lastSync: "2026-04-28T19:15:00",
-        token_status: "valid",
-      },
-    }),
+    integrations: integrationState(),
     questions: getDemoQuestionsForCompany("atlas-commerce"),
     aiSettings: {
       tone: "Profissional e consultivo",
@@ -360,14 +352,7 @@ const initialTenantData = {
   },
   "nova-casa": {
     users: [],
-    integrations: integrationState({
-      shopee: {
-        status: "Conectado",
-        store: "Shopee Nova Casa",
-        lastSync: "2026-04-29T07:40:00",
-        token_status: "valid",
-      },
-    }),
+    integrations: integrationState(),
     questions: getDemoQuestionsForCompany("nova-casa"),
     aiSettings: {
       tone: "Direto e vendedor",
@@ -381,14 +366,7 @@ const initialTenantData = {
   },
   cpap_express: {
     users: mockUsers.filter((user) => user.companyIds.includes("cpap_express")),
-    integrations: integrationState({
-      "mercado-livre": {
-        status: "Conectado",
-        store: "CPAP Express Mercado Livre",
-        lastSync: "2026-05-01T09:15:00",
-        token_status: "valid",
-      },
-    }),
+    integrations: integrationState(),
     questions: getDemoQuestionsForCompany("cpap_express"),
     aiSettings: {
       tone: "Tecnico, claro e confiavel",
@@ -484,12 +462,41 @@ function mapMercadoLivreQuestionToUi(question, index) {
     status: question.status || "Pendente",
     priority: "Media",
     ai_suggestion:
-      "Olá! Obrigado pela pergunta. Vamos te responder com as informações disponíveis do anúncio.",
+      "OlÃ¡! Obrigado pela pergunta. Vamos te responder com as informaÃ§Ãµes disponÃ­veis do anÃºncio.",
     sku: rawPayload.item_id || "ML",
     price: "",
     raw_payload: rawPayload,
     external_id: String(externalId),
   };
+}
+
+function isBackendIntegrationConnected(health) {
+  if (!health) return false;
+  if (typeof health.connected === "boolean") return health.connected;
+  return health.token_status === "valid" || health.token_status === "expired";
+}
+
+function applyBackendHealthToIntegrations(integrations, healthItems, companyId) {
+  const healthById = new Map((healthItems || []).map((health) => [health.id, health]));
+  const mercadoLivreHealth = healthById.get("mercado-livre");
+  const isCpapExpress = companyId === "cpap_express";
+  const isMercadoLivreConnected =
+    isCpapExpress && isBackendIntegrationConnected(mercadoLivreHealth);
+
+  return integrations.map((integration) => {
+    if (integration.id !== "mercado-livre") {
+      return integration;
+    }
+
+    return {
+      ...integration,
+      status: isMercadoLivreConnected ? "Conectado" : "Não conectado",
+      store: isMercadoLivreConnected ? "CPAP Express Mercado Livre" : "",
+      lastSync: isMercadoLivreConnected ? mercadoLivreHealth?.last_sync || new Date().toISOString() : "",
+      token_status: mercadoLivreHealth?.token_status || "missing",
+      last_error: mercadoLivreHealth?.last_error || "",
+    };
+  });
 }
 
 function Sidebar({ active, setActive }) {
@@ -544,7 +551,7 @@ function LoginScreen({ onLogin }) {
           </div>
         </div>
         <h1>Entrar no painel</h1>
-        <p>Escolha um perfil mockado para testar contas por empresa, permissões e dados isolados.</p>
+        <p>Escolha um perfil mockado para testar contas por empresa, permissÃµes e dados isolados.</p>
 
         <div className="login-options">
           {mockUsers.map((user) => {
@@ -562,7 +569,7 @@ function LoginScreen({ onLogin }) {
                   <span>{user.email}</span>
                 </div>
                 <small>
-                  {user.role === "admin" ? "Admin" : "Cliente"} · {companyLabel}
+                  {user.role === "admin" ? "Admin" : "Cliente"} Â· {companyLabel}
                 </small>
               </button>
             );
@@ -729,8 +736,8 @@ function IntegrationsPage({
     <section className="integrations-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} · Marketplaces e operacao</span>
-          <h1>Integrações</h1>
+          <span>{activeCompany?.name || "Empresa"} Â· Marketplaces e operacao</span>
+          <h1>IntegraÃ§Ãµes</h1>
         </div>
         <div className="topbar-actions">
           <CompanySwitcher
@@ -749,7 +756,7 @@ function IntegrationsPage({
       <div className="integration-hero">
         <div>
           <span>Central de canais</span>
-          <h2>{connectedCount} integrações conectadas</h2>
+          <h2>{connectedCount} integraÃ§Ãµes conectadas</h2>
           <p>
             Autorize canais oficiais, sincronize perguntas e deixe a IA pronta para responder sem
             pedir senha do marketplace.
@@ -856,8 +863,8 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} · Preparacao para login real</span>
-          <h1>Configurações</h1>
+          <span>{activeCompany?.name || "Empresa"} Â· Preparacao para login real</span>
+          <h1>ConfiguraÃ§Ãµes</h1>
         </div>
         <div className="topbar-actions">
           <CompanySwitcher currentUser={currentUser} activeCompanyId={activeCompanyId} onChange={onCompanyChange} />
@@ -869,12 +876,12 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
         <article className="settings-card">
           <span>Empresa atual</span>
           <h2>{activeCompany?.name}</h2>
-          <p>Plano {activeCompany?.plan}. Dados, integrações, perguntas e logs ficam isolados por empresa.</p>
+          <p>Plano {activeCompany?.plan}. Dados, integraÃ§Ãµes, perguntas e logs ficam isolados por empresa.</p>
         </article>
         <article className="settings-card">
-          <span>Usuários</span>
+          <span>UsuÃ¡rios</span>
           <h2>{activeTenant.users.length}</h2>
-          <p>{isAdmin ? "Admin pode criar e convidar usuários no mock." : "Cliente visualiza somente a propria empresa."}</p>
+          <p>{isAdmin ? "Admin pode criar e convidar usuÃ¡rios no mock." : "Cliente visualiza somente a propria empresa."}</p>
         </article>
         <article className="settings-card">
           <span>IA</span>
@@ -891,7 +898,7 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
           </button>
           <button className="secondary">
             <Plus size={17} />
-            Convidar usuário
+            Convidar usuÃ¡rio
           </button>
         </div>
       ) : null}
@@ -946,7 +953,7 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
       <p className="pending-question">{question.question}</p>
 
       <div className="suggestion-preview">
-        <span>Sugestão da IA</span>
+        <span>SugestÃ£o da IA</span>
         <p>{question.ai_suggestion}</p>
       </div>
 
@@ -979,7 +986,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     setVersions([
       {
         id: "original",
-        label: "Versão original",
+        label: "VersÃ£o original",
         text: originalText,
         instruction: "",
         wasEdited: false,
@@ -1066,7 +1073,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
   function summarizeInstruction(instruction) {
     const lower = normalizeInstruction(instruction);
-    if (lower.includes("tecnic")) return "mais técnico";
+    if (lower.includes("tecnic")) return "mais tÃ©cnico";
     if (lower.includes("curt")) return "mais curto";
     if (lower.includes("garantia")) return "garantia";
     if (lower.includes("vendedor") || lower.includes("venda")) return "mais vendedor";
@@ -1082,9 +1089,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     if (!editDraft.trim()) return;
     const nextVersion = {
       id: `manual-${Date.now()}`,
-      label: `Edição manual ${versions.filter((version) => version.wasEdited).length + 1}`,
+      label: `EdiÃ§Ã£o manual ${versions.filter((version) => version.wasEdited).length + 1}`,
       text: editDraft.trim(),
-      instruction: "Edição manual",
+      instruction: "EdiÃ§Ã£o manual",
       wasEdited: true,
     };
     setVersions((current) => [...current, nextVersion]);
@@ -1154,9 +1161,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     const suggestion = await onGenerate(question.id);
     const nextVersion = {
       id: `generated-${Date.now()}`,
-      label: `Ajuste ${versions.length}: nova sugestão`,
+      label: `Ajuste ${versions.length}: nova sugestÃ£o`,
       text: suggestion,
-      instruction: "Gerar nova sugestão",
+      instruction: "Gerar nova sugestÃ£o",
       wasEdited: false,
     };
     setVersions((current) => [...current, nextVersion]);
@@ -1183,7 +1190,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <span>{question.marketplace}</span>
           <h2>{question.product}</h2>
           <p>
-            SKU {question.sku} · {question.price}
+            SKU {question.sku} Â· {question.price}
           </p>
         </div>
         <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
@@ -1200,7 +1207,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <div className="ai-card-header">
             <div>
               <Sparkles size={18} />
-              <strong>Sugestão da IA</strong>
+              <strong>SugestÃ£o da IA</strong>
             </div>
             <span>pronta para revisar</span>
           </div>
@@ -1211,7 +1218,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               <div className="editor-actions">
                 <button className="primary" onClick={saveManualEdit} disabled={!editDraft.trim()}>
                   <Check size={17} />
-                  Salvar edição
+                  Salvar ediÃ§Ã£o
                 </button>
                 <button className="secondary" onClick={cancelManualEdit}>
                   Cancelar
@@ -1229,7 +1236,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !isRewriting) handleRewrite();
               }}
-              placeholder="Peça uma alteração para a IA (ex: deixe mais técnico, mais curto, mais vendedor...)"
+              placeholder="PeÃ§a uma alteraÃ§Ã£o para a IA (ex: deixe mais tÃ©cnico, mais curto, mais vendedor...)"
             />
             <button className="secondary" onClick={handleRewrite} disabled={!rewriteInstruction.trim() || isRewriting}>
               <RefreshCw size={17} className={isRewriting ? "spin" : ""} />
@@ -1263,7 +1270,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
             </button>
             <button className="secondary" onClick={handleGenerate} disabled={isGenerating}>
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
-              Gerar nova sugestão
+              Gerar nova sugestÃ£o
             </button>
             <button className="danger" onClick={() => onReject(question.id)}>
               <ThumbsDown size={17} />
@@ -1355,36 +1362,58 @@ export default function App() {
   }, [currentUser, activeCompanyId]);
 
   useEffect(() => {
+    if (!currentUser || !activeCompanyId) return;
+
     async function loadIntegrationHealth() {
       try {
         const response = await fetch(`${API_URL}/integrations/health`);
         const data = await response.json();
+        if (!response.ok || !Array.isArray(data)) {
+          throw new Error("Invalid integration health response");
+        }
         setIntegrationHealth(data);
+        setTenantData((current) => {
+          const tenant = current[activeCompanyId];
+          if (!tenant) return current;
+          return {
+            ...current,
+            [activeCompanyId]: {
+              ...tenant,
+              integrations: applyBackendHealthToIntegrations(
+                tenant.integrations,
+                data,
+                activeCompanyId
+              ),
+            },
+          };
+        });
       } catch {
         setIntegrationHealth(initialIntegrationHealth);
+        setTenantData((current) => {
+          const tenant = current[activeCompanyId];
+          if (!tenant) return current;
+          return {
+            ...current,
+            [activeCompanyId]: {
+              ...tenant,
+              integrations: applyBackendHealthToIntegrations(
+                tenant.integrations,
+                initialIntegrationHealth,
+                activeCompanyId
+              ),
+            },
+          };
+        });
       }
     }
 
     loadIntegrationHealth();
-  }, []);
+  }, [currentUser, activeCompanyId]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (!activeCompanyId || params.get("ml_connected") !== "true") return;
     if (activeCompanyId !== "cpap_express") return;
-
-    setIntegrations((current) =>
-      current.map((integration) =>
-        integration.id === "mercado-livre"
-          ? {
-              ...integration,
-              status: "Conectado",
-              store: integration.store || "Mercado Livre conectado",
-              lastSync: new Date().toISOString(),
-            }
-          : integration
-      )
-    );
     window.history.replaceState({}, "", window.location.pathname);
   }, [activeCompanyId]);
 
@@ -1469,7 +1498,7 @@ export default function App() {
     setQuestions(companyQuestions);
     setIntegrations((current) =>
       current.map((integration) =>
-        companyMarketplaces.has(integration.name)
+        companyMarketplaces.has(integration.name) && integration.id !== "mercado-livre"
           ? {
               ...integration,
               status: "Conectado",
@@ -1611,6 +1640,11 @@ export default function App() {
   }
 
   function confirmConnect(id) {
+    if (id === "mercado-livre") {
+      setPendingIntegration(null);
+      return;
+    }
+
     setIntegrations((current) =>
       current.map((integration) =>
         integration.id === id
@@ -1627,6 +1661,10 @@ export default function App() {
   }
 
   function disconnectIntegration(id) {
+    if (id === "mercado-livre") {
+      return;
+    }
+
     setIntegrations((current) =>
       current.map((integration) =>
         integration.id === id
@@ -1664,10 +1702,10 @@ export default function App() {
           response.status === 401
             ? "Mercado Livre não conectado."
             : response.status === 403
-              ? "Permissão insuficiente para acessar perguntas."
+              ? "PermissÃ£o insuficiente para acessar perguntas."
               : typeof data?.detail === "string"
                 ? data.detail
-                : data?.message || "Não foi possível buscar perguntas do Mercado Livre.";
+                : data?.message || "NÃ£o foi possÃ­vel buscar perguntas do Mercado Livre.";
         setQuestions([]);
         setSelectedId(null);
         setShowConversation(false);
@@ -1702,7 +1740,7 @@ export default function App() {
       setQuestions([]);
       setSelectedId(null);
       setShowConversation(false);
-      setQuestionNotice("Não foi possível buscar perguntas do Mercado Livre.");
+      setQuestionNotice("NÃ£o foi possÃ­vel buscar perguntas do Mercado Livre.");
     } finally {
       setFetchingMlQuestions(false);
     }
@@ -1742,7 +1780,7 @@ export default function App() {
     }
   }
 
-  const isIntegrations = active === "Integrações";
+  const isIntegrations = active === "IntegraÃ§Ãµes";
   const isSettings = active === "Configuracoes";
 
   if (!currentUser) {
@@ -1855,13 +1893,13 @@ export default function App() {
                 <div className="empty-icon">
                   <PlugZap size={30} />
                 </div>
-                <h2>Nenhuma integração conectada</h2>
+                <h2>Nenhuma integraÃ§Ã£o conectada</h2>
                 <p>
                   Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox.
                 </p>
-                <button className="primary" onClick={() => changeSection("Integrações")}>
+                <button className="primary" onClick={() => changeSection("IntegraÃ§Ãµes")}>
                   <PlugZap size={17} />
-                  Abrir integrações
+                  Abrir integraÃ§Ãµes
                 </button>
                 <button className="secondary" onClick={loadDemoQuestions}>
                   <Inbox size={17} />
@@ -1922,3 +1960,4 @@ export default function App() {
     </div>
   );
 }
+
