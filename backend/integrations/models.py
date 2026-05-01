@@ -22,6 +22,7 @@ class NormalizedQuestion(BaseModel):
 class IntegrationHealth(BaseModel):
     id: str
     channel: str
+    connected: bool = False
     api_status: ApiStatus
     last_sync: datetime | None = None
     last_error: str | None = None
