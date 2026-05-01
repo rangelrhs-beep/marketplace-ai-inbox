@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,9 +24,9 @@ class IntegrationHealth(BaseModel):
     channel: str
     connected: bool = False
     api_status: ApiStatus
-    last_sync: datetime | None = None
-    last_error: str | None = None
-    token_status: TokenStatus
+    last_sync: Optional[str] = None
+    last_error: Optional[str] = None
+    token_status: str = "unknown"
 
 
 class ConnectionTestResult(BaseModel):
