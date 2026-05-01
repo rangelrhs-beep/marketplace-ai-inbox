@@ -64,6 +64,13 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
     return token_data
 
 
+def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
+    tokens = read_ml_tokens()
+    tokens.update(updates)
+    ML_TOKEN_PATH.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    return tokens
+
+
 def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | None = None, access_token: str | None = None) -> dict[str, Any]:
     body = None
     headers = {"Accept": "application/json"}
@@ -109,6 +116,84 @@ def refresh_ml_token_if_needed(force: bool = False) -> dict[str, Any]:
         },
     )
     return save_ml_tokens(refreshed)
+
+
+def get_ml_seller_id(tokens: dict[str, Any]) -> str:
+    seller_id = tokens.get("seller_id") or tokens.get("user_id")
+    if seller_id:
+        return str(seller_id)
+
+    me = ml_request_json(f"{ML_API_BASE_URL}/users/me", access_token=tokens["access_token"])
+    seller_id = me.get("id")
+    if not seller_id:
+        raise HTTPException(status_code=502, detail="Could not resolve Mercado Livre seller_id")
+    update_ml_tokens({"seller_id": seller_id})
+    return str(seller_id)
+
+
+def normalize_ml_question_status(raw_status: str | None) -> str:
+    status = (raw_status or "").lower()
+    if status in {"unanswered", "pending", "opened", "active"}:
+        return "Pendente"
+    if status in {"answered", "closed"}:
+        return "Respondida"
+    return "Pendente"
+
+
+def get_ml_product_title(item_id: str | None, access_token: str) -> str:
+    if not item_id:
+        return "Produto Mercado Livre"
+    try:
+        item = ml_request_json(f"{ML_API_BASE_URL}/items/{item_id}", access_token=access_token)
+        return item.get("title") or item_id
+    except HTTPException:
+        return item_id
+
+
+def normalize_ml_question(payload: dict[str, Any], access_token: str) -> dict[str, Any]:
+    item_id = payload.get("item_id") or payload.get("item", {}).get("id")
+    text = payload.get("text") or payload.get("question") or payload.get("body") or ""
+    created_at = payload.get("date_created") or payload.get("created_at") or datetime.utcnow().isoformat()
+    return {
+        "channel": "mercado_livre",
+        "external_id": str(payload.get("id") or payload.get("question_id") or ""),
+        "product_title": get_ml_product_title(item_id, access_token),
+        "question_text": text,
+        "status": normalize_ml_question_status(payload.get("status")),
+        "created_at": created_at,
+        "raw_payload": payload,
+    }
+
+
+def extract_ml_questions(raw_response: Any) -> list[dict[str, Any]]:
+    if isinstance(raw_response, list):
+        return raw_response
+    if not isinstance(raw_response, dict):
+        return []
+    questions_payload = raw_response.get("questions") or raw_response.get("results") or []
+    return questions_payload if isinstance(questions_payload, list) else []
+
+
+def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
+    query = urlencode(
+        {
+            "seller_id": seller_id,
+            "status": "unanswered",
+            "api_version": "4",
+        }
+    )
+    try:
+        return ml_request_json(
+            f"{ML_API_BASE_URL}/questions/search?{query}",
+            access_token=access_token,
+        )
+    except HTTPException as error:
+        if error.status_code in {400, 404}:
+            return ml_request_json(
+                f"{ML_API_BASE_URL}/marketplace/questions/search?{query}",
+                access_token=access_token,
+            )
+        raise
 
 
 class Status(str, Enum):
@@ -404,7 +489,12 @@ def mercadolivre_callback(code: str = Query(...)):
             "redirect_uri": config["redirect_uri"],
         },
     )
-    save_ml_tokens(token_data)
+    tokens = save_ml_tokens(token_data)
+    try:
+        seller_id = get_ml_seller_id(tokens)
+        tokens = update_ml_tokens({"seller_id": seller_id})
+    except HTTPException as error:
+        logger.warning("Could not resolve Mercado Livre seller_id after OAuth: %s", error.detail)
     frontend_url = os.getenv("FRONTEND_URL")
     if frontend_url:
         return RedirectResponse(f"{frontend_url.rstrip('/')}/?ml_connected=true")
@@ -416,19 +506,42 @@ def mercadolivre_callback(code: str = Query(...)):
 
 @app.get("/integrations/mercadolivre/questions")
 def mercadolivre_questions():
+    saved_tokens = read_ml_tokens()
+    if not saved_tokens.get("access_token"):
+        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
+
     tokens = refresh_ml_token_if_needed()
     try:
-        return ml_request_json(
-            f"{ML_API_BASE_URL}/my/received_questions/search?api_version=4",
+        seller_id = get_ml_seller_id(tokens)
+        raw_response = fetch_ml_questions_by_seller(
+            seller_id=seller_id,
             access_token=tokens["access_token"],
         )
+        logger.info("Mercado Livre questions raw response: %s", raw_response)
+        print(f"Mercado Livre questions raw response: {raw_response}")
+        return [
+            normalize_ml_question(question_payload, tokens["access_token"])
+            for question_payload in extract_ml_questions(raw_response)
+        ]
     except HTTPException as error:
         if error.status_code == 401:
             tokens = refresh_ml_token_if_needed(force=True)
-            return ml_request_json(
-                f"{ML_API_BASE_URL}/my/received_questions/search?api_version=4",
+            seller_id = get_ml_seller_id(tokens)
+            raw_response = fetch_ml_questions_by_seller(
+                seller_id=seller_id,
                 access_token=tokens["access_token"],
             )
+            logger.info("Mercado Livre questions raw response after token refresh: %s", raw_response)
+            print(f"Mercado Livre questions raw response after token refresh: {raw_response}")
+            return [
+                normalize_ml_question(question_payload, tokens["access_token"])
+                for question_payload in extract_ml_questions(raw_response)
+            ]
+        if error.status_code == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Permissão insuficiente para acessar perguntas.",
+            ) from error
         raise
 
 
