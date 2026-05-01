@@ -60,6 +60,8 @@ def read_ml_tokens() -> dict[str, Any]:
 
 def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
     token_data["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 0))
+    token_data["updated_at"] = datetime.utcnow().isoformat()
+    token_data.setdefault("connected_at", token_data["updated_at"])
     ML_TOKEN_PATH.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
     return token_data
 
@@ -69,6 +71,16 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
     tokens.update(updates)
     ML_TOKEN_PATH.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
     return tokens
+
+
+def ml_connected_at(tokens: dict[str, Any]) -> datetime | None:
+    raw_value = tokens.get("connected_at") or tokens.get("updated_at")
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw_value))
+    except ValueError:
+        return None
 
 
 def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | None = None, access_token: str | None = None) -> dict[str, Any]:
@@ -579,12 +591,34 @@ def list_integrations_health():
     health_items = []
     for service in integration_services.values():
         try:
-            health_items.append(service.get_health())
+            if service.client.id == "mercado-livre":
+                tokens = read_ml_tokens()
+                has_access_token = bool(tokens.get("access_token"))
+                expires_at = int(tokens.get("expires_at", 0) or 0)
+                token_status = "missing"
+                if has_access_token:
+                    token_status = "expired" if expires_at <= int(time.time()) else "valid"
+                health_items.append(
+                    IntegrationHealth(
+                        id=service.client.id,
+                        channel=service.client.channel,
+                        connected=has_access_token,
+                        api_status="operational" if has_access_token else "down",
+                        last_sync=ml_connected_at(tokens),
+                        last_error=None if has_access_token else "Mercado Livre não conectado.",
+                        token_status=token_status,
+                    )
+                )
+                continue
+            health = service.get_health()
+            health.connected = health.token_status in {"valid", "not_required"}
+            health_items.append(health)
         except ConnectorError as error:
             health_items.append(
                 IntegrationHealth(
                     id=service.client.id,
                     channel=service.client.channel,
+                    connected=False,
                     api_status="down",
                     last_sync=None,
                     last_error=error.message,
