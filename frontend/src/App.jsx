@@ -1461,6 +1461,13 @@ export default function App() {
   };
 
   const hasConnectedIntegrations = connectedMarketplaces.length > 0;
+  const mercadoLivreIntegration = integrations.find((integration) => integration.id === "mercado-livre");
+  const isCpapExpressCompany = activeCompanyId === "cpap_express";
+  const isMercadoLivreConnected = mercadoLivreIntegration?.status === "Conectado";
+  const shouldShowMercadoLivreDisconnected =
+    isCpapExpressCompany && !isMercadoLivreConnected && !hasConnectedIntegrations;
+  const shouldShowMercadoLivreNoQuestions =
+    isCpapExpressCompany && isMercadoLivreConnected && visibleQuestions.length === 0;
   const isPendingScreen = active === "Pendentes";
   const isReadOnlyAnsweredScreen = active === "Respondidas";
 
@@ -1706,6 +1713,21 @@ export default function App() {
               : typeof data?.detail === "string"
                 ? data.detail
                 : data?.message || "NÃ£o foi possÃ­vel buscar perguntas do Mercado Livre.";
+        if (response.status === 401) {
+          setIntegrations((current) =>
+            current.map((integration) =>
+              integration.id === "mercado-livre"
+                ? {
+                    ...integration,
+                    status: "Não conectado",
+                    store: "",
+                    lastSync: "",
+                    token_status: "missing",
+                  }
+                : integration
+            )
+          );
+        }
         setQuestions([]);
         setSelectedId(null);
         setShowConversation(false);
@@ -1893,9 +1915,15 @@ export default function App() {
                 <div className="empty-icon">
                   <PlugZap size={30} />
                 </div>
-                <h2>Nenhuma integraÃ§Ã£o conectada</h2>
+                <h2>
+                  {shouldShowMercadoLivreDisconnected
+                    ? "Mercado Livre não conectado"
+                    : "Nenhuma integraÃ§Ã£o conectada"}
+                </h2>
                 <p>
-                  Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox.
+                  {shouldShowMercadoLivreDisconnected
+                    ? "Conecte o Mercado Livre da CPAP Express para buscar perguntas reais."
+                    : "Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox."}
                 </p>
                 <button className="primary" onClick={() => changeSection("IntegraÃ§Ãµes")}>
                   <PlugZap size={17} />
@@ -1911,8 +1939,16 @@ export default function App() {
                 <div className="empty-icon">
                   <Inbox size={30} />
                 </div>
-                <h2>Nenhuma pergunta encontrada</h2>
-                <p>{questionNotice || "Ajuste os filtros ou sincronize os marketplaces conectados."}</p>
+                <h2>
+                  {shouldShowMercadoLivreNoQuestions
+                    ? "Nenhuma pergunta pendente encontrada no Mercado Livre"
+                    : "Nenhuma pergunta encontrada"}
+                </h2>
+                <p>
+                  {shouldShowMercadoLivreNoQuestions
+                    ? "Clique em Buscar perguntas reais para consultar novamente ou carregue perguntas demo separadamente."
+                    : questionNotice || "Ajuste os filtros ou sincronize os marketplaces conectados."}
+                </p>
                 <button className="primary" onClick={loadDemoQuestions}>
                   <Inbox size={17} />
                   Carregar perguntas demo
