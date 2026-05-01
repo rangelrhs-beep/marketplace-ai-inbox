@@ -83,6 +83,10 @@ def ml_connected_at(tokens: dict[str, Any]) -> datetime | None:
         return None
 
 
+def format_optional_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
 def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | None = None, access_token: str | None = None) -> dict[str, Any]:
     body = None
     headers = {"Accept": "application/json"}
@@ -604,15 +608,26 @@ def list_integrations_health():
                         channel=service.client.channel,
                         connected=has_access_token,
                         api_status="operational" if has_access_token else "down",
-                        last_sync=ml_connected_at(tokens),
+                        last_sync=format_optional_datetime(ml_connected_at(tokens)),
                         last_error=None if has_access_token else "Mercado Livre não conectado.",
                         token_status=token_status,
                     )
                 )
                 continue
             health = service.get_health()
-            health.connected = health.token_status in {"valid", "not_required"}
-            health_items.append(health)
+            health_items.append(
+                IntegrationHealth(
+                    id=health.id,
+                    channel=health.channel,
+                    connected=health.token_status in {"valid", "not_required"},
+                    api_status=health.api_status,
+                    last_sync=format_optional_datetime(health.last_sync)
+                    if isinstance(health.last_sync, datetime)
+                    else health.last_sync,
+                    last_error=health.last_error,
+                    token_status=health.token_status,
+                )
+            )
         except ConnectorError as error:
             health_items.append(
                 IntegrationHealth(
