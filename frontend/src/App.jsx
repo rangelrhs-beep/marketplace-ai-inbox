@@ -21,13 +21,14 @@ import {
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
+const AI_SUGGEST_URL = `${API_URL}/ai/suggest`;
 
 const navItems = [
   { label: "Inbox", icon: Inbox },
   { label: "Pendentes", icon: Clock3 },
   { label: "Aprovadas", icon: ShieldCheck },
   { label: "Respondidas", icon: Send },
-  { label: "IntegraÃ§Ãµes", icon: PlugZap },
+  { label: "Integrações", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
   { label: "Configuracoes", icon: Settings },
 ];
@@ -239,7 +240,7 @@ const initialIntegrationHealth = [
     connected: false,
     api_status: "degraded",
     last_sync: null,
-    last_error: "IntegraÃ§Ã£o mockada atÃ© conectar API real.",
+    last_error: "Integração mockada até conectar API real.",
     token_status: "missing",
   },
   {
@@ -248,7 +249,7 @@ const initialIntegrationHealth = [
     connected: false,
     api_status: "down",
     last_sync: null,
-    last_error: "IntegraÃ§Ã£o mockada atÃ© conectar API real.",
+    last_error: "Integração mockada até conectar API real.",
     token_status: "missing",
   },
   {
@@ -461,12 +462,13 @@ function mapMercadoLivreQuestionToUi(question, index) {
     created_at: question.created_at || rawPayload.date_created || new Date().toISOString(),
     status: question.status || "Pendente",
     priority: "Media",
-    ai_suggestion:
-      "OlÃ¡! Obrigado pela pergunta. Vamos te responder com as informaÃ§Ãµes disponÃ­veis do anÃºncio.",
+    ai_suggestion: question.ai_suggestion || "Gerando sugestão da IA...",
     sku: rawPayload.item_id || "ML",
     price: "",
     raw_payload: rawPayload,
     external_id: String(externalId),
+    is_real: true,
+    channel: "mercado_livre",
   };
 }
 
@@ -551,7 +553,7 @@ function LoginScreen({ onLogin }) {
           </div>
         </div>
         <h1>Entrar no painel</h1>
-        <p>Escolha um perfil mockado para testar contas por empresa, permissÃµes e dados isolados.</p>
+        <p>Escolha um perfil mockado para testar contas por empresa, permissões e dados isolados.</p>
 
         <div className="login-options">
           {mockUsers.map((user) => {
@@ -569,7 +571,7 @@ function LoginScreen({ onLogin }) {
                   <span>{user.email}</span>
                 </div>
                 <small>
-                  {user.role === "admin" ? "Admin" : "Cliente"} Â· {companyLabel}
+                  {user.role === "admin" ? "Admin" : "Cliente"} · {companyLabel}
                 </small>
               </button>
             );
@@ -736,8 +738,8 @@ function IntegrationsPage({
     <section className="integrations-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} Â· Marketplaces e operacao</span>
-          <h1>IntegraÃ§Ãµes</h1>
+          <span>{activeCompany?.name || "Empresa"} · Marketplaces e operacao</span>
+          <h1>Integrações</h1>
         </div>
         <div className="topbar-actions">
           <CompanySwitcher
@@ -756,7 +758,7 @@ function IntegrationsPage({
       <div className="integration-hero">
         <div>
           <span>Central de canais</span>
-          <h2>{connectedCount} integraÃ§Ãµes conectadas</h2>
+          <h2>{connectedCount} integrações conectadas</h2>
           <p>
             Autorize canais oficiais, sincronize perguntas e deixe a IA pronta para responder sem
             pedir senha do marketplace.
@@ -863,8 +865,8 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} Â· Preparacao para login real</span>
-          <h1>ConfiguraÃ§Ãµes</h1>
+          <span>{activeCompany?.name || "Empresa"} · Preparacao para login real</span>
+          <h1>Configurações</h1>
         </div>
         <div className="topbar-actions">
           <CompanySwitcher currentUser={currentUser} activeCompanyId={activeCompanyId} onChange={onCompanyChange} />
@@ -876,12 +878,12 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
         <article className="settings-card">
           <span>Empresa atual</span>
           <h2>{activeCompany?.name}</h2>
-          <p>Plano {activeCompany?.plan}. Dados, integraÃ§Ãµes, perguntas e logs ficam isolados por empresa.</p>
+          <p>Plano {activeCompany?.plan}. Dados, integrações, perguntas e logs ficam isolados por empresa.</p>
         </article>
         <article className="settings-card">
-          <span>UsuÃ¡rios</span>
+          <span>Usuários</span>
           <h2>{activeTenant.users.length}</h2>
-          <p>{isAdmin ? "Admin pode criar e convidar usuÃ¡rios no mock." : "Cliente visualiza somente a propria empresa."}</p>
+          <p>{isAdmin ? "Admin pode criar e convidar usuários no mock." : "Cliente visualiza somente a propria empresa."}</p>
         </article>
         <article className="settings-card">
           <span>IA</span>
@@ -898,7 +900,7 @@ function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChang
           </button>
           <button className="secondary">
             <Plus size={17} />
-            Convidar usuÃ¡rio
+            Convidar usuário
           </button>
         </div>
       ) : null}
@@ -933,7 +935,7 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
   );
 }
 
-function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit }) {
+function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit, isApproving }) {
   return (
     <article className="pending-card">
       <div className="row-top">
@@ -953,14 +955,14 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
       <p className="pending-question">{question.question}</p>
 
       <div className="suggestion-preview">
-        <span>SugestÃ£o da IA</span>
+        <span>Sugestão da IA</span>
         <p>{question.ai_suggestion}</p>
       </div>
 
       <div className="pending-actions">
-        <button className="primary" onClick={() => onApprove(question.id, question.ai_suggestion)}>
-          <Check size={18} />
-          Aprovar e enviar
+        <button className="primary" onClick={() => onApprove(question.id, question.ai_suggestion)} disabled={isApproving}>
+          {isApproving ? <RefreshCw size={18} className="spin" /> : <Check size={18} />}
+          {isApproving ? "Enviando..." : "Aprovar e enviar"}
         </button>
         <button className="secondary" onClick={() => onEdit(question.id)}>
           <Sparkles size={17} />
@@ -971,7 +973,7 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
   );
 }
 
-function Conversation({ question, onBack, onApprove, onGenerate, onReject, readOnly }) {
+function Conversation({ question, onBack, onApprove, onGenerate, onReject, readOnly, isApproving }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState("");
   const [rewriteInstruction, setRewriteInstruction] = useState("");
@@ -986,7 +988,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     setVersions([
       {
         id: "original",
-        label: "VersÃ£o original",
+        label: "Versão original",
         text: originalText,
         instruction: "",
         wasEdited: false,
@@ -1073,7 +1075,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
   function summarizeInstruction(instruction) {
     const lower = normalizeInstruction(instruction);
-    if (lower.includes("tecnic")) return "mais tÃ©cnico";
+    if (lower.includes("tecnic")) return "mais técnico";
     if (lower.includes("curt")) return "mais curto";
     if (lower.includes("garantia")) return "garantia";
     if (lower.includes("vendedor") || lower.includes("venda")) return "mais vendedor";
@@ -1089,9 +1091,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     if (!editDraft.trim()) return;
     const nextVersion = {
       id: `manual-${Date.now()}`,
-      label: `EdiÃ§Ã£o manual ${versions.filter((version) => version.wasEdited).length + 1}`,
+      label: `Edição manual ${versions.filter((version) => version.wasEdited).length + 1}`,
       text: editDraft.trim(),
-      instruction: "EdiÃ§Ã£o manual",
+      instruction: "Edição manual",
       wasEdited: true,
     };
     setVersions((current) => [...current, nextVersion]);
@@ -1161,9 +1163,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     const suggestion = await onGenerate(question.id);
     const nextVersion = {
       id: `generated-${Date.now()}`,
-      label: `Ajuste ${versions.length}: nova sugestÃ£o`,
+      label: `Ajuste ${versions.length}: nova sugestão`,
       text: suggestion,
-      instruction: "Gerar nova sugestÃ£o",
+      instruction: "Gerar nova sugestão",
       wasEdited: false,
     };
     setVersions((current) => [...current, nextVersion]);
@@ -1190,7 +1192,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <span>{question.marketplace}</span>
           <h2>{question.product}</h2>
           <p>
-            SKU {question.sku} Â· {question.price}
+            SKU {question.sku} · {question.price}
           </p>
         </div>
         <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
@@ -1207,7 +1209,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <div className="ai-card-header">
             <div>
               <Sparkles size={18} />
-              <strong>SugestÃ£o da IA</strong>
+              <strong>Sugestão da IA</strong>
             </div>
             <span>pronta para revisar</span>
           </div>
@@ -1218,7 +1220,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               <div className="editor-actions">
                 <button className="primary" onClick={saveManualEdit} disabled={!editDraft.trim()}>
                   <Check size={17} />
-                  Salvar ediÃ§Ã£o
+                  Salvar edição
                 </button>
                 <button className="secondary" onClick={cancelManualEdit}>
                   Cancelar
@@ -1236,7 +1238,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !isRewriting) handleRewrite();
               }}
-              placeholder="PeÃ§a uma alteraÃ§Ã£o para a IA (ex: deixe mais tÃ©cnico, mais curto, mais vendedor...)"
+              placeholder="Peça uma alteração para a IA (ex: deixe mais técnico, mais curto, mais vendedor...)"
             />
             <button className="secondary" onClick={handleRewrite} disabled={!rewriteInstruction.trim() || isRewriting}>
               <RefreshCw size={17} className={isRewriting ? "spin" : ""} />
@@ -1261,16 +1263,16 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           </div>
 
           <div className="ai-actions">
-            <button className="primary" onClick={approveSelectedVersion}>
-              <Check size={18} />
-              Aprovar e enviar
+            <button className="primary" onClick={approveSelectedVersion} disabled={isApproving}>
+              {isApproving ? <RefreshCw size={18} className="spin" /> : <Check size={18} />}
+              {isApproving ? "Enviando..." : "Aprovar e enviar"}
             </button>
             <button className="secondary" onClick={startEditing}>
               Editar texto
             </button>
             <button className="secondary" onClick={handleGenerate} disabled={isGenerating}>
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
-              Gerar nova sugestÃ£o
+              Gerar nova sugestão
             </button>
             <button className="danger" onClick={() => onReject(question.id)}>
               <ThumbsDown size={17} />
@@ -1292,6 +1294,9 @@ export default function App() {
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
+  const [sendingAnswerId, setSendingAnswerId] = useState(null);
+  const [answerNotice, setAnswerNotice] = useState("");
+  const [answerError, setAnswerError] = useState("");
   const [questionNotice, setQuestionNotice] = useState("");
   const [testingIntegrationId, setTestingIntegrationId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
@@ -1539,7 +1544,41 @@ export default function App() {
     setSelectedId((tenantData[companyId]?.questions || [])[0]?.id || null);
   }
 
+  async function requestInitialAiSuggestion(question) {
+    const response = await fetch(AI_SUGGEST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({
+        product_title: question.product,
+        question_text: question.question,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.error || !data.suggestion) {
+      throw new Error(
+        (typeof data.detail === "string" ? data.detail : data.message) ||
+          "Não foi possível gerar sugestão inicial."
+      );
+    }
+    return data.suggestion;
+  }
+
   async function generateSuggestion(id) {
+    const targetQuestion = questions.find((question) => question.id === id);
+    if (targetQuestion?.is_real && targetQuestion.marketplace === "Mercado Livre") {
+      try {
+        const suggestion = await requestInitialAiSuggestion(targetQuestion);
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === id ? { ...question, ai_suggestion: suggestion } : question
+          )
+        );
+        return suggestion;
+      } catch {
+        return "Não foi possível gerar uma nova sugestão da IA agora. Edite a resposta manualmente antes de enviar.";
+      }
+    }
+
     let suggestion = "";
     try {
       const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
@@ -1574,6 +1613,8 @@ export default function App() {
   }
 
   async function approveQuestion(id, approval) {
+    setAnswerNotice("");
+    setAnswerError("");
     const approvalData =
       typeof approval === "string"
         ? {
@@ -1585,6 +1626,57 @@ export default function App() {
         : approval;
     const finalResponse =
       approvalData.final_response || approvalData.ai_suggestion;
+    const targetQuestion = questions.find((question) => question.id === id);
+    const isRealMercadoLivreQuestion =
+      targetQuestion?.is_real &&
+      targetQuestion?.marketplace === "Mercado Livre" &&
+      targetQuestion?.external_id;
+
+    if (isRealMercadoLivreQuestion) {
+      setSendingAnswerId(id);
+      try {
+        const response = await fetch(
+          `${API_URL}/integrations/mercadolivre/questions/${targetQuestion.external_id}/answer`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({ answer: finalResponse }),
+          }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error) {
+          throw new Error(
+            (typeof data.detail === "string" ? data.detail : data.message) ||
+              "Não foi possível enviar a resposta ao Mercado Livre."
+          );
+        }
+
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === id
+              ? {
+                  ...question,
+                  status: "Respondida",
+                  ai_suggestion: approvalData.ai_suggestion || question.ai_suggestion,
+                  final_response: finalResponse,
+                  was_edited: Boolean(approvalData.was_edited),
+                  instruction_used: approvalData.instruction_used || "",
+                  answered_at: new Date().toISOString(),
+                  approved_by: currentUser?.name || "Usuário",
+                  ml_answer_response: data.raw_response,
+                }
+              : question
+          )
+        );
+        setAnswerNotice("Resposta enviada ao Mercado Livre");
+      } catch (error) {
+        setAnswerError(error.message || "Não foi possível enviar a resposta ao Mercado Livre.");
+      } finally {
+        setSendingAnswerId(null);
+      }
+      return;
+    }
+
     let updated = null;
     try {
       const response = await fetch(`${API_URL}/questions/${id}/approve`, {
@@ -1709,10 +1801,10 @@ export default function App() {
           response.status === 401
             ? "Mercado Livre não conectado."
             : response.status === 403
-              ? "PermissÃ£o insuficiente para acessar perguntas."
+              ? "Permissão insuficiente para acessar perguntas."
               : typeof data?.detail === "string"
                 ? data.detail
-                : data?.message || "NÃ£o foi possÃ­vel buscar perguntas do Mercado Livre.";
+                : data?.message || "Não foi possível buscar perguntas do Mercado Livre.";
         if (response.status === 401) {
           setIntegrations((current) =>
             current.map((integration) =>
@@ -1736,8 +1828,22 @@ export default function App() {
       }
 
       const realQuestions = Array.isArray(data) ? data.map(mapMercadoLivreQuestionToUi) : [];
-      setQuestions(realQuestions);
-      setSelectedId(realQuestions[0]?.id || null);
+      const realQuestionsWithSuggestions = await Promise.all(
+        realQuestions.map(async (question) => {
+          try {
+            const suggestion = await requestInitialAiSuggestion(question);
+            return { ...question, ai_suggestion: suggestion };
+          } catch {
+            return {
+              ...question,
+              ai_suggestion:
+                "Não foi possível gerar a sugestão inicial da IA. Revise a pergunta e escreva uma resposta antes de enviar.",
+            };
+          }
+        })
+      );
+      setQuestions(realQuestionsWithSuggestions);
+      setSelectedId(realQuestionsWithSuggestions[0]?.id || null);
       setShowConversation(false);
       setMarketplaceFilter("Todos");
       setStatusFilter("Todos");
@@ -1755,14 +1861,14 @@ export default function App() {
         )
       );
 
-      if (realQuestions.length === 0) {
+      if (realQuestionsWithSuggestions.length === 0) {
         setQuestionNotice("Nenhuma pergunta pendente encontrada no Mercado Livre.");
       }
     } catch {
       setQuestions([]);
       setSelectedId(null);
       setShowConversation(false);
-      setQuestionNotice("NÃ£o foi possÃ­vel buscar perguntas do Mercado Livre.");
+      setQuestionNotice("Não foi possível buscar perguntas do Mercado Livre.");
     } finally {
       setFetchingMlQuestions(false);
     }
@@ -1802,7 +1908,7 @@ export default function App() {
     }
   }
 
-  const isIntegrations = active === "IntegraÃ§Ãµes";
+  const isIntegrations = active === "Integrações";
   const isSettings = active === "Configuracoes";
 
   if (!currentUser) {
@@ -1887,6 +1993,12 @@ export default function App() {
             </span>
           </div>
 
+          {answerNotice || answerError ? (
+            <div className={`answer-feedback ${answerError ? "error" : "success"}`}>
+              {answerError || answerNotice}
+            </div>
+          ) : null}
+
           <div className="filters">
             <label>
               Marketplace
@@ -1918,16 +2030,16 @@ export default function App() {
                 <h2>
                   {shouldShowMercadoLivreDisconnected
                     ? "Mercado Livre não conectado"
-                    : "Nenhuma integraÃ§Ã£o conectada"}
+                    : "Nenhuma integração conectada"}
                 </h2>
                 <p>
                   {shouldShowMercadoLivreDisconnected
                     ? "Conecte o Mercado Livre da CPAP Express para buscar perguntas reais."
                     : "Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox."}
                 </p>
-                <button className="primary" onClick={() => changeSection("IntegraÃ§Ãµes")}>
+                <button className="primary" onClick={() => changeSection("Integrações")}>
                   <PlugZap size={17} />
-                  Abrir integraÃ§Ãµes
+                  Abrir integrações
                 </button>
                 <button className="secondary" onClick={loadDemoQuestions}>
                   <Inbox size={17} />
@@ -1963,6 +2075,7 @@ export default function App() {
                   sourceColor={getMarketplaceColor(question.marketplace, integrations)}
                   onApprove={approveQuestion}
                   onEdit={openEditorForQuestion}
+                  isApproving={sendingAnswerId === question.id}
                 />
               ))
             ) : (
@@ -1987,7 +2100,8 @@ export default function App() {
                 onApprove={approveQuestion}
                 onGenerate={generateSuggestion}
                 onReject={rejectQuestion}
-                readOnly={isReadOnlyAnsweredScreen}
+                readOnly={isReadOnlyAnsweredScreen || selectedQuestion?.status === "Respondida"}
+                isApproving={sendingAnswerId === selectedQuestion?.id}
               />
             </div>
           </>
@@ -1996,4 +2110,5 @@ export default function App() {
     </div>
   );
 }
+
 

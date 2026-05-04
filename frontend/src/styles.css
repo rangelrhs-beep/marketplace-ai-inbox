@@ -331,6 +331,27 @@ button:disabled {
   font-weight: 800;
 }
 
+.answer-feedback {
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: -4px 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.answer-feedback.success {
+  background: #e9f8ef;
+  color: #167442;
+  border-color: rgba(22, 116, 66, 0.18);
+}
+
+.answer-feedback.error {
+  background: #ffebee;
+  color: #b4232f;
+  border-color: rgba(180, 35, 47, 0.18);
+}
+
 .filters {
   display: grid;
   grid-template-columns: 1fr 1fr;
