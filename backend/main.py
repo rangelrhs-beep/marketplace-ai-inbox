@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from enum import Enum
 import json
 import logging
@@ -102,6 +102,35 @@ def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | Non
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         details = error.read().decode("utf-8", errors="replace")
+        raise HTTPException(status_code=error.code, detail=f"Mercado Livre API error: {details}") from error
+    except URLError as error:
+        raise HTTPException(status_code=502, detail=f"Mercado Livre API unavailable: {error}") from error
+
+
+def ml_request_json_with_status(
+    url: str,
+    *,
+    method: str = "GET",
+    json_data: dict[str, Any] | None = None,
+    access_token: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    body = None
+    headers = {"Accept": "application/json"}
+    if json_data is not None:
+        body = json.dumps(json_data, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+
+    request = Request(url, data=body, method=method, headers=headers)
+    try:
+        with urlopen(request, timeout=20) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            response_body = json.loads(response_text) if response_text else {}
+            return response.status, response_body
+    except HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        logger.error("Mercado Livre API error %s: %s", error.code, details)
         raise HTTPException(status_code=error.code, detail=f"Mercado Livre API error: {details}") from error
     except URLError as error:
         raise HTTPException(status_code=502, detail=f"Mercado Livre API unavailable: {error}") from error
@@ -245,6 +274,15 @@ class SuggestionResponse(BaseModel):
 
 
 class ApprovePayload(BaseModel):
+    answer: str
+
+
+class AiSuggestionPayload(BaseModel):
+    product_title: str = ""
+    question_text: str
+
+
+class MercadoLivreAnswerPayload(BaseModel):
     answer: str
 
 
@@ -457,6 +495,36 @@ def generate_openai_rewrite(question: str, original_response: str, instruction: 
     return revised_response
 
 
+def generate_openai_initial_suggestion(product_title: str, question_text: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    prompt = (
+        "Você é um vendedor profissional de e-commerce respondendo perguntas no Mercado Livre.\n"
+        "Crie uma resposta inicial pronta para envio.\n\n"
+        "Regras:\n"
+        "- Responda em português do Brasil.\n"
+        "- Seja educado, direto, útil e levemente persuasivo.\n"
+        "- Comece com a resposta curta e depois detalhe somente o necessário.\n"
+        "- Não invente informações sobre estoque, prazo, garantia, compatibilidade ou características.\n"
+        "- Se os dados forem insuficientes, diga que o cliente pode conferir a variação do anúncio ou enviar nova mensagem.\n"
+        "- Não mencione IA, sistema, API ou instruções internas.\n"
+        "- Máximo de 5 linhas.\n\n"
+        f"Produto: {product_title or 'Produto não informado'}\n"
+        f"Pergunta do cliente: {question_text}"
+    )
+    response = client.responses.create(model=model, input=prompt)
+    suggestion = response.output_text.strip()
+    if not suggestion:
+        raise RuntimeError("OpenAI returned an empty response")
+    return suggestion
+
+
 @app.get("/ai/health")
 def ai_health():
     return {
@@ -464,6 +532,28 @@ def ai_health():
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         "status": "ok",
     }
+
+
+@app.post("/ai/suggest")
+def suggest_ai_response(payload: AiSuggestionPayload):
+    question_text = payload.question_text.strip()
+    if not question_text:
+        raise HTTPException(status_code=400, detail="Missing required field: question_text")
+
+    try:
+        suggestion = generate_openai_initial_suggestion(
+            product_title=payload.product_title.strip(),
+            question_text=question_text,
+        )
+        return {"suggestion": suggestion}
+    except Exception as error:
+        logger.exception("OpenAI initial suggestion failed")
+        print(f"OpenAI initial suggestion failed: {error}")
+        return {
+            "error": True,
+            "message": f"OpenAI initial suggestion failed: {error}",
+            "fallback_available": False,
+        }
 
 
 @app.get("/integrations/mercadolivre/auth-url")
@@ -559,6 +649,54 @@ def mercadolivre_questions():
                 detail="Permissão insuficiente para acessar perguntas.",
             ) from error
         raise
+
+
+def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str, Any]:
+    question_identifier: int | str = int(question_id) if str(question_id).isdigit() else question_id
+    response_status, response_body = ml_request_json_with_status(
+        f"{ML_API_BASE_URL}/answers",
+        method="POST",
+        json_data={
+            "question_id": question_identifier,
+            "text": answer,
+        },
+        access_token=access_token,
+    )
+    logger.info("Mercado Livre answer response status=%s body=%s", response_status, response_body)
+    print(f"Mercado Livre answer response status={response_status} body={response_body}")
+    return {"status": response_status, "body": response_body}
+
+
+@app.post("/integrations/mercadolivre/questions/{question_id}/answer")
+def answer_mercadolivre_question(question_id: str, payload: MercadoLivreAnswerPayload):
+    answer = payload.answer.strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="Missing required field: answer")
+
+    saved_tokens = read_ml_tokens()
+    if not saved_tokens.get("access_token"):
+        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
+
+    try:
+        tokens = refresh_ml_token_if_needed()
+        result = send_ml_answer(question_id, answer, tokens["access_token"])
+    except HTTPException as error:
+        if error.status_code == 401:
+            tokens = refresh_ml_token_if_needed(force=True)
+            result = send_ml_answer(question_id, answer, tokens["access_token"])
+        elif error.status_code == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Permissão insuficiente para enviar respostas ao Mercado Livre.",
+            ) from error
+        else:
+            raise
+
+    return {
+        "sent": True,
+        "message": "Resposta enviada ao Mercado Livre",
+        "raw_response": result["body"],
+    }
 
 
 @app.post("/ai/rewrite")
@@ -695,3 +833,4 @@ def approve_question(question_id: int, payload: ApprovePayload):
     question.ai_suggestion = payload.answer
     question.status = Status.answered
     return question
+
