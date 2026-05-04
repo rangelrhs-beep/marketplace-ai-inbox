@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Send,
   Settings,
-  ShieldCheck,
   Sparkles,
   Store,
   ThumbsDown,
@@ -26,11 +25,10 @@ const AI_SUGGEST_URL = `${API_URL}/ai/suggest`;
 const navItems = [
   { label: "Inbox", icon: Inbox },
   { label: "Pendentes", icon: Clock3 },
-  { label: "Aprovadas", icon: ShieldCheck },
   { label: "Respondidas", icon: Send },
   { label: "Integrações", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
-  { label: "Configuracoes", icon: Settings },
+  { label: "Configurações", icon: Settings },
 ];
 
 const initialIntegrations = [
@@ -117,7 +115,7 @@ const demoQuestions = [
     customer_name: "Carla",
     question: "Serve para monitor ultrawide de 34 polegadas?",
     created_at: "2026-04-24T17:05:00",
-    status: "Aprovada",
+    status: "Pendente",
     priority: "Baixa",
     ai_suggestion:
       "Ola, Carla! Esse suporte e compativel com monitores de ate 32 polegadas. Para ultrawide de 34 polegadas, recomendamos verificar peso e padrao VESA.",
@@ -159,7 +157,7 @@ const demoQuestions = [
     customer_name: "Paulo",
     question: "A luz tem ajuste de intensidade? Funciona ligada no USB do notebook?",
     created_at: "2026-04-26T16:10:00",
-    status: "Aprovada",
+    status: "Pendente",
     priority: "Media",
     ai_suggestion:
       "Ola, Paulo! Sim, a luminaria possui ajuste de intensidade e funciona via USB, inclusive conectada ao notebook.",
@@ -215,7 +213,7 @@ const demoQuestions = [
     customer_name: "Roberto",
     question: "O aparelho vem com anuncios na tela de bloqueio?",
     created_at: "2026-04-25T15:36:00",
-    status: "Aprovada",
+    status: "Respondida",
     priority: "Baixa",
     ai_suggestion:
       "Ola, Roberto! Este anuncio e da versao sem ofertas especiais, portanto nao exibe anuncios na tela de bloqueio.",
@@ -272,28 +270,13 @@ const initialIntegrationHealth = [
   },
 ];
 
-const mockCompanies = [
-  { id: "atlas-commerce", name: "Atlas Commerce", plan: "Pro" },
-  { id: "nova-casa", name: "Nova Casa Imports", plan: "Starter" },
-  { id: "cpap_express", name: "CPAP Express", plan: "Business" },
-];
-
-const mockUsers = [
-  {
-    id: "u-admin",
-    name: "Ana Admin",
-    email: "admin@marketplaceai.demo",
-    role: "admin",
-    companyIds: ["all"],
-  },
-  {
-    id: "u-cpap",
-    name: "Carla CPAP",
-    email: "carla@cpapexpress.demo",
-    role: "client",
-    companyIds: ["cpap_express"],
-  },
-];
+const CURRENT_COMPANY = { id: "cpap_express", name: "CPAP Express", plan: "Business" };
+const CURRENT_USER = {
+  id: "u-admin",
+  name: "Admin",
+  email: "admin@cpapexpress.demo",
+  role: "admin",
+};
 
 function integrationState(overrides = {}) {
   return initialIntegrations.map((integration) => ({
@@ -306,79 +289,24 @@ function integrationState(overrides = {}) {
   }));
 }
 
-function cloneQuestionsForCompany(companyId) {
-  if (companyId === "nova-casa") {
-    return demoQuestions.slice(0, 6).map((question) => ({
-      ...question,
-      id: question.id + 100,
-      company_id: companyId,
-      product:
-        question.id % 2 === 0
-          ? question.product.replace("Premium", "Casa")
-          : question.product,
-    }));
-  }
-
-  return demoQuestions.map((question) => ({ ...question, company_id: companyId }));
+function getDemoQuestions() {
+  return demoQuestions
+    .filter((question) => question.marketplace === "Mercado Livre")
+    .map((question) => ({ ...question, company_id: CURRENT_COMPANY.id }));
 }
 
-function getDemoQuestionsForCompany(companyId) {
-  const questions = cloneQuestionsForCompany(companyId);
-  if (companyId === "atlas-commerce") {
-    return questions.filter((question) => ["Shopee", "Magalu"].includes(question.marketplace));
-  }
-  if (companyId === "nova-casa") {
-    return questions.filter((question) => question.marketplace === "Shopee");
-  }
-  if (companyId === "cpap_express") {
-    return questions.filter((question) => question.marketplace === "Mercado Livre");
-  }
-  return questions;
-}
-
-const initialTenantData = {
-  "atlas-commerce": {
-    users: [],
-    integrations: integrationState(),
-    questions: getDemoQuestionsForCompany("atlas-commerce"),
-    aiSettings: {
-      tone: "Profissional e consultivo",
-      autoApprove: false,
-      maxRewriteAttempts: 3,
-    },
-    usageLogs: [
-      { id: 1, action: "ai_rewrite", count: 42, created_at: "2026-04-29T08:30:00" },
-      { id: 2, action: "approved_answer", count: 18, created_at: "2026-04-29T09:10:00" },
-    ],
+const initialAppData = {
+  integrations: integrationState(),
+  questions: [],
+  aiSettings: {
+    tone: "Técnico, claro e confiável",
+    autoApprove: false,
+    maxRewriteAttempts: 3,
   },
-  "nova-casa": {
-    users: [],
-    integrations: integrationState(),
-    questions: getDemoQuestionsForCompany("nova-casa"),
-    aiSettings: {
-      tone: "Direto e vendedor",
-      autoApprove: false,
-      maxRewriteAttempts: 2,
-    },
-    usageLogs: [
-      { id: 1, action: "ai_rewrite", count: 9, created_at: "2026-04-29T07:20:00" },
-      { id: 2, action: "approved_answer", count: 4, created_at: "2026-04-29T08:05:00" },
-    ],
-  },
-  cpap_express: {
-    users: mockUsers.filter((user) => user.companyIds.includes("cpap_express")),
-    integrations: integrationState(),
-    questions: getDemoQuestionsForCompany("cpap_express"),
-    aiSettings: {
-      tone: "Tecnico, claro e confiavel",
-      autoApprove: false,
-      maxRewriteAttempts: 3,
-    },
-    usageLogs: [
-      { id: 1, action: "ml_oauth_connected", count: 1, created_at: "2026-05-01T09:15:00" },
-      { id: 2, action: "ai_rewrite", count: 12, created_at: "2026-05-01T09:40:00" },
-    ],
-  },
+  usageLogs: [
+    { id: 1, action: "ml_oauth_connected", count: 1, created_at: "2026-05-01T09:15:00" },
+    { id: 2, action: "ai_rewrite", count: 12, created_at: "2026-05-01T09:40:00" },
+  ],
 };
 
 const statusClass = {
@@ -481,7 +409,7 @@ function isBackendIntegrationConnected(health) {
 function applyBackendHealthToIntegrations(integrations, healthItems, companyId) {
   const healthById = new Map((healthItems || []).map((health) => [health.id, health]));
   const mercadoLivreHealth = healthById.get("mercado-livre");
-  const isCpapExpress = companyId === "cpap_express";
+  const isCpapExpress = companyId === CURRENT_COMPANY.id;
   const isMercadoLivreConnected =
     isCpapExpress && isBackendIntegrationConnected(mercadoLivreHealth);
 
@@ -536,68 +464,6 @@ function Sidebar({ active, setActive }) {
         <p>das perguntas com sugestao pronta para revisao.</p>
       </div>
     </aside>
-  );
-}
-
-function LoginScreen({ onLogin }) {
-  return (
-    <main className="login-screen">
-      <section className="login-panel">
-        <div className="brand login-brand">
-          <div className="brand-mark">
-            <Sparkles size={22} />
-          </div>
-          <div>
-            <strong>Marketplace AI</strong>
-            <span>Multi-tenant Inbox</span>
-          </div>
-        </div>
-        <h1>Entrar no painel</h1>
-        <p>Escolha um perfil mockado para testar contas por empresa, permissões e dados isolados.</p>
-
-        <div className="login-options">
-          {mockUsers.map((user) => {
-            const companyLabel =
-              user.companyIds.includes("all")
-                ? "Todas as empresas"
-                : mockCompanies
-                    .filter((item) => user.companyIds.includes(item.id))
-                    .map((item) => item.name)
-                    .join(", ");
-            return (
-              <button className="login-option" key={user.id} onClick={() => onLogin(user)}>
-                <div>
-                  <strong>{user.name}</strong>
-                  <span>{user.email}</span>
-                </div>
-                <small>
-                  {user.role === "admin" ? "Admin" : "Cliente"} · {companyLabel}
-                </small>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function CompanySwitcher({ currentUser, activeCompanyId, onChange }) {
-  if (!currentUser || currentUser.role !== "admin") {
-    return null;
-  }
-
-  return (
-    <label className="company-switcher">
-      Empresa
-      <select value={activeCompanyId} onChange={(event) => onChange(event.target.value)}>
-        {mockCompanies.map((company) => (
-          <option value={company.id} key={company.id}>
-            {company.name}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
@@ -716,10 +582,6 @@ function ConnectModal({ integration, onCancel, onConfirm }) {
 function IntegrationsPage({
   integrations,
   integrationHealth,
-  currentUser,
-  activeCompanyId,
-  activeCompany,
-  onCompanyChange,
   onConnect,
   onDisconnect,
   onSync,
@@ -738,20 +600,15 @@ function IntegrationsPage({
     <section className="integrations-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} · Marketplaces e operacao</span>
+          <span>CPAP Express · Marketplaces e operação</span>
           <h1>Integrações</h1>
         </div>
         <div className="topbar-actions">
-          <CompanySwitcher
-            currentUser={currentUser}
-            activeCompanyId={activeCompanyId}
-            onChange={onCompanyChange}
-          />
           <button className="new-rule">
             <Plus size={18} />
             Adicionar
           </button>
-          <span className="user-badge">{currentUser?.role === "admin" ? "Admin" : "Cliente"}</span>
+          <span className="user-badge">Admin</span>
         </div>
       </header>
 
@@ -780,7 +637,6 @@ function IntegrationsPage({
             onFetchRealQuestions={onFetchRealQuestions}
             isSyncing={syncingIntegrationId === integration.id}
             canFetchRealQuestions={
-              activeCompanyId === "cpap_express" &&
               integration.id === "mercado-livre" &&
               integration.status === "Conectado"
             }
@@ -858,52 +714,79 @@ function IntegrationsPage({
   );
 }
 
-function SettingsPage({ currentUser, activeCompany, activeTenant, onCompanyChange, activeCompanyId }) {
-  const isAdmin = currentUser?.role === "admin";
-
+function SettingsPage({ appData }) {
   return (
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>{activeCompany?.name || "Empresa"} · Preparacao para login real</span>
+          <span>CPAP Express · Preparação para banco de dados</span>
           <h1>Configurações</h1>
         </div>
         <div className="topbar-actions">
-          <CompanySwitcher currentUser={currentUser} activeCompanyId={activeCompanyId} onChange={onCompanyChange} />
-          <span className="user-badge">{isAdmin ? "Admin" : "Cliente"}</span>
+          <span className="user-badge">Admin</span>
         </div>
       </header>
 
       <div className="settings-grid">
         <article className="settings-card">
-          <span>Empresa atual</span>
-          <h2>{activeCompany?.name}</h2>
-          <p>Plano {activeCompany?.plan}. Dados, integrações, perguntas e logs ficam isolados por empresa.</p>
+          <span>Empresa</span>
+          <h2>CPAP Express</h2>
+          <p>Plano Business. Este MVP está simplificado para uma única empresa antes do banco de dados.</p>
         </article>
         <article className="settings-card">
-          <span>Usuários</span>
-          <h2>{activeTenant.users.length}</h2>
-          <p>{isAdmin ? "Admin pode criar e convidar usuários no mock." : "Cliente visualiza somente a propria empresa."}</p>
+          <span>Usuário</span>
+          <h2>Admin</h2>
+          <p>Login e multiusuário ficam preparados para uma próxima etapa.</p>
         </article>
         <article className="settings-card">
           <span>IA</span>
-          <h2>{activeTenant.aiSettings.tone}</h2>
-          <p>{activeTenant.aiSettings.maxRewriteAttempts} ajustes por resposta no mock atual.</p>
+          <h2>{appData.aiSettings.tone}</h2>
+          <p>{appData.aiSettings.maxRewriteAttempts} ajustes por resposta no MVP atual.</p>
         </article>
       </div>
+    </section>
+  );
+}
 
-      {isAdmin ? (
-        <div className="onboarding-actions">
-          <button className="primary">
-            <Plus size={17} />
-            Criar empresa
-          </button>
-          <button className="secondary">
-            <Plus size={17} />
-            Convidar usuário
-          </button>
+function AnalyticsPage({ questions, appData }) {
+  const pending = questions.filter((question) => question.status === "Pendente").length;
+  const answered = questions.filter((question) => question.status === "Respondida").length;
+  const highPriority = questions.filter((question) => question.priority === "Alta").length;
+
+  return (
+    <section className="settings-page">
+      <header className="topbar">
+        <div>
+          <span>CPAP Express · Operação</span>
+          <h1>Analytics</h1>
         </div>
-      ) : null}
+        <div className="topbar-actions">
+          <span className="user-badge">Admin</span>
+        </div>
+      </header>
+
+      <div className="settings-grid">
+        <article className="settings-card">
+          <span>Pendentes</span>
+          <h2>{pending}</h2>
+          <p>Perguntas aguardando revisão humana antes do envio.</p>
+        </article>
+        <article className="settings-card">
+          <span>Respondidas</span>
+          <h2>{answered}</h2>
+          <p>Respostas aprovadas e registradas no MVP.</p>
+        </article>
+        <article className="settings-card">
+          <span>Prioridade alta</span>
+          <h2>{highPriority}</h2>
+          <p>Fila que merece atenção mais rápida.</p>
+        </article>
+        <article className="settings-card">
+          <span>Uso</span>
+          <h2>{appData.usageLogs.reduce((total, log) => total + log.count, 0)}</h2>
+          <p>Eventos mockados de IA e operação.</p>
+        </article>
+      </div>
     </section>
   );
 }
@@ -1286,9 +1169,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 }
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [activeCompanyId, setActiveCompanyId] = useState(null);
-  const [tenantData, setTenantData] = useState(initialTenantData);
+  const currentUser = CURRENT_USER;
+  const [appData, setAppData] = useState(initialAppData);
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
@@ -1304,71 +1186,30 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [showConversation, setShowConversation] = useState(false);
 
-  const activeCompany = mockCompanies.find((company) => company.id === activeCompanyId);
-  const activeTenant = tenantData[activeCompanyId] || {
-    users: [],
-    integrations: [],
-    questions: [],
-    aiSettings: {},
-    usageLogs: [],
-  };
-  const questions = activeTenant.questions;
-  const integrations = activeTenant.integrations;
-
-  function updateActiveTenant(updater) {
-    setTenantData((current) => ({
-      ...current,
-      [activeCompanyId]: updater(current[activeCompanyId]),
-    }));
-  }
+  const questions = appData.questions;
+  const integrations = appData.integrations;
 
   function setQuestions(nextQuestions) {
-    updateActiveTenant((tenant) => ({
-      ...tenant,
+    setAppData((current) => ({
+      ...current,
       questions:
-        typeof nextQuestions === "function" ? nextQuestions(tenant.questions) : nextQuestions,
+        typeof nextQuestions === "function" ? nextQuestions(current.questions) : nextQuestions,
     }));
   }
 
   function setIntegrations(nextIntegrations) {
-    updateActiveTenant((tenant) => ({
-      ...tenant,
+    setAppData((current) => ({
+      ...current,
       integrations:
-        typeof nextIntegrations === "function" ? nextIntegrations(tenant.integrations) : nextIntegrations,
+        typeof nextIntegrations === "function" ? nextIntegrations(current.integrations) : nextIntegrations,
     }));
   }
 
   useEffect(() => {
-    if (!currentUser || !activeCompanyId) return;
-    const existingQuestions = tenantData[activeCompanyId]?.questions || [];
-    if (existingQuestions.length > 0) {
-      setSelectedId(existingQuestions[0]?.id || null);
-      return;
-    }
-
-    async function loadQuestions() {
-      try {
-        const response = await fetch(`${API_URL}/questions`);
-        const data = await response.json();
-        const loadedQuestions =
-          data.length >= 10
-            ? data.map((question) => ({ ...question, company_id: activeCompanyId }))
-            : getDemoQuestionsForCompany(activeCompanyId);
-        setQuestions(loadedQuestions);
-        setSelectedId(loadedQuestions[0]?.id || null);
-      } catch {
-        const fallbackQuestions = getDemoQuestionsForCompany(activeCompanyId);
-        setQuestions(fallbackQuestions);
-        setSelectedId(fallbackQuestions[0]?.id || null);
-      }
-    }
-
-    loadQuestions();
-  }, [currentUser, activeCompanyId]);
+    setSelectedId((current) => current || questions[0]?.id || null);
+  }, [questions]);
 
   useEffect(() => {
-    if (!currentUser || !activeCompanyId) return;
-
     async function loadIntegrationHealth() {
       try {
         const response = await fetch(`${API_URL}/integrations/health`);
@@ -1377,50 +1218,25 @@ export default function App() {
           throw new Error("Invalid integration health response");
         }
         setIntegrationHealth(data);
-        setTenantData((current) => {
-          const tenant = current[activeCompanyId];
-          if (!tenant) return current;
-          return {
-            ...current,
-            [activeCompanyId]: {
-              ...tenant,
-              integrations: applyBackendHealthToIntegrations(
-                tenant.integrations,
-                data,
-                activeCompanyId
-              ),
-            },
-          };
-        });
+        setIntegrations((current) =>
+          applyBackendHealthToIntegrations(current, data, CURRENT_COMPANY.id)
+        );
       } catch {
         setIntegrationHealth(initialIntegrationHealth);
-        setTenantData((current) => {
-          const tenant = current[activeCompanyId];
-          if (!tenant) return current;
-          return {
-            ...current,
-            [activeCompanyId]: {
-              ...tenant,
-              integrations: applyBackendHealthToIntegrations(
-                tenant.integrations,
-                initialIntegrationHealth,
-                activeCompanyId
-              ),
-            },
-          };
-        });
+        setIntegrations((current) =>
+          applyBackendHealthToIntegrations(current, initialIntegrationHealth, CURRENT_COMPANY.id)
+        );
       }
     }
 
     loadIntegrationHealth();
-  }, [currentUser, activeCompanyId]);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (!activeCompanyId || params.get("ml_connected") !== "true") return;
-    if (activeCompanyId !== "cpap_express") return;
+    if (params.get("ml_connected") !== "true") return;
     window.history.replaceState({}, "", window.location.pathname);
-  }, [activeCompanyId]);
+  }, []);
 
   const connectedMarketplaces = useMemo(
     () =>
@@ -1431,19 +1247,26 @@ export default function App() {
   );
 
   const visibleQuestions = useMemo(
-    () => questions.filter((question) => connectedMarketplaces.includes(question.marketplace)),
+    () =>
+      questions.filter(
+        (question) => !question.is_real || connectedMarketplaces.includes(question.marketplace)
+      ),
     [questions, connectedMarketplaces]
   );
 
   const selectedQuestion = visibleQuestions.find((question) => question.id === selectedId);
-  const marketplaces = ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))];
-  const statuses = ["Todos", ...new Set(visibleQuestions.map((question) => question.status))];
+  const marketplaces = useMemo(
+    () => ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))],
+    [visibleQuestions]
+  );
+  const statuses = useMemo(
+    () => ["Todos", ...new Set(visibleQuestions.map((question) => question.status))],
+    [visibleQuestions]
+  );
 
   const filteredQuestions = useMemo(() => {
     const forcedStatus =
-      active === "Aprovadas"
-        ? "Aprovada"
-        : active === "Respondidas"
+      active === "Respondidas"
           ? "Respondida"
           : active === "Pendentes"
             ? "Pendente"
@@ -1466,13 +1289,13 @@ export default function App() {
   };
 
   const hasConnectedIntegrations = connectedMarketplaces.length > 0;
+  const hasVisibleQuestions = visibleQuestions.length > 0;
   const mercadoLivreIntegration = integrations.find((integration) => integration.id === "mercado-livre");
-  const isCpapExpressCompany = activeCompanyId === "cpap_express";
   const isMercadoLivreConnected = mercadoLivreIntegration?.status === "Conectado";
   const shouldShowMercadoLivreDisconnected =
-    isCpapExpressCompany && !isMercadoLivreConnected && !hasConnectedIntegrations;
+    !isMercadoLivreConnected && !hasConnectedIntegrations && !hasVisibleQuestions;
   const shouldShowMercadoLivreNoQuestions =
-    isCpapExpressCompany && isMercadoLivreConnected && visibleQuestions.length === 0;
+    isMercadoLivreConnected && visibleQuestions.length === 0;
   const isPendingScreen = active === "Pendentes";
   const isReadOnlyAnsweredScreen = active === "Respondidas";
 
@@ -1482,10 +1305,10 @@ export default function App() {
       setShowConversation(false);
     }
 
-    if (marketplaceFilter !== "Todos" && !connectedMarketplaces.includes(marketplaceFilter)) {
+    if (marketplaceFilter !== "Todos" && !marketplaces.includes(marketplaceFilter)) {
       setMarketplaceFilter("Todos");
     }
-  }, [connectedMarketplaces, marketplaceFilter, selectedId, visibleQuestions]);
+  }, [marketplaceFilter, marketplaces, selectedId, visibleQuestions]);
 
   function selectQuestion(id) {
     setQuestionNotice("");
@@ -1505,12 +1328,12 @@ export default function App() {
 
   function loadDemoQuestions() {
     setQuestionNotice("");
-    const companyQuestions = getDemoQuestionsForCompany(activeCompanyId);
-    const companyMarketplaces = new Set(companyQuestions.map((question) => question.marketplace));
-    setQuestions(companyQuestions);
+    const demoQuestionsForMvp = getDemoQuestions();
+    const demoMarketplaces = new Set(demoQuestionsForMvp.map((question) => question.marketplace));
+    setQuestions(demoQuestionsForMvp);
     setIntegrations((current) =>
       current.map((integration) =>
-        companyMarketplaces.has(integration.name) && integration.id !== "mercado-livre"
+        demoMarketplaces.has(integration.name) && integration.id !== "mercado-livre"
           ? {
               ...integration,
               status: "Conectado",
@@ -1523,25 +1346,8 @@ export default function App() {
     );
     setMarketplaceFilter("Todos");
     setStatusFilter("Todos");
-    setSelectedId(companyQuestions[0].id);
+    setSelectedId(demoQuestionsForMvp[0]?.id || null);
     setShowConversation(false);
-  }
-
-  function handleLogin(user) {
-    setCurrentUser(user);
-    const companyId = user.role === "admin" ? mockCompanies[0].id : user.companyIds[0];
-    setActiveCompanyId(companyId);
-    setSelectedId((tenantData[companyId]?.questions || [])[0]?.id || null);
-  }
-
-  function handleCompanyChange(companyId) {
-    if (currentUser?.role !== "admin") return;
-    setActiveCompanyId(companyId);
-    setQuestionNotice("");
-    setMarketplaceFilter("Todos");
-    setStatusFilter("Todos");
-    setShowConversation(false);
-    setSelectedId((tenantData[companyId]?.questions || [])[0]?.id || null);
   }
 
   async function requestInitialAiSuggestion(question) {
@@ -1703,7 +1509,7 @@ export default function App() {
               was_edited: Boolean(approvalData.was_edited),
               instruction_used: approvalData.instruction_used || "",
               answered_at: new Date().toISOString(),
-              approved_by: currentUser?.name || "Usuario",
+              approved_by: currentUser?.name || "Usuário",
             }
           : question
       )
@@ -1720,10 +1526,6 @@ export default function App() {
 
   async function openConnectModal(integration) {
     if (integration.id === "mercado-livre") {
-      if (activeCompanyId !== "cpap_express") {
-        setPendingIntegration(integration);
-        return;
-      }
       try {
         const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
         const data = await response.json();
@@ -1786,10 +1588,6 @@ export default function App() {
   }
 
   async function fetchMercadoLivreQuestions() {
-    if (activeCompanyId !== "cpap_express") {
-      return;
-    }
-
     setFetchingMlQuestions(true);
     setQuestionNotice("");
     try {
@@ -1909,25 +1707,18 @@ export default function App() {
   }
 
   const isIntegrations = active === "Integrações";
-  const isSettings = active === "Configuracoes";
-
-  if (!currentUser) {
-    return <LoginScreen onLogin={handleLogin} />;
-  }
+  const isSettings = active === "Configurações";
+  const isAnalytics = active === "Analytics";
 
   return (
     <div className="app-shell">
       <Sidebar active={active} setActive={changeSection} />
 
-      <main className={`workspace ${isIntegrations || isSettings ? "single-view" : ""}`}>
+      <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
         {isIntegrations ? (
           <IntegrationsPage
             integrations={integrations}
             integrationHealth={integrationHealth}
-            currentUser={currentUser}
-            activeCompanyId={activeCompanyId}
-            activeCompany={activeCompany}
-            onCompanyChange={handleCompanyChange}
             onConnect={openConnectModal}
             onDisconnect={disconnectIntegration}
             onSync={syncIntegration}
@@ -1941,32 +1732,23 @@ export default function App() {
             onConfirmConnect={confirmConnect}
           />
         ) : isSettings ? (
-          <SettingsPage
-            currentUser={currentUser}
-            activeCompany={activeCompany}
-            activeTenant={activeTenant}
-            activeCompanyId={activeCompanyId}
-            onCompanyChange={handleCompanyChange}
-          />
+          <SettingsPage appData={appData} />
+        ) : isAnalytics ? (
+          <AnalyticsPage questions={visibleQuestions} appData={appData} />
         ) : (
           <>
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
           <header className="topbar">
             <div>
-              <span>{activeCompany?.name || "Empresa"}</span>
+              <span>CPAP Express</span>
               <h1>{active}</h1>
             </div>
             <div className="topbar-actions">
-              <CompanySwitcher
-                currentUser={currentUser}
-                activeCompanyId={activeCompanyId}
-                onChange={handleCompanyChange}
-              />
               <button className="new-rule">
                 <Sparkles size={18} />
                 Nova regra IA
               </button>
-              <span className="user-badge">{currentUser.role === "admin" ? "Admin" : "Cliente"}</span>
+              <span className="user-badge">Admin</span>
             </div>
           </header>
 
@@ -1986,10 +1768,10 @@ export default function App() {
           </div>
 
           <div className="tenant-strip">
-            <span>{activeTenant.users.length} usuario(s)</span>
-            <span>IA: {activeTenant.aiSettings.tone}</span>
+            <span>1 usuário</span>
+            <span>IA: {appData.aiSettings.tone}</span>
             <span>
-              Uso: {activeTenant.usageLogs.reduce((total, log) => total + log.count, 0)} eventos
+              Uso: {appData.usageLogs.reduce((total, log) => total + log.count, 0)} eventos
             </span>
           </div>
 
@@ -2022,7 +1804,7 @@ export default function App() {
           </div>
 
           <div className="question-list">
-            {!hasConnectedIntegrations ? (
+            {!hasConnectedIntegrations && !hasVisibleQuestions ? (
               <div className="inbox-empty">
                 <div className="empty-icon">
                   <PlugZap size={30} />
