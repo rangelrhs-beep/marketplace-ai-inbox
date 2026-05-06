@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 from typing import Any, List
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -993,6 +993,108 @@ def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str
     return {"status": response_status, "body": response_body}
 
 
+def fetch_ml_question_detail(question_id: str, access_token: str) -> dict[str, Any]:
+    encoded_question_id = quote(str(question_id), safe="")
+    try:
+        return ml_request_json(
+            f"{ML_API_BASE_URL}/questions/{encoded_question_id}?api_version=4",
+            access_token=access_token,
+        )
+    except HTTPException as error:
+        if error.status_code in {400, 404}:
+            return ml_request_json(
+                f"{ML_API_BASE_URL}/marketplace/questions/{encoded_question_id}",
+                access_token=access_token,
+            )
+        raise
+
+
+def extract_ml_answer_text(question_payload: dict[str, Any] | None) -> str:
+    if not isinstance(question_payload, dict):
+        return ""
+    answer = question_payload.get("answer") or {}
+    if not isinstance(answer, dict):
+        return ""
+    return answer.get("text") or answer.get("text_translated") or ""
+
+
+def ml_question_is_answered(question_payload: dict[str, Any] | None) -> bool:
+    if not isinstance(question_payload, dict):
+        return False
+    status = normalize_db_status(question_payload.get("status"))
+    return status == "responded" or bool(extract_ml_answer_text(question_payload))
+
+
+def is_already_answered_error(error: HTTPException) -> bool:
+    detail = str(error.detail or "").lower()
+    return (
+        "already answered" in detail
+        or "question already answered" in detail
+        or "já foi respondida" in detail
+        or "ja foi respondida" in detail
+        or "pergunta respondida" in detail
+    )
+
+
+def save_answered_question_state(
+    db: Session,
+    *,
+    question_id: str,
+    approved_answer: str,
+    payload: MercadoLivreAnswerPayload,
+    raw_response: dict[str, Any] | None = None,
+) -> QuestionRecord | None:
+    now = datetime.utcnow()
+    question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+        )
+        .first()
+    )
+    final_answer = extract_ml_answer_text(raw_response) or approved_answer
+    if question:
+        question.status = "responded"
+        question.answered_at = now
+        question.updated_at = now
+        if raw_response:
+            question.raw_payload = raw_response
+        if question.ai_suggestion:
+            suggestion = question.ai_suggestion
+            if payload.original_suggestion:
+                suggestion.original_suggestion = payload.original_suggestion
+                suggestion.suggestion_text = suggestion.suggestion_text or payload.original_suggestion
+            if payload.was_edited and final_answer == approved_answer:
+                suggestion.edited_text = approved_answer
+            suggestion.final_response = final_answer
+            suggestion.final_answer = final_answer
+            suggestion.was_edited = payload.was_edited
+            suggestion.instruction_used = payload.instruction_used
+            suggestion.approved_by = "Admin"
+            suggestion.approved_at = now
+            suggestion.updated_at = now
+        else:
+            db.add(
+                AiSuggestion(
+                    question=question,
+                    original_suggestion=payload.original_suggestion or final_answer,
+                    suggestion_text=payload.original_suggestion or final_answer,
+                    edited_text=approved_answer if payload.was_edited and final_answer == approved_answer else None,
+                    final_response=final_answer,
+                    final_answer=final_answer,
+                    was_edited=payload.was_edited,
+                    instruction_used=payload.instruction_used,
+                    approved_by="Admin",
+                    approved_at=now,
+                )
+            )
+        db.commit()
+        db.refresh(question)
+    return question
+
+
 @app.post("/integrations/mercadolivre/questions/{question_id}/answer")
 def answer_mercadolivre_question(
     question_id: str,
@@ -1009,66 +1111,114 @@ def answer_mercadolivre_question(
 
     try:
         tokens = refresh_ml_token_if_needed()
+        try:
+            question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+            if ml_question_is_answered(question_detail):
+                question = save_answered_question_state(
+                    db,
+                    question_id=question_id,
+                    approved_answer=answer,
+                    payload=payload,
+                    raw_response=question_detail,
+                )
+                return {
+                    "sent": False,
+                    "already_answered": True,
+                    "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                    "raw_response": question_detail,
+                    "question": question_to_api(question) if question else None,
+                }
+        except HTTPException as status_error:
+            if status_error.status_code in {401, 403}:
+                raise
+            logger.warning("Could not verify Mercado Livre question status before answering: %s", status_error.detail)
         result = send_ml_answer(question_id, answer, tokens["access_token"])
     except HTTPException as error:
         if error.status_code == 401:
             tokens = refresh_ml_token_if_needed(force=True)
-            result = send_ml_answer(question_id, answer, tokens["access_token"])
+            try:
+                question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+                if ml_question_is_answered(question_detail):
+                    question = save_answered_question_state(
+                        db,
+                        question_id=question_id,
+                        approved_answer=answer,
+                        payload=payload,
+                        raw_response=question_detail,
+                    )
+                    return {
+                        "sent": False,
+                        "already_answered": True,
+                        "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                        "raw_response": question_detail,
+                        "question": question_to_api(question) if question else None,
+                    }
+            except HTTPException as status_error:
+                if status_error.status_code == 403:
+                    raise
+                logger.warning("Could not verify Mercado Livre question status after refresh: %s", status_error.detail)
+            try:
+                result = send_ml_answer(question_id, answer, tokens["access_token"])
+            except HTTPException as send_error:
+                if not is_already_answered_error(send_error):
+                    raise
+                try:
+                    question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+                except HTTPException:
+                    question_detail = {}
+                question = save_answered_question_state(
+                    db,
+                    question_id=question_id,
+                    approved_answer=answer,
+                    payload=payload,
+                    raw_response=question_detail,
+                )
+                return {
+                    "sent": False,
+                    "already_answered": True,
+                    "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                    "raw_response": question_detail,
+                    "question": question_to_api(question) if question else None,
+                }
         elif error.status_code == 403:
             raise HTTPException(
                 status_code=403,
                 detail="Permissão insuficiente para enviar respostas ao Mercado Livre.",
             ) from error
+        elif is_already_answered_error(error):
+            try:
+                tokens = refresh_ml_token_if_needed()
+                question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+            except HTTPException:
+                question_detail = {}
+            question = save_answered_question_state(
+                db,
+                question_id=question_id,
+                approved_answer=answer,
+                payload=payload,
+                raw_response=question_detail,
+            )
+            return {
+                "sent": False,
+                "already_answered": True,
+                "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                "raw_response": question_detail,
+                "question": question_to_api(question) if question else None,
+            }
         else:
             raise
 
-    now = datetime.utcnow()
-    question = (
-        db.query(QuestionRecord)
-        .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
-            QuestionRecord.provider == DEFAULT_PROVIDER,
-            QuestionRecord.external_id == str(question_id),
-        )
-        .first()
+    question = save_answered_question_state(
+        db,
+        question_id=question_id,
+        approved_answer=answer,
+        payload=payload,
+        raw_response=result["body"],
     )
-    if question:
-        question.status = "responded"
-        question.answered_at = now
-        question.updated_at = now
-        if question.ai_suggestion:
-            suggestion = question.ai_suggestion
-            if payload.original_suggestion:
-                suggestion.original_suggestion = payload.original_suggestion
-                suggestion.suggestion_text = suggestion.suggestion_text or payload.original_suggestion
-            if payload.was_edited:
-                suggestion.edited_text = answer
-            suggestion.final_response = answer
-            suggestion.final_answer = answer
-            suggestion.was_edited = payload.was_edited
-            suggestion.instruction_used = payload.instruction_used
-            suggestion.approved_by = "Admin"
-            suggestion.approved_at = now
-            suggestion.updated_at = now
-        else:
-            db.add(
-                AiSuggestion(
-                    question=question,
-                    original_suggestion=payload.original_suggestion or answer,
-                    suggestion_text=payload.original_suggestion or answer,
-                    edited_text=answer if payload.was_edited else None,
-                    final_response=answer,
-                    final_answer=answer,
-                    was_edited=payload.was_edited,
-                    instruction_used=payload.instruction_used,
-                    approved_by="Admin",
-                    approved_at=now,
-                )
-            )
-        db.commit()
 
     return {
         "sent": True,
+        "already_answered": False,
         "message": "Resposta enviada ao Mercado Livre",
         "raw_response": result["body"],
         "question": question_to_api(question) if question else None,
@@ -1306,7 +1456,7 @@ def answer_question(payload: dict[str, Any], db: Session = Depends(get_db)):
         ),
         db,
     )
-    return result.get("question") or question_to_api(question)
+    return result
 
 
 @app.get("/questions/{question_id}")
