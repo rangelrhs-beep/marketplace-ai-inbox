@@ -1488,12 +1488,16 @@ export default function App() {
       if (targetQuestion?.is_real) {
         let suggestion = "";
         try {
-          const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
+          const response = await fetch(`${API_URL}/questions/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id }),
+          });
           const data = await response.json().catch(() => ({}));
-          if (!response.ok || !data.suggestion) {
+          if (!response.ok || !data.ai_suggestion) {
             throw new Error(data.detail || "Falha ao gerar sugestão.");
           }
-          suggestion = data.suggestion;
+          suggestion = data.ai_suggestion;
           setQuestions((current) =>
             current.map((question) =>
               question.id === id
@@ -1573,19 +1577,18 @@ export default function App() {
     if (isRealMercadoLivreQuestion) {
       setSendingAnswerId(id);
       try {
-        const response = await fetch(
-          `${API_URL}/integrations/mercadolivre/questions/${targetQuestion.external_id}/answer`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify({
-              answer: finalResponse,
-              original_suggestion: approvalData.ai_suggestion || targetQuestion.ai_suggestion,
-              was_edited: Boolean(approvalData.was_edited),
-              instruction_used: approvalData.instruction_used || "",
-            }),
-          }
-        );
+        const response = await fetch(`${API_URL}/questions/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            question_id: targetQuestion.id,
+            external_id: targetQuestion.external_id,
+            answer: finalResponse,
+            suggestion_text: approvalData.ai_suggestion || targetQuestion.ai_suggestion,
+            was_edited: Boolean(approvalData.was_edited),
+            instruction_used: approvalData.instruction_used || "",
+          }),
+        });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.error) {
           throw new Error(
