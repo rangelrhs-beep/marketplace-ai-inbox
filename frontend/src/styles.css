@@ -816,6 +816,35 @@ button:disabled {
   line-height: 1.5;
 }
 
+.settings-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 7px;
+  color: #647189;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-form input,
+.settings-form textarea {
+  width: 100%;
+  border: 1px solid #dce3f1;
+  border-radius: 14px;
+  padding: 12px;
+  color: #172033;
+  font: inherit;
+}
+
+.settings-form textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
 .onboarding-actions {
   display: flex;
   gap: 10px;

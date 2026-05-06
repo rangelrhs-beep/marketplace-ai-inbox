@@ -381,12 +381,12 @@ function mapMercadoLivreQuestionToUi(question, index) {
   const externalId = question.external_id || rawPayload.id || index + 1;
 
   return {
-    id: `ml-${externalId}`,
+    id: question.id || `ml-${externalId}`,
     company_id: "cpap_express",
     marketplace: "Mercado Livre",
-    product: question.product_title || rawPayload.item_id || "Produto Mercado Livre",
+    product: question.product || question.product_title || rawPayload.item_id || "Produto Mercado Livre",
     customer_name: "Cliente Mercado Livre",
-    question: question.question_text || rawPayload.text || "",
+    question: question.question || question.question_text || rawPayload.text || "",
     created_at: question.created_at || rawPayload.date_created || new Date().toISOString(),
     status: question.status || "Pendente",
     priority: "Media",
@@ -714,7 +714,32 @@ function IntegrationsPage({
   );
 }
 
-function SettingsPage({ appData }) {
+function SettingsPage({ appData, onSettingsSaved }) {
+  const [settingsDraft, setSettingsDraft] = useState({
+    greeting: appData.aiSettings.greeting || "Olá!",
+    closing: appData.aiSettings.closing || "Ficamos à disposição.",
+    tone: appData.aiSettings.tone || "",
+    custom_prompt: appData.aiSettings.customPrompt || "",
+  });
+  const [settingsMessage, setSettingsMessage] = useState("");
+
+  async function saveSettings() {
+    setSettingsMessage("");
+    try {
+      const response = await fetch(`${API_URL}/company/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(settingsDraft),
+      });
+      if (!response.ok) throw new Error("Não foi possível salvar as configurações.");
+      const saved = await response.json();
+      onSettingsSaved(saved);
+      setSettingsMessage("Configurações salvas.");
+    } catch (error) {
+      setSettingsMessage(error.message || "Não foi possível salvar as configurações.");
+    }
+  }
+
   return (
     <section className="settings-page">
       <header className="topbar">
@@ -744,6 +769,43 @@ function SettingsPage({ appData }) {
           <p>{appData.aiSettings.maxRewriteAttempts} ajustes por resposta no MVP atual.</p>
         </article>
       </div>
+
+      <section className="settings-card settings-form">
+        <span>Prompt da empresa</span>
+        <label>
+          Saudação
+          <input
+            value={settingsDraft.greeting}
+            onChange={(event) => setSettingsDraft((current) => ({ ...current, greeting: event.target.value }))}
+          />
+        </label>
+        <label>
+          Fechamento
+          <input
+            value={settingsDraft.closing}
+            onChange={(event) => setSettingsDraft((current) => ({ ...current, closing: event.target.value }))}
+          />
+        </label>
+        <label>
+          Tom
+          <input
+            value={settingsDraft.tone}
+            onChange={(event) => setSettingsDraft((current) => ({ ...current, tone: event.target.value }))}
+          />
+        </label>
+        <label>
+          Prompt personalizado
+          <textarea
+            value={settingsDraft.custom_prompt}
+            onChange={(event) => setSettingsDraft((current) => ({ ...current, custom_prompt: event.target.value }))}
+          />
+        </label>
+        <button className="primary" onClick={saveSettings}>
+          <Check size={17} />
+          Salvar configurações
+        </button>
+        {settingsMessage ? <p>{settingsMessage}</p> : null}
+      </section>
     </section>
   );
 }
@@ -1210,6 +1272,45 @@ export default function App() {
   }, [questions]);
 
   useEffect(() => {
+    async function loadPersistedQuestions() {
+      try {
+        const response = await fetch(`${API_URL}/questions`);
+        const data = await response.json();
+        if (response.ok && Array.isArray(data)) {
+          setQuestions(data);
+          setSelectedId(data[0]?.id || null);
+        }
+      } catch {
+        // Keep the empty state or manually loaded demo questions.
+      }
+    }
+
+    async function loadCompanySettings() {
+      try {
+        const response = await fetch(`${API_URL}/company/settings`);
+        const settings = await response.json();
+        if (response.ok) {
+          setAppData((current) => ({
+            ...current,
+            aiSettings: {
+              ...current.aiSettings,
+              greeting: settings.greeting,
+              closing: settings.closing,
+              tone: settings.tone || current.aiSettings.tone,
+              customPrompt: settings.custom_prompt || "",
+            },
+          }));
+        }
+      } catch {
+        // Settings keep local defaults when backend is unavailable.
+      }
+    }
+
+    loadPersistedQuestions();
+    loadCompanySettings();
+  }, []);
+
+  useEffect(() => {
     async function loadIntegrationHealth() {
       try {
         const response = await fetch(`${API_URL}/integrations/health`);
@@ -1446,7 +1547,12 @@ export default function App() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify({ answer: finalResponse }),
+            body: JSON.stringify({
+              answer: finalResponse,
+              original_suggestion: approvalData.ai_suggestion || targetQuestion.ai_suggestion,
+              was_edited: Boolean(approvalData.was_edited),
+              instruction_used: approvalData.instruction_used || "",
+            }),
           }
         );
         const data = await response.json().catch(() => ({}));
@@ -1626,22 +1732,8 @@ export default function App() {
       }
 
       const realQuestions = Array.isArray(data) ? data.map(mapMercadoLivreQuestionToUi) : [];
-      const realQuestionsWithSuggestions = await Promise.all(
-        realQuestions.map(async (question) => {
-          try {
-            const suggestion = await requestInitialAiSuggestion(question);
-            return { ...question, ai_suggestion: suggestion };
-          } catch {
-            return {
-              ...question,
-              ai_suggestion:
-                "Não foi possível gerar a sugestão inicial da IA. Revise a pergunta e escreva uma resposta antes de enviar.",
-            };
-          }
-        })
-      );
-      setQuestions(realQuestionsWithSuggestions);
-      setSelectedId(realQuestionsWithSuggestions[0]?.id || null);
+      setQuestions(realQuestions);
+      setSelectedId(realQuestions[0]?.id || null);
       setShowConversation(false);
       setMarketplaceFilter("Todos");
       setStatusFilter("Todos");
@@ -1659,7 +1751,7 @@ export default function App() {
         )
       );
 
-      if (realQuestionsWithSuggestions.length === 0) {
+      if (realQuestions.length === 0) {
         setQuestionNotice("Nenhuma pergunta pendente encontrada no Mercado Livre.");
       }
     } catch {
@@ -1732,7 +1824,21 @@ export default function App() {
             onConfirmConnect={confirmConnect}
           />
         ) : isSettings ? (
-          <SettingsPage appData={appData} />
+          <SettingsPage
+            appData={appData}
+            onSettingsSaved={(settings) =>
+              setAppData((current) => ({
+                ...current,
+                aiSettings: {
+                  ...current.aiSettings,
+                  greeting: settings.greeting,
+                  closing: settings.closing,
+                  tone: settings.tone || current.aiSettings.tone,
+                  customPrompt: settings.custom_prompt || "",
+                },
+              }))
+            }
+          />
         ) : isAnalytics ? (
           <AnalyticsPage questions={visibleQuestions} appData={appData} />
         ) : (
