@@ -788,6 +788,14 @@ button:disabled {
   margin-top: 22px;
 }
 
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 16px;
+  margin-top: 22px;
+  align-items: start;
+}
+
 .settings-card {
   border: 1px solid rgba(126, 139, 168, 0.16);
   border-radius: 22px;
@@ -815,7 +823,6 @@ button:disabled {
 }
 
 .settings-form {
-  margin-top: 16px;
   display: grid;
   gap: 12px;
 }
@@ -829,6 +836,7 @@ button:disabled {
 }
 
 .settings-form input,
+.settings-form select,
 .settings-form textarea {
   width: 100%;
   border: 1px solid #dce3f1;
@@ -836,11 +844,40 @@ button:disabled {
   padding: 12px;
   color: #172033;
   font: inherit;
+  background: white;
 }
 
 .settings-form textarea {
   min-height: 110px;
   resize: vertical;
+}
+
+.settings-message {
+  font-weight: 800;
+  color: #15803d;
+}
+
+.settings-preview {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-preview dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.settings-preview dt {
+  color: #7d889d;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.settings-preview dd {
+  margin: 4px 0 0;
+  color: #293456;
+  line-height: 1.45;
 }
 
 .onboarding-actions {
@@ -853,6 +890,13 @@ button:disabled {
   color: white;
   background: #16a34a;
   box-shadow: 0 14px 28px rgba(22, 163, 74, 0.24);
+}
+
+.primary:disabled,
+.secondary:disabled,
+.danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .secondary:hover {
@@ -1318,6 +1362,7 @@ button:disabled {
   .filters,
   .integrations-grid,
   .settings-grid,
+  .settings-layout,
   .health-grid {
     grid-template-columns: 1fr;
   }

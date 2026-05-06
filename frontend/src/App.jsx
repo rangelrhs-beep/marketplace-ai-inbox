@@ -29,6 +29,13 @@ const navItems = [
   { label: "Configurações", icon: Settings },
 ];
 
+const toneOptions = [
+  "Técnico, claro e confiável",
+  "Curto e objetivo",
+  "Comercial e persuasivo",
+  "Humanizado e cordial",
+];
+
 const initialIntegrations = [
   {
     id: "mercado-livre",
@@ -76,9 +83,12 @@ const initialAppData = {
   integrations: integrationState(),
   questions: [],
   aiSettings: {
+    greeting: "Olá! Obrigado pela pergunta.",
+    closing: "Ficamos à disposição.",
     tone: "Técnico, claro e confiável",
     autoApprove: false,
     maxRewriteAttempts: 3,
+    customPrompt: "",
   },
   usageLogs: [],
 };
@@ -423,15 +433,31 @@ function IntegrationsPage({
 
 function SettingsPage({ appData, onSettingsSaved }) {
   const [settingsDraft, setSettingsDraft] = useState({
-    greeting: appData.aiSettings.greeting || "Olá!",
+    greeting: appData.aiSettings.greeting || "Olá! Obrigado pela pergunta.",
     closing: appData.aiSettings.closing || "Ficamos à disposição.",
-    tone: appData.aiSettings.tone || "",
+    tone: appData.aiSettings.tone || "Técnico, claro e confiável",
     custom_prompt: appData.aiSettings.customPrompt || "",
   });
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  useEffect(() => {
+    setSettingsDraft({
+      greeting: appData.aiSettings.greeting || "Olá! Obrigado pela pergunta.",
+      closing: appData.aiSettings.closing || "Ficamos à disposição.",
+      tone: appData.aiSettings.tone || "Técnico, claro e confiável",
+      custom_prompt: appData.aiSettings.customPrompt || "",
+    });
+  }, [
+    appData.aiSettings.greeting,
+    appData.aiSettings.closing,
+    appData.aiSettings.tone,
+    appData.aiSettings.customPrompt,
+  ]);
 
   async function saveSettings() {
     setSettingsMessage("");
+    setIsSavingSettings(true);
     try {
       const response = await fetch(`${API_URL}/company/settings`, {
         method: "PUT",
@@ -444,6 +470,8 @@ function SettingsPage({ appData, onSettingsSaved }) {
       setSettingsMessage("Configurações salvas.");
     } catch (error) {
       setSettingsMessage(error.message || "Não foi possível salvar as configurações.");
+    } finally {
+      setIsSavingSettings(false);
     }
   }
 
@@ -459,59 +487,78 @@ function SettingsPage({ appData, onSettingsSaved }) {
         </div>
       </header>
 
-      <div className="settings-grid">
-        <article className="settings-card">
-          <span>Empresa</span>
-          <h2>CPAP Express</h2>
-          <p>Plano Business. Operação centralizada para perguntas reais do Mercado Livre.</p>
-        </article>
-        <article className="settings-card">
-          <span>Usuário</span>
-          <h2>Admin</h2>
-          <p>Acesso administrativo único para a operação atual.</p>
-        </article>
-        <article className="settings-card">
-          <span>IA</span>
-          <h2>{appData.aiSettings.tone}</h2>
-          <p>{appData.aiSettings.maxRewriteAttempts} ajustes por resposta no MVP atual.</p>
-        </article>
-      </div>
+      <section className="settings-layout">
+        <div className="settings-card settings-form">
+          <span>Regras de resposta da IA</span>
+          <h2>Como responder perguntas do Mercado Livre</h2>
+          <p>
+            Essas regras são usadas para novas sugestões e reescritas. Respostas já salvas não são
+            alteradas automaticamente.
+          </p>
+          <label>
+            Saudação padrão
+            <input
+              value={settingsDraft.greeting}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, greeting: event.target.value }))}
+            />
+          </label>
+          <label>
+            Despedida padrão
+            <input
+              value={settingsDraft.closing}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, closing: event.target.value }))}
+            />
+          </label>
+          <label>
+            Tom de resposta
+            <select
+              value={settingsDraft.tone}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, tone: event.target.value }))}
+            >
+              {toneOptions.map((tone) => (
+                <option key={tone} value={tone}>
+                  {tone}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Prompt personalizado
+            <textarea
+              placeholder="Ex: Sempre mencione que não podemos confirmar prazo sem CEP. Não prometer compatibilidade sem dados do anúncio."
+              value={settingsDraft.custom_prompt}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, custom_prompt: event.target.value }))}
+            />
+          </label>
+          <button className="primary" onClick={saveSettings} disabled={isSavingSettings}>
+            {isSavingSettings ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+            {isSavingSettings ? "Salvando..." : "Salvar configurações"}
+          </button>
+          {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
+        </div>
 
-      <section className="settings-card settings-form">
-        <span>Prompt da empresa</span>
-        <label>
-          Saudação
-          <input
-            value={settingsDraft.greeting}
-            onChange={(event) => setSettingsDraft((current) => ({ ...current, greeting: event.target.value }))}
-          />
-        </label>
-        <label>
-          Fechamento
-          <input
-            value={settingsDraft.closing}
-            onChange={(event) => setSettingsDraft((current) => ({ ...current, closing: event.target.value }))}
-          />
-        </label>
-        <label>
-          Tom
-          <input
-            value={settingsDraft.tone}
-            onChange={(event) => setSettingsDraft((current) => ({ ...current, tone: event.target.value }))}
-          />
-        </label>
-        <label>
-          Prompt personalizado
-          <textarea
-            value={settingsDraft.custom_prompt}
-            onChange={(event) => setSettingsDraft((current) => ({ ...current, custom_prompt: event.target.value }))}
-          />
-        </label>
-        <button className="primary" onClick={saveSettings}>
-          <Check size={17} />
-          Salvar configurações
-        </button>
-        {settingsMessage ? <p>{settingsMessage}</p> : null}
+        <aside className="settings-card settings-preview">
+          <span>Prévia operacional</span>
+          <h2>CPAP Express</h2>
+          <dl>
+            <div>
+              <dt>Saudação</dt>
+              <dd>{settingsDraft.greeting}</dd>
+            </div>
+            <div>
+              <dt>Tom</dt>
+              <dd>{settingsDraft.tone}</dd>
+            </div>
+            <div>
+              <dt>Despedida</dt>
+              <dd>{settingsDraft.closing}</dd>
+            </div>
+          </dl>
+          <p>
+            A IA continuará sem envio automático. Toda resposta precisa ser revisada e aprovada por
+            Admin antes de ir para o Mercado Livre.
+          </p>
+        </aside>
       </section>
     </section>
   );
@@ -1171,7 +1218,7 @@ export default function App() {
         const response = await fetch(`${API_URL}/questions/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8" },
-          body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id }),
+          body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id, force: true }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ai_suggestion) {
