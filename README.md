@@ -58,6 +58,9 @@ Endpoints simulados:
 - `POST /integrations/mercadolivre/questions/{question_id}/answer`
 - `GET /company/settings`
 - `PUT /company/settings`
+- `POST /company/settings`
+- `POST /questions/generate`
+- `POST /questions/answer`
 
 Na primeira inicialização o backend cria as tabelas e faz seed de:
 
@@ -112,6 +115,7 @@ SUPABASE_SERVICE_ROLE_KEY=SUA_SERVICE_ROLE_KEY
 4. Suba o backend. As tabelas são criadas automaticamente por SQLAlchemy no startup.
 5. O OAuth do Mercado Livre passa a salvar `access_token`, `refresh_token`, `seller_id` e `expires_at` na tabela `integrations`.
 6. Ao buscar perguntas reais, o backend faz upsert em `questions` por `company_id + provider + external_id` e cria a primeira sugestão em `ai_suggestions` apenas quando ela ainda não existe.
+7. Sugestões são salvas em `suggestion_text`, edições em `edited_text` e respostas aprovadas em `final_answer`.
 
 ### Frontend
 
