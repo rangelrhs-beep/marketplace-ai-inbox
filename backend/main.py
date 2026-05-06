@@ -763,7 +763,12 @@ def health():
     return {"status": "ok"}
 
 
-def generate_openai_rewrite(question: str, original_response: str, instruction: str) -> str:
+def generate_openai_rewrite(
+    question: str,
+    original_response: str,
+    instruction: str,
+    settings: CompanySettings | None = None,
+) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -772,21 +777,30 @@ def generate_openai_rewrite(question: str, original_response: str, instruction: 
 
     client = OpenAI(api_key=api_key)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    greeting = settings.greeting if settings else "Olá! Obrigado pela pergunta."
+    closing = settings.closing if settings else "Ficamos à disposição."
+    tone = settings.tone if settings else "Técnico, claro e confiável"
+    custom_prompt = settings.custom_prompt if settings else ""
 
     prompt = (
-        "You are a professional e-commerce seller answering marketplace customer questions. "
-        "Rewrite the response based on the instruction.\n\n"
+        "Você é um vendedor profissional de e-commerce respondendo perguntas no Mercado Livre. "
+        "Reescreva a resposta conforme a instrução do usuário.\n\n"
         "Rules:\n"
-        "- Tone must be polite, direct, helpful, and slightly persuasive.\n"
-        "- Start with a short direct answer, then add helpful detail.\n"
-        "- Prefer confident, actionable information.\n"
-        "- Avoid generic phrases like 'recomendamos verificar'.\n"
-        "- Keep the answer concise, max 5 lines unless the instruction asks otherwise.\n"
-        "- If product information is limited, do not invent details; suggest checking the variation or sending a message.\n"
-        "- Output only the final message ready to send. No explanation, no meta text.\n\n"
-        f"Customer question:\n{question}\n\n"
-        f"Original seller response:\n{original_response}\n\n"
-        f"Rewrite instruction:\n{instruction}"
+        "- Responda em português do Brasil.\n"
+        f"- Tom desejado: {tone}.\n"
+        f"- Use a saudação padrão quando fizer sentido: {greeting}\n"
+        f"- Use a despedida padrão quando fizer sentido: {closing}\n"
+        "- Seja educado, direto, útil e levemente persuasivo.\n"
+        "- Comece com uma resposta curta e depois adicione detalhe útil.\n"
+        "- Não invente detalhes de produto, estoque, prazo, garantia, compatibilidade ou características.\n"
+        "- Se a informação for incerta, responda com cautela e oriente o cliente a conferir a variação do anúncio ou enviar nova mensagem.\n"
+        "- Evite frases genéricas como 'recomendamos verificar'.\n"
+        "- Máximo de 5 linhas, salvo se a instrução pedir outra coisa.\n"
+        "- Retorne apenas a resposta final pronta para envio. Sem explicação, sem meta texto.\n\n"
+        f"Prompt personalizado da empresa: {custom_prompt or 'Nenhum'}\n\n"
+        f"Pergunta do cliente:\n{question}\n\n"
+        f"Resposta atual do vendedor:\n{original_response}\n\n"
+        f"Instrução de reescrita:\n{instruction}"
     )
     response = client.responses.create(model=model, input=prompt)
     revised_response = response.output_text.strip()
@@ -1226,7 +1240,7 @@ def answer_mercadolivre_question(
 
 
 @app.post("/ai/rewrite")
-def rewrite_ai_response(payload: dict[str, Any]):
+def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
     original_response = (payload.get("text") or payload.get("original_response") or "").strip()
     instruction = (payload.get("instruction") or "").strip()
     question = (payload.get("question") or "").strip()
@@ -1242,7 +1256,12 @@ def rewrite_ai_response(payload: dict[str, Any]):
         raise HTTPException(status_code=400, detail="Missing required field: instruction")
 
     try:
-        rewritten_text = generate_openai_rewrite(question, original_response, instruction)
+        rewritten_text = generate_openai_rewrite(
+            question,
+            original_response,
+            instruction,
+            settings=get_default_settings(db),
+        )
         return {"rewritten_text": rewritten_text}
     except Exception as error:
         logger.exception("OpenAI rewrite failed")
@@ -1397,6 +1416,7 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
 def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(get_db)):
     question_id = payload.get("question_id") or payload.get("id")
     external_id = payload.get("external_id")
+    force = bool(payload.get("force"))
     question = None
     if question_id:
         question = db.get(QuestionRecord, int(question_id))
@@ -1413,10 +1433,45 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
     if not question:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
 
-    if question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
+    if not force and question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
         return question_to_api(question)
 
-    ensure_initial_suggestion(db, question)
+    if force:
+        try:
+            suggestion_text = generate_openai_initial_suggestion(
+                product_title=question.product_title,
+                question_text=question.question_text,
+                settings=get_default_settings(db),
+            )
+        except Exception:
+            logger.exception("Failed to regenerate AI suggestion for question %s", question.id)
+            suggestion_text = (
+                "Não foi possível gerar a sugestão da IA agora. "
+                "Revise a pergunta e escreva uma resposta antes de enviar."
+            )
+        now = datetime.utcnow()
+        if question.ai_suggestion:
+            question.ai_suggestion.original_suggestion = suggestion_text
+            question.ai_suggestion.suggestion_text = suggestion_text
+            question.ai_suggestion.final_response = suggestion_text
+            question.ai_suggestion.final_answer = suggestion_text
+            question.ai_suggestion.edited_text = None
+            question.ai_suggestion.was_edited = False
+            question.ai_suggestion.instruction_used = ""
+            question.ai_suggestion.updated_at = now
+        else:
+            db.add(
+                AiSuggestion(
+                    question=question,
+                    original_suggestion=suggestion_text,
+                    suggestion_text=suggestion_text,
+                    final_response=suggestion_text,
+                    final_answer=suggestion_text,
+                )
+            )
+        question.updated_at = now
+    else:
+        ensure_initial_suggestion(db, question)
     db.commit()
     db.refresh(question)
     return question_to_api(question)
