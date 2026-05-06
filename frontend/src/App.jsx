@@ -7,7 +7,6 @@ import {
   ExternalLink,
   Inbox,
   MessageCircle,
-  Plus,
   PlugZap,
   RefreshCw,
   Send,
@@ -20,7 +19,6 @@ import {
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
-const AI_SUGGEST_URL = `${API_URL}/ai/suggest`;
 
 const navItems = [
   { label: "Inbox", icon: Inbox },
@@ -41,185 +39,6 @@ const initialIntegrations = [
     store: "",
     lastSync: "",
   },
-  {
-    id: "shopee",
-    name: "Shopee",
-    shortName: "Shopee",
-    color: "#ee4d2d",
-    status: "Não conectado",
-    store: "",
-    lastSync: "",
-  },
-  {
-    id: "magalu",
-    name: "Magalu",
-    shortName: "Magalu",
-    color: "#0086ff",
-    status: "Não conectado",
-    store: "",
-    lastSync: "",
-  },
-  {
-    id: "amazon",
-    name: "Amazon",
-    shortName: "Amazon",
-    color: "#ff9900",
-    status: "Não conectado",
-    store: "",
-    lastSync: "",
-  },
-  {
-    id: "tiny-erp",
-    name: "Tiny ERP",
-    shortName: "Tiny",
-    color: "#16a34a",
-    status: "Em breve",
-    store: "",
-    lastSync: "",
-  },
-];
-
-const demoQuestions = [
-  {
-    id: 1,
-    marketplace: "Mercado Livre",
-    product: "Kit 3 Camisetas Premium Algodao",
-    customer_name: "Mariana",
-    question: "Boa tarde! Esse kit tem a camiseta preta no tamanho M? Entrega chega antes de sexta?",
-    created_at: "2026-04-25T10:42:00",
-    status: "Pendente",
-    priority: "Alta",
-    ai_suggestion:
-      "Ola, Mariana! Temos sim a camiseta preta no tamanho M. Para confirmar o prazo de chegada antes de sexta, basta inserir seu CEP no anuncio que o Mercado Livre mostra a estimativa atualizada.",
-    sku: "CAM-KIT-003",
-    price: "R$ 129,90",
-  },
-  {
-    id: 2,
-    marketplace: "Mercado Livre",
-    product: "Fone Bluetooth Noise Canceling Pro",
-    customer_name: "Diego",
-    question: "O produto e original? Tem garantia?",
-    created_at: "2026-04-25T09:18:00",
-    status: "Pendente",
-    priority: "Media",
-    ai_suggestion:
-      "Ola, Diego! Sim, o produto e original, acompanha nota fiscal e possui garantia de 12 meses contra defeitos de fabricacao.",
-    sku: "FON-BT-PRO",
-    price: "R$ 249,00",
-  },
-  {
-    id: 3,
-    marketplace: "Mercado Livre",
-    product: "Suporte Articulado para Monitor",
-    customer_name: "Carla",
-    question: "Serve para monitor ultrawide de 34 polegadas?",
-    created_at: "2026-04-24T17:05:00",
-    status: "Pendente",
-    priority: "Baixa",
-    ai_suggestion:
-      "Ola, Carla! Esse suporte e compativel com monitores de ate 32 polegadas. Para ultrawide de 34 polegadas, recomendamos verificar peso e padrao VESA.",
-    sku: "SUP-MON-ARM",
-    price: "R$ 189,90",
-  },
-  {
-    id: 4,
-    marketplace: "Mercado Livre",
-    product: "Mochila Executiva Impermeavel USB",
-    customer_name: "Renato",
-    question: "Cabe notebook de 15.6 e tem divisoria acolchoada?",
-    created_at: "2026-04-24T14:32:00",
-    status: "Respondida",
-    priority: "Media",
-    ai_suggestion:
-      "Ola, Renato! Cabe notebook de ate 15.6 polegadas e possui divisoria acolchoada para melhor protecao.",
-    sku: "MOC-EXEC-USB",
-    price: "R$ 159,90",
-  },
-  {
-    id: 5,
-    marketplace: "Shopee",
-    product: "Organizador de Cabos Mesa Home Office",
-    customer_name: "Luciana",
-    question: "Vem com fita dupla face para instalar?",
-    created_at: "2026-04-23T11:20:00",
-    status: "Pendente",
-    priority: "Baixa",
-    ai_suggestion:
-      "Ola, Luciana! Sim, o organizador acompanha fita dupla face para uma instalacao pratica na mesa.",
-    sku: "ORG-CAB-HO",
-    price: "R$ 39,90",
-  },
-  {
-    id: 6,
-    marketplace: "Shopee",
-    product: "Luminaria LED Articulada para Mesa",
-    customer_name: "Paulo",
-    question: "A luz tem ajuste de intensidade? Funciona ligada no USB do notebook?",
-    created_at: "2026-04-26T16:10:00",
-    status: "Pendente",
-    priority: "Media",
-    ai_suggestion:
-      "Ola, Paulo! Sim, a luminaria possui ajuste de intensidade e funciona via USB, inclusive conectada ao notebook.",
-    sku: "LUM-LED-USB",
-    price: "R$ 74,90",
-  },
-  {
-    id: 7,
-    marketplace: "Magalu",
-    product: "Cafeteira Espresso Compacta 20 Bar",
-    customer_name: "Bianca",
-    question: "Ela aceita capsula ou somente po de cafe?",
-    created_at: "2026-04-26T13:48:00",
-    status: "Pendente",
-    priority: "Alta",
-    ai_suggestion:
-      "Ola, Bianca! Esse modelo utiliza po de cafe e acompanha filtro proprio. Ele nao e compativel com capsulas.",
-    sku: "CAF-ESP-20B",
-    price: "R$ 599,00",
-  },
-  {
-    id: 8,
-    marketplace: "Amazon",
-    product: "Echo Speaker Smart Home Hub",
-    customer_name: "Andre",
-    question: "Consigo controlar lampadas inteligentes de outras marcas?",
-    created_at: "2026-04-26T08:25:00",
-    status: "Respondida",
-    priority: "Baixa",
-    ai_suggestion:
-      "Ola, Andre! Sim, voce consegue controlar lampadas inteligentes compativeis com Alexa.",
-    sku: "ECH-HUB-5G",
-    price: "R$ 429,00",
-  },
-  {
-    id: 9,
-    marketplace: "Magalu",
-    product: "Aspirador Robo Smart Mapeamento",
-    customer_name: "Fernanda",
-    question: "Ele passa pano tambem ou so aspira?",
-    created_at: "2026-04-25T19:04:00",
-    status: "Pendente",
-    priority: "Media",
-    ai_suggestion:
-      "Ola, Fernanda! Esse modelo aspira e tambem passa pano com reservatorio de agua.",
-    sku: "ASP-ROB-MAP",
-    price: "R$ 899,90",
-  },
-  {
-    id: 10,
-    marketplace: "Amazon",
-    product: "Kindle Paperwhite 16 GB",
-    customer_name: "Roberto",
-    question: "O aparelho vem com anuncios na tela de bloqueio?",
-    created_at: "2026-04-25T15:36:00",
-    status: "Respondida",
-    priority: "Baixa",
-    ai_suggestion:
-      "Ola, Roberto! Este anuncio e da versao sem ofertas especiais, portanto nao exibe anuncios na tela de bloqueio.",
-    sku: "KDL-PW-16",
-    price: "R$ 699,00",
-  },
 ];
 
 const initialIntegrationHealth = [
@@ -232,67 +51,25 @@ const initialIntegrationHealth = [
     last_error: "Aguardando leitura do backend.",
     token_status: "missing",
   },
-  {
-    id: "shopee",
-    channel: "Shopee",
-    connected: false,
-    api_status: "degraded",
-    last_sync: null,
-    last_error: "Integração mockada até conectar API real.",
-    token_status: "missing",
-  },
-  {
-    id: "magalu",
-    channel: "Magalu",
-    connected: false,
-    api_status: "down",
-    last_sync: null,
-    last_error: "Integração mockada até conectar API real.",
-    token_status: "missing",
-  },
-  {
-    id: "amazon",
-    channel: "Amazon",
-    connected: false,
-    api_status: "down",
-    last_sync: null,
-    last_error: "Mocked API failure: Amazon SP-API credentials not configured.",
-    token_status: "missing",
-  },
-  {
-    id: "tiny-erp",
-    channel: "Tiny ERP",
-    connected: false,
-    api_status: "degraded",
-    last_sync: null,
-    last_error: "Question sync is not available for Tiny ERP yet.",
-    token_status: "not_required",
-  },
 ];
 
 const CURRENT_COMPANY = { id: "cpap_express", name: "CPAP Express", plan: "Business" };
 const CURRENT_USER = {
   id: "u-admin",
   name: "Admin",
-  email: "admin@cpapexpress.demo",
+  email: "admin@cpapexpress.com.br",
   role: "admin",
 };
 
 function integrationState(overrides = {}) {
   return initialIntegrations.map((integration) => ({
     ...integration,
-    status: integration.id === "tiny-erp" ? "Em breve" : "Não conectado",
+    status: "Não conectado",
     store: "",
     lastSync: "",
-    token_status: integration.id === "tiny-erp" ? "not_required" : "missing",
+    token_status: "missing",
     ...overrides[integration.id],
   }));
-}
-
-function getDemoQuestions() {
-  return demoQuestions
-    .filter((question) => question.marketplace === "Mercado Livre")
-    .map((question) => ({ ...question, company_id: CURRENT_COMPANY.id }));
 }
 
 const initialAppData = {
@@ -303,20 +80,15 @@ const initialAppData = {
     autoApprove: false,
     maxRewriteAttempts: 3,
   },
-  usageLogs: [
-    { id: 1, action: "ml_oauth_connected", count: 1, created_at: "2026-05-01T09:15:00" },
-    { id: 2, action: "ai_rewrite", count: 12, created_at: "2026-05-01T09:40:00" },
-  ],
+  usageLogs: [],
 };
 
 const statusClass = {
   Pendente: "pending",
-  Aprovada: "approved",
   Respondida: "answered",
   Rejeitada: "rejected",
   Conectado: "approved",
   "Não conectado": "disconnected",
-  "Em breve": "soon",
 };
 
 const priorityClass = {
@@ -347,33 +119,6 @@ function normalizeInstruction(instruction) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
-}
-
-function generateMockAiRewrite(originalResponse, instruction, question) {
-  const normalizedInstruction = normalizeInstruction(instruction);
-  const product = question?.product || "produto";
-  const customerName = question?.customer_name || "cliente";
-
-  // Future integration point: replace these branches with a backend call to an OpenAI rewrite endpoint.
-  if (normalizedInstruction.includes("tecnica") || normalizedInstruction.includes("tecnico")) {
-    return `Ola, ${customerName}! Sobre o ${product}, confirmamos as informacoes conforme as especificacoes do anuncio. Recomendamos verificar compatibilidade, dimensoes, variacoes disponiveis e prazo de entrega diretamente no checkout antes da compra. Ficamos a disposicao para ajudar com qualquer detalhe tecnico.`;
-  }
-
-  if (normalizedInstruction.includes("curta") || normalizedInstruction.includes("curto")) {
-    return `Ola, ${customerName}! Sim, as informacoes do anuncio estao atualizadas. Para prazo e disponibilidade, confira pelo CEP no checkout. Ficamos a disposicao!`;
-  }
-
-  if (normalizedInstruction.includes("vendedor") || normalizedInstruction.includes("comercial") || normalizedInstruction.includes("venda")) {
-    return `Ola, ${customerName}! Esse ${product} e uma otima escolha. As informacoes estao atualizadas no anuncio e nosso time esta pronto para enviar com agilidade. Pode comprar com tranquilidade, seguimos a disposicao para ajudar.`;
-  }
-
-  if (normalizedInstruction.includes("garantia")) {
-    return `Ola, ${customerName}! O ${product} acompanha garantia de 12 meses contra defeitos de fabricacao, conforme as condicoes do vendedor. Tambem recomendamos conferir prazo de entrega e disponibilidade pelo checkout antes de finalizar a compra.`;
-  }
-
-  return originalResponse
-    .replace("Ficamos a disposicao!", "Seguimos a disposicao para ajudar.")
-    .replace("Pode comprar com tranquilidade.", "A compra pode ser feita com tranquilidade.");
 }
 
 function mapMercadoLivreQuestionToUi(question, index) {
@@ -460,9 +205,9 @@ function Sidebar({ active, setActive }) {
       </nav>
 
       <div className="sidebar-card">
-        <span>IA ativa</span>
-        <strong>92%</strong>
-        <p>das perguntas com sugestao pronta para revisao.</p>
+        <span>Operação real</span>
+        <strong>ML</strong>
+        <p>Perguntas salvas no banco, revisadas com IA e enviadas ao Mercado Livre.</p>
       </div>
     </aside>
   );
@@ -479,15 +224,11 @@ function IntegrationLogo({ integration }) {
 function IntegrationCard({
   integration,
   onConnect,
-  onDisconnect,
-  onSync,
   onFetchRealQuestions,
-  isSyncing,
   canFetchRealQuestions,
   isFetchingRealQuestions,
 }) {
   const isConnected = integration.status === "Conectado";
-  const isComingSoon = integration.status === "Em breve";
 
   return (
     <article className="integration-card">
@@ -503,15 +244,11 @@ function IntegrationCard({
         {isConnected ? (
           <>
             <p>{integration.store}</p>
-            <small>Ultima sincronizacao: {formatDate(integration.lastSync)}</small>
+            <small>Última sincronização: {formatDate(integration.lastSync)}</small>
             <small>Token: {integration.token_status || "valid"}</small>
           </>
         ) : (
-          <p>
-            {isComingSoon
-              ? "Integracao planejada para uma proxima etapa do produto."
-              : "Conecte por autorizacao oficial para importar perguntas e manter a inbox atualizada."}
-          </p>
+          <p>Conecte por autorização oficial para importar perguntas e manter a inbox atualizada.</p>
         )}
       </div>
 
@@ -525,20 +262,12 @@ function IntegrationCard({
                 disabled={isFetchingRealQuestions}
               >
                 <RefreshCw size={17} className={isFetchingRealQuestions ? "spin" : ""} />
-                {isFetchingRealQuestions ? "Buscando..." : "Buscar perguntas reais"}
+                {isFetchingRealQuestions ? "Sincronizando..." : "Sincronizar perguntas"}
               </button>
             ) : null}
-            <button className="secondary" onClick={() => onSync(integration.id)} disabled={isSyncing}>
-              <RefreshCw size={17} className={isSyncing ? "spin" : ""} />
-              {isSyncing ? "Sincronizando..." : "Sincronizar agora"}
-            </button>
-            <button className="danger" onClick={() => onDisconnect(integration.id)}>
-              <X size={17} />
-              Desconectar
-            </button>
           </>
         ) : (
-          <button className="primary" onClick={() => onConnect(integration)} disabled={isComingSoon}>
+          <button className="primary" onClick={() => onConnect(integration)}>
             <ExternalLink size={17} />
             Conectar
           </button>
@@ -560,10 +289,10 @@ function ConnectModal({ integration, onCancel, onConfirm }) {
           <X size={20} />
         </button>
         <IntegrationLogo integration={integration} />
-        <span>Conexao segura via OAuth</span>
+        <span>Conexão segura via OAuth</span>
         <h2>Conectar {integration.name}</h2>
         <p>
-          Ao continuar, voce sera redirecionado para a pagina oficial de login e autorizacao do
+          Ao continuar, você será redirecionado para a página oficial de login e autorização do
           marketplace. O Marketplace AI Inbox nunca pede nem armazena sua senha.
         </p>
         <div className="modal-actions">
@@ -584,11 +313,8 @@ function IntegrationsPage({
   integrations,
   integrationHealth,
   onConnect,
-  onDisconnect,
-  onSync,
   onFetchRealQuestions,
   onTestHealth,
-  syncingIntegrationId,
   fetchingRealQuestions,
   testingIntegrationId,
   pendingIntegration,
@@ -605,10 +331,6 @@ function IntegrationsPage({
           <h1>Integrações</h1>
         </div>
         <div className="topbar-actions">
-          <button className="new-rule">
-            <Plus size={18} />
-            Adicionar
-          </button>
           <span className="user-badge">Admin</span>
         </div>
       </header>
@@ -633,10 +355,7 @@ function IntegrationsPage({
             key={integration.id}
             integration={integration}
             onConnect={onConnect}
-            onDisconnect={onDisconnect}
-            onSync={onSync}
             onFetchRealQuestions={onFetchRealQuestions}
-            isSyncing={syncingIntegrationId === integration.id}
             canFetchRealQuestions={
               integration.id === "mercado-livre" &&
               integration.status === "Conectado"
@@ -646,28 +365,10 @@ function IntegrationsPage({
         ))}
       </div>
 
-      <section className="add-marketplace">
-        <div className="add-icon">
-          <Plus size={24} />
-        </div>
-        <div>
-          <span>Adicionar marketplace</span>
-          <h2>Quer conectar outro canal?</h2>
-          <p>
-            Cadastre uma solicitacao para priorizar novos marketplaces, ERPs ou hubs de venda no
-            roadmap de integracoes.
-          </p>
-        </div>
-        <button className="secondary">
-          <Plus size={17} />
-          Solicitar integracao
-        </button>
-      </section>
-
       <section className="integration-health-section">
         <div className="section-heading">
           <div>
-            <span>Monitoramento mockado</span>
+            <span>Monitoramento</span>
             <h2>Integration Health</h2>
           </div>
         </div>
@@ -681,15 +382,15 @@ function IntegrationsPage({
               </div>
               <dl>
                 <div>
-                  <dt>Ultimo sync</dt>
-                  <dd>{health.last_sync ? formatDate(health.last_sync) : "Ainda nao sincronizado"}</dd>
+                  <dt>Último sync</dt>
+                  <dd>{health.last_sync ? formatDate(health.last_sync) : "Ainda não sincronizado"}</dd>
                 </div>
                 <div>
                   <dt>Token</dt>
                   <dd>{health.token_status}</dd>
                 </div>
                 <div>
-                  <dt>Ultimo erro</dt>
+                  <dt>Último erro</dt>
                   <dd>{health.last_error || "Sem erros recentes"}</dd>
                 </div>
               </dl>
@@ -699,7 +400,7 @@ function IntegrationsPage({
                 disabled={testingIntegrationId === health.id}
               >
                 <RefreshCw size={17} className={testingIntegrationId === health.id ? "spin" : ""} />
-                {testingIntegrationId === health.id ? "Testando..." : "Testar conexao"}
+                {testingIntegrationId === health.id ? "Testando..." : "Testar conexão"}
               </button>
             </article>
           ))}
@@ -745,7 +446,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>CPAP Express · Preparação para banco de dados</span>
+          <span>CPAP Express · Empresa e IA</span>
           <h1>Configurações</h1>
         </div>
         <div className="topbar-actions">
@@ -757,12 +458,12 @@ function SettingsPage({ appData, onSettingsSaved }) {
         <article className="settings-card">
           <span>Empresa</span>
           <h2>CPAP Express</h2>
-          <p>Plano Business. Este MVP está simplificado para uma única empresa antes do banco de dados.</p>
+          <p>Plano Business. Operação centralizada para perguntas reais do Mercado Livre.</p>
         </article>
         <article className="settings-card">
           <span>Usuário</span>
           <h2>Admin</h2>
-          <p>Login e multiusuário ficam preparados para uma próxima etapa.</p>
+          <p>Acesso administrativo único para a operação atual.</p>
         </article>
         <article className="settings-card">
           <span>IA</span>
@@ -847,7 +548,7 @@ function AnalyticsPage({ questions, appData }) {
         <article className="settings-card">
           <span>Uso</span>
           <h2>{appData.usageLogs.reduce((total, log) => total + log.count, 0)}</h2>
-          <p>Eventos mockados de IA e operação.</p>
+          <p>Eventos registrados de IA e operação.</p>
         </article>
       </div>
     </section>
@@ -966,7 +667,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <MessageCircle size={34} />
         </div>
         <h2>Selecione uma pergunta</h2>
-        <p>Revise sugestoes da IA, edite quando precisar e envie respostas em poucos cliques.</p>
+        <p>Revise sugestões da IA, edite quando precisar e envie respostas em poucos cliques.</p>
       </section>
     );
   }
@@ -1015,11 +716,11 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               </div>
               <div>
                 <dt>Respondida em</dt>
-                <dd>{question.answered_at ? formatDate(question.answered_at) : "Nao informado"}</dd>
+                <dd>{question.answered_at ? formatDate(question.answered_at) : "Não informado"}</dd>
               </div>
               <div>
                 <dt>Aprovada por</dt>
-                <dd>{question.approved_by || "Nao informado"}</dd>
+                <dd>{question.approved_by || "Não informado"}</dd>
               </div>
             </dl>
           </div>
@@ -1095,8 +796,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
     try {
       revisedText = await requestAiRewrite(currentText, instruction);
     } catch (error) {
-      revisedText = generateMockAiRewrite(currentText, instruction, question);
-      setRewriteError("Nao foi possivel usar a IA real agora. Aplicamos uma versao mockada.");
+      setRewriteError(error.message || "Não foi possível usar a IA agora. Tente novamente em instantes.");
+      setIsRewriting(false);
+      return;
     }
 
     const revisionNumber = versions.filter((version) => version.instruction && !version.wasEdited).length + 1;
@@ -1246,7 +948,6 @@ export default function App() {
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
-  const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
   const [sendingAnswerId, setSendingAnswerId] = useState(null);
   const [generatingQuestionId, setGeneratingQuestionId] = useState(null);
@@ -1292,7 +993,7 @@ export default function App() {
           setSelectedId(data[0]?.id || null);
         }
       } catch {
-        // Keep the empty state or manually loaded demo questions.
+        setQuestionNotice("Não foi possível carregar perguntas do banco.");
       }
     }
 
@@ -1329,9 +1030,10 @@ export default function App() {
         if (!response.ok || !Array.isArray(data)) {
           throw new Error("Invalid integration health response");
         }
-        setIntegrationHealth(data);
+        const mercadoLivreHealth = data.filter((health) => health.id === "mercado-livre");
+        setIntegrationHealth(mercadoLivreHealth);
         setIntegrations((current) =>
-          applyBackendHealthToIntegrations(current, data, CURRENT_COMPANY.id)
+          applyBackendHealthToIntegrations(current, mercadoLivreHealth, CURRENT_COMPANY.id)
         );
       } catch {
         setIntegrationHealth(initialIntegrationHealth);
@@ -1350,21 +1052,7 @@ export default function App() {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
-  const connectedMarketplaces = useMemo(
-    () =>
-      integrations
-        .filter((integration) => integration.status === "Conectado")
-        .map((integration) => integration.name),
-    [integrations]
-  );
-
-  const visibleQuestions = useMemo(
-    () =>
-      questions.filter(
-        (question) => !question.is_real || connectedMarketplaces.includes(question.marketplace)
-      ),
-    [questions, connectedMarketplaces]
-  );
+  const visibleQuestions = questions;
 
   const selectedQuestion = visibleQuestions.find((question) => question.id === selectedId);
   const marketplaces = useMemo(
@@ -1400,14 +1088,9 @@ export default function App() {
     high: visibleQuestions.filter((question) => question.priority === "Alta").length,
   };
 
-  const hasConnectedIntegrations = connectedMarketplaces.length > 0;
   const hasVisibleQuestions = visibleQuestions.length > 0;
   const mercadoLivreIntegration = integrations.find((integration) => integration.id === "mercado-livre");
   const isMercadoLivreConnected = mercadoLivreIntegration?.status === "Conectado";
-  const shouldShowMercadoLivreDisconnected =
-    !isMercadoLivreConnected && !hasConnectedIntegrations && !hasVisibleQuestions;
-  const shouldShowMercadoLivreNoQuestions =
-    isMercadoLivreConnected && visibleQuestions.length === 0;
   const isPendingScreen = active === "Pendentes";
   const isReadOnlyAnsweredScreen = active === "Respondidas";
 
@@ -1438,117 +1121,41 @@ export default function App() {
     setShowConversation(false);
   }
 
-  function loadDemoQuestions() {
-    setQuestionNotice("");
-    const demoQuestionsForMvp = getDemoQuestions();
-    const demoMarketplaces = new Set(demoQuestionsForMvp.map((question) => question.marketplace));
-    setQuestions(demoQuestionsForMvp);
-    setIntegrations((current) =>
-      current.map((integration) =>
-        demoMarketplaces.has(integration.name) && integration.id !== "mercado-livre"
-          ? {
-              ...integration,
-              status: "Conectado",
-              store: integration.store || `${integration.name} Demo Store`,
-              lastSync: new Date().toISOString(),
-              token_status: "valid",
-            }
-          : integration
-      )
-    );
-    setMarketplaceFilter("Todos");
-    setStatusFilter("Todos");
-    setSelectedId(demoQuestionsForMvp[0]?.id || null);
-    setShowConversation(false);
-  }
-
-  async function requestInitialAiSuggestion(question) {
-    const response = await fetch(AI_SUGGEST_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({
-        product_title: question.product,
-        question_text: question.question,
-      }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.error || !data.suggestion) {
-      throw new Error(
-        (typeof data.detail === "string" ? data.detail : data.message) ||
-          "Não foi possível gerar sugestão inicial."
-      );
-    }
-    return data.suggestion;
-  }
-
   async function generateSuggestion(id) {
     setGeneratingQuestionId(id);
     const targetQuestion = questions.find((question) => question.id === id);
     try {
-      if (targetQuestion?.is_real) {
-        let suggestion = "";
-        try {
-          const response = await fetch(`${API_URL}/questions/generate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id }),
-          });
-          const data = await response.json().catch(() => ({}));
-          if (!response.ok || !data.ai_suggestion) {
-            throw new Error(data.detail || "Falha ao gerar sugestão.");
-          }
-          suggestion = data.ai_suggestion;
-          setQuestions((current) =>
-            current.map((question) =>
-              question.id === id
-                ? { ...question, ai_suggestion: suggestion, has_ai_suggestion: true }
-                : question
-            )
-          );
-          return suggestion;
-        } catch {
-          suggestion =
-            "Não foi possível gerar uma nova sugestão da IA agora. Edite a resposta manualmente antes de enviar.";
-          setQuestions((current) =>
-            current.map((question) =>
-              question.id === id ? { ...question, ai_suggestion: suggestion } : question
-            )
-          );
-          return suggestion;
-        }
-      }
+      if (!targetQuestion) return "";
 
-      let suggestion = "";
       try {
-        const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
-        if (response.ok) {
-          const data = await response.json();
-          suggestion = data.suggestion;
+        const response = await fetch(`${API_URL}/questions/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ai_suggestion) {
+          throw new Error(data.detail || "Falha ao gerar sugestão.");
         }
+        const suggestion = data.ai_suggestion;
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === id
+              ? { ...question, ai_suggestion: suggestion, has_ai_suggestion: true }
+              : question
+          )
+        );
+        return suggestion;
       } catch {
-        suggestion = "";
+        const suggestion =
+          "Não foi possível gerar uma nova sugestão da IA agora. Edite a resposta manualmente antes de enviar.";
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === id ? { ...question, ai_suggestion: suggestion } : question
+          )
+        );
+        return suggestion;
       }
-
-      setQuestions((current) =>
-        current.map((question) =>
-          question.id === id
-            ? {
-                ...question,
-                ai_suggestion:
-                  suggestion ||
-                  generateMockAiRewrite(question.ai_suggestion, "mais vendedor", question),
-              }
-            : question
-        )
-      );
-      return (
-        suggestion ||
-        generateMockAiRewrite(
-          questions.find((question) => question.id === id)?.ai_suggestion || "",
-          "mais vendedor",
-          questions.find((question) => question.id === id)
-        )
-      );
     } finally {
       setGeneratingQuestionId(null);
     }
@@ -1623,37 +1230,7 @@ export default function App() {
       return;
     }
 
-    let updated = null;
-    try {
-      const response = await fetch(`${API_URL}/questions/${id}/approve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answer: finalResponse }),
-      });
-      if (response.ok) {
-        updated = await response.json();
-      }
-    } catch {
-      updated = null;
-    }
-
-    setQuestions((current) =>
-      current.map((question) =>
-        question.id === id
-          ? {
-              ...question,
-              ...(updated || {}),
-              status: "Respondida",
-              ai_suggestion: approvalData.ai_suggestion || updated?.ai_suggestion || question.ai_suggestion,
-              final_response: finalResponse,
-              was_edited: Boolean(approvalData.was_edited),
-              instruction_used: approvalData.instruction_used || "",
-              answered_at: new Date().toISOString(),
-              approved_by: currentUser?.name || "Usuário",
-            }
-          : question
-      )
-    );
+    setAnswerError("Esta pergunta não possui vínculo real com o Mercado Livre.");
   }
 
   function rejectQuestion(id) {
@@ -1664,8 +1241,12 @@ export default function App() {
     );
   }
 
-  async function openConnectModal(integration) {
-    if (integration.id === "mercado-livre") {
+  function openConnectModal(integration) {
+    setPendingIntegration(integration);
+  }
+
+  async function confirmConnect(id) {
+    if (id === "mercado-livre") {
       try {
         const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
         const data = await response.json();
@@ -1673,58 +1254,14 @@ export default function App() {
           window.location.href = data.auth_url;
           return;
         }
+        setQuestionNotice("OAuth do Mercado Livre não está configurado no backend.");
       } catch {
-        // Keep mock fallback below when OAuth is unavailable.
+        setQuestionNotice("Não foi possível iniciar a conexão com o Mercado Livre.");
+      } finally {
+        setPendingIntegration(null);
       }
-    }
-    setPendingIntegration(integration);
-  }
-
-  function confirmConnect(id) {
-    if (id === "mercado-livre") {
-      setPendingIntegration(null);
       return;
     }
-
-    setIntegrations((current) =>
-      current.map((integration) =>
-        integration.id === id
-          ? {
-              ...integration,
-              status: "Conectado",
-              store: `${integration.name} Store Oficial`,
-              lastSync: new Date().toISOString(),
-            }
-          : integration
-      )
-    );
-    setPendingIntegration(null);
-  }
-
-  function disconnectIntegration(id) {
-    if (id === "mercado-livre") {
-      return;
-    }
-
-    setIntegrations((current) =>
-      current.map((integration) =>
-        integration.id === id
-          ? { ...integration, status: "Não conectado", store: "", lastSync: "" }
-          : integration
-      )
-    );
-  }
-
-  function syncIntegration(id) {
-    setSyncingIntegrationId(id);
-    window.setTimeout(() => {
-      setIntegrations((current) =>
-        current.map((integration) =>
-          integration.id === id ? { ...integration, lastSync: new Date().toISOString() } : integration
-        )
-      );
-      setSyncingIntegrationId(null);
-    }, 900);
   }
 
   async function fetchMercadoLivreQuestions() {
@@ -1822,7 +1359,7 @@ export default function App() {
             ? {
                 ...health,
                 api_status: "down",
-                last_error: "Nao foi possivel testar a conexao com a API local.",
+                last_error: "Não foi possível testar a conexão com a API local.",
               }
             : health
         )
@@ -1835,6 +1372,12 @@ export default function App() {
   const isIntegrations = active === "Integrações";
   const isSettings = active === "Configurações";
   const isAnalytics = active === "Analytics";
+  const emptyQuestionTitle =
+    active === "Pendentes"
+      ? "Nenhuma pergunta pendente encontrada."
+      : active === "Respondidas"
+        ? "Nenhuma pergunta respondida encontrada."
+        : "Nenhuma pergunta encontrada.";
 
   return (
     <div className="app-shell">
@@ -1846,11 +1389,8 @@ export default function App() {
             integrations={integrations}
             integrationHealth={integrationHealth}
             onConnect={openConnectModal}
-            onDisconnect={disconnectIntegration}
-            onSync={syncIntegration}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
             onTestHealth={testIntegrationHealth}
-            syncingIntegrationId={syncingIntegrationId}
             fetchingRealQuestions={fetchingMlQuestions}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
@@ -1884,10 +1424,6 @@ export default function App() {
               <h1>{active}</h1>
             </div>
             <div className="topbar-actions">
-              <button className="new-rule">
-                <Sparkles size={18} />
-                Nova regra IA
-              </button>
               <span className="user-badge">Admin</span>
             </div>
           </header>
@@ -1944,28 +1480,16 @@ export default function App() {
           </div>
 
           <div className="question-list">
-            {!hasConnectedIntegrations && !hasVisibleQuestions ? (
+            {!isMercadoLivreConnected && !hasVisibleQuestions ? (
               <div className="inbox-empty">
                 <div className="empty-icon">
                   <PlugZap size={30} />
                 </div>
-                <h2>
-                  {shouldShowMercadoLivreDisconnected
-                    ? "Mercado Livre não conectado"
-                    : "Nenhuma integração conectada"}
-                </h2>
-                <p>
-                  {shouldShowMercadoLivreDisconnected
-                    ? "Conecte o Mercado Livre da CPAP Express para buscar perguntas reais."
-                    : "Conecte ao menos um marketplace para carregar perguntas mockadas na Inbox."}
-                </p>
+                <h2>{emptyQuestionTitle}</h2>
+                <p>Conecte o Mercado Livre da CPAP Express para buscar perguntas reais.</p>
                 <button className="primary" onClick={() => changeSection("Integrações")}>
                   <PlugZap size={17} />
                   Abrir integrações
-                </button>
-                <button className="secondary" onClick={loadDemoQuestions}>
-                  <Inbox size={17} />
-                  Carregar perguntas demo
                 </button>
               </div>
             ) : filteredQuestions.length === 0 ? (
@@ -1973,20 +1497,8 @@ export default function App() {
                 <div className="empty-icon">
                   <Inbox size={30} />
                 </div>
-                <h2>
-                  {shouldShowMercadoLivreNoQuestions
-                    ? "Nenhuma pergunta pendente encontrada no Mercado Livre"
-                    : "Nenhuma pergunta encontrada"}
-                </h2>
-                <p>
-                  {shouldShowMercadoLivreNoQuestions
-                    ? "Clique em Buscar perguntas reais para consultar novamente ou carregue perguntas demo separadamente."
-                    : questionNotice || "Ajuste os filtros ou sincronize os marketplaces conectados."}
-                </p>
-                <button className="primary" onClick={loadDemoQuestions}>
-                  <Inbox size={17} />
-                  Carregar perguntas demo
-                </button>
+                <h2>{emptyQuestionTitle}</h2>
+                <p>{questionNotice || "Sincronize o Mercado Livre ou ajuste os filtros atuais."}</p>
               </div>
             ) : isPendingScreen ? (
               filteredQuestions.map((question) => (

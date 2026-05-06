@@ -271,7 +271,6 @@ button:disabled {
   font-size: 32px;
 }
 
-.new-rule,
 .primary,
 .secondary,
 .danger {
@@ -286,7 +285,6 @@ button:disabled {
   font-weight: 700;
 }
 
-.new-rule,
 .secondary {
   background: white;
   color: #293456;
@@ -857,8 +855,7 @@ button:disabled {
   box-shadow: 0 14px 28px rgba(22, 163, 74, 0.24);
 }
 
-.secondary:hover,
-.new-rule:hover {
+.secondary:hover {
   border-color: #b9c5da;
 }
 
@@ -1057,46 +1054,6 @@ button:disabled {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.add-marketplace {
-  margin-top: 16px;
-  border: 1px dashed rgba(79, 70, 229, 0.34);
-  border-radius: 22px;
-  padding: 20px;
-  background: rgba(255, 255, 255, 0.72);
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-}
-
-.add-icon {
-  width: 54px;
-  height: 54px;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  color: #5f3dc4;
-  background: #f0edff;
-}
-
-.add-marketplace span {
-  color: #5f3dc4;
-  font-size: 13px;
-  font-weight: 900;
-}
-
-.add-marketplace h2 {
-  margin: 4px 0;
-  font-size: 20px;
-  letter-spacing: 0;
-}
-
-.add-marketplace p {
-  margin: 0;
-  color: #647189;
-  line-height: 1.5;
 }
 
 .integration-health-section {
@@ -1357,21 +1314,11 @@ button:disabled {
     font-size: 26px;
   }
 
-  .new-rule {
-    width: 100%;
-    padding: 0;
-  }
-
-  .new-rule {
-    font-size: inherit;
-  }
-
   .metrics,
   .filters,
   .integrations-grid,
   .settings-grid,
-  .health-grid,
-  .add-marketplace {
+  .health-grid {
     grid-template-columns: 1fr;
   }
 
