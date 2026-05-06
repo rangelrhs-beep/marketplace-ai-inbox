@@ -390,7 +390,8 @@ function mapMercadoLivreQuestionToUi(question, index) {
     created_at: question.created_at || rawPayload.date_created || new Date().toISOString(),
     status: question.status || "Pendente",
     priority: "Media",
-    ai_suggestion: question.ai_suggestion || "Gerando sugestão da IA...",
+    ai_suggestion: question.ai_suggestion || "Sugestão ainda não gerada. Clique em gerar nova sugestão.",
+    has_ai_suggestion: question.has_ai_suggestion ?? Boolean(question.ai_suggestion),
     sku: rawPayload.item_id || "ML",
     price: "",
     raw_payload: rawPayload,
@@ -880,7 +881,9 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
   );
 }
 
-function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit, isApproving }) {
+function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit, onGenerate, isApproving, isGenerating }) {
+  const hasSuggestion = question.has_ai_suggestion !== false;
+
   return (
     <article className="pending-card">
       <div className="row-top">
@@ -913,6 +916,12 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
           <Sparkles size={17} />
           Editar / melhorar
         </button>
+        {!hasSuggestion ? (
+          <button className="secondary" onClick={() => onGenerate(question.id)} disabled={isGenerating}>
+            <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
+            {isGenerating ? "Gerando..." : "Gerar sugestão agora"}
+          </button>
+        ) : null}
       </div>
     </article>
   );
@@ -948,6 +957,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId) || versions[0];
   const currentText = selectedVersion?.text || "";
+  const hasSuggestion = question?.has_ai_suggestion !== false;
 
   if (!question) {
     return (
@@ -1217,7 +1227,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
             </button>
             <button className="secondary" onClick={handleGenerate} disabled={isGenerating}>
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
-              Gerar nova sugestão
+              {hasSuggestion ? "Gerar nova sugestão" : "Gerar sugestão agora"}
             </button>
             <button className="danger" onClick={() => onReject(question.id)}>
               <ThumbsDown size={17} />
@@ -1239,6 +1249,7 @@ export default function App() {
   const [syncingIntegrationId, setSyncingIntegrationId] = useState(null);
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
   const [sendingAnswerId, setSendingAnswerId] = useState(null);
+  const [generatingQuestionId, setGeneratingQuestionId] = useState(null);
   const [answerNotice, setAnswerNotice] = useState("");
   const [answerError, setAnswerError] = useState("");
   const [questionNotice, setQuestionNotice] = useState("");
@@ -1471,52 +1482,72 @@ export default function App() {
   }
 
   async function generateSuggestion(id) {
+    setGeneratingQuestionId(id);
     const targetQuestion = questions.find((question) => question.id === id);
-    if (targetQuestion?.is_real && targetQuestion.marketplace === "Mercado Livre") {
-      try {
-        const suggestion = await requestInitialAiSuggestion(targetQuestion);
-        setQuestions((current) =>
-          current.map((question) =>
-            question.id === id ? { ...question, ai_suggestion: suggestion } : question
-          )
-        );
-        return suggestion;
-      } catch {
-        return "Não foi possível gerar uma nova sugestão da IA agora. Edite a resposta manualmente antes de enviar.";
-      }
-    }
-
-    let suggestion = "";
     try {
-      const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
-      if (response.ok) {
-        const data = await response.json();
-        suggestion = data.suggestion;
+      if (targetQuestion?.is_real) {
+        let suggestion = "";
+        try {
+          const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || !data.suggestion) {
+            throw new Error(data.detail || "Falha ao gerar sugestão.");
+          }
+          suggestion = data.suggestion;
+          setQuestions((current) =>
+            current.map((question) =>
+              question.id === id
+                ? { ...question, ai_suggestion: suggestion, has_ai_suggestion: true }
+                : question
+            )
+          );
+          return suggestion;
+        } catch {
+          suggestion =
+            "Não foi possível gerar uma nova sugestão da IA agora. Edite a resposta manualmente antes de enviar.";
+          setQuestions((current) =>
+            current.map((question) =>
+              question.id === id ? { ...question, ai_suggestion: suggestion } : question
+            )
+          );
+          return suggestion;
+        }
       }
-    } catch {
-      suggestion = "";
-    }
 
-    setQuestions((current) =>
-      current.map((question) =>
-        question.id === id
-          ? {
-              ...question,
-              ai_suggestion:
-                suggestion ||
-                generateMockAiRewrite(question.ai_suggestion, "mais vendedor", question),
-            }
-          : question
-      )
-    );
-    return (
-      suggestion ||
-      generateMockAiRewrite(
-        questions.find((question) => question.id === id)?.ai_suggestion || "",
-        "mais vendedor",
-        questions.find((question) => question.id === id)
-      )
-    );
+      let suggestion = "";
+      try {
+        const response = await fetch(`${API_URL}/questions/${id}/suggest`, { method: "POST" });
+        if (response.ok) {
+          const data = await response.json();
+          suggestion = data.suggestion;
+        }
+      } catch {
+        suggestion = "";
+      }
+
+      setQuestions((current) =>
+        current.map((question) =>
+          question.id === id
+            ? {
+                ...question,
+                ai_suggestion:
+                  suggestion ||
+                  generateMockAiRewrite(question.ai_suggestion, "mais vendedor", question),
+              }
+            : question
+        )
+      );
+      return (
+        suggestion ||
+        generateMockAiRewrite(
+          questions.find((question) => question.id === id)?.ai_suggestion || "",
+          "mais vendedor",
+          questions.find((question) => question.id === id)
+        )
+      );
+    } finally {
+      setGeneratingQuestionId(null);
+    }
   }
 
   async function approveQuestion(id, approval) {
@@ -1963,7 +1994,9 @@ export default function App() {
                   sourceColor={getMarketplaceColor(question.marketplace, integrations)}
                   onApprove={approveQuestion}
                   onEdit={openEditorForQuestion}
+                  onGenerate={generateSuggestion}
                   isApproving={sendingAnswerId === question.id}
+                  isGenerating={generatingQuestionId === question.id}
                 />
               ))
             ) : (
