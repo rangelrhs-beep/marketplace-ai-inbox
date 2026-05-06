@@ -98,12 +98,17 @@ const priorityClass = {
 };
 
 function formatDate(value) {
+  if (!value) return "";
+  const rawValue = String(value);
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(rawValue);
+  const date = new Date(hasTimezone ? rawValue : `${rawValue}Z`);
   return new Intl.DateTimeFormat("pt-BR", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value));
+    timeZone: "America/Sao_Paulo",
+  }).format(date);
 }
 
 function getMarketplaceShortName(marketplace, integrations) {
@@ -979,6 +984,21 @@ export default function App() {
     }));
   }
 
+  async function loadQuestionsFromDatabase() {
+    const response = await fetch(`${API_URL}/questions`);
+    const data = await response.json();
+    if (!response.ok || !Array.isArray(data)) {
+      throw new Error("Não foi possível carregar perguntas do banco.");
+    }
+    setQuestions(data);
+    setSelectedId((current) =>
+      current && data.some((question) => question.id === current)
+        ? current
+        : data[0]?.id || null
+    );
+    return data;
+  }
+
   useEffect(() => {
     setSelectedId((current) => current || questions[0]?.id || null);
   }, [questions]);
@@ -986,14 +1006,9 @@ export default function App() {
   useEffect(() => {
     async function loadPersistedQuestions() {
       try {
-        const response = await fetch(`${API_URL}/questions`);
-        const data = await response.json();
-        if (response.ok && Array.isArray(data)) {
-          setQuestions(data);
-          setSelectedId(data[0]?.id || null);
-        }
-      } catch {
-        setQuestionNotice("Não foi possível carregar perguntas do banco.");
+        await loadQuestionsFromDatabase();
+      } catch (error) {
+        setQuestionNotice(error.message || "Não foi possível carregar perguntas do banco.");
       }
     }
 
@@ -1052,6 +1067,17 @@ export default function App() {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
+  useEffect(() => {
+    function handleBrowserBack() {
+      if (showConversation) {
+        setShowConversation(false);
+      }
+    }
+
+    window.addEventListener("popstate", handleBrowserBack);
+    return () => window.removeEventListener("popstate", handleBrowserBack);
+  }, [showConversation]);
+
   const visibleQuestions = questions;
 
   const selectedQuestion = visibleQuestions.find((question) => question.id === selectedId);
@@ -1106,14 +1132,28 @@ export default function App() {
   }, [marketplaceFilter, marketplaces, selectedId, visibleQuestions]);
 
   function selectQuestion(id) {
+    if (!(showConversation && selectedId === id)) {
+      window.history.pushState({ marketplaceAiView: "question", questionId: id }, "");
+    }
     setQuestionNotice("");
     setSelectedId(id);
     setShowConversation(true);
   }
 
   function openEditorForQuestion(id) {
+    if (!(showConversation && selectedId === id)) {
+      window.history.pushState({ marketplaceAiView: "question", questionId: id }, "");
+    }
     setSelectedId(id);
     setShowConversation(true);
+  }
+
+  function closeConversation() {
+    if (window.history.state?.marketplaceAiView === "question") {
+      window.history.back();
+      return;
+    }
+    setShowConversation(false);
   }
 
   function changeSection(section) {
@@ -1204,24 +1244,36 @@ export default function App() {
           );
         }
 
+        const updatedQuestion = data.question || data;
         setQuestions((current) =>
           current.map((question) =>
             question.id === id
               ? {
                   ...question,
+                  ...updatedQuestion,
                   status: "Respondida",
-                  ai_suggestion: approvalData.ai_suggestion || question.ai_suggestion,
-                  final_response: finalResponse,
-                  was_edited: Boolean(approvalData.was_edited),
-                  instruction_used: approvalData.instruction_used || "",
-                  answered_at: new Date().toISOString(),
-                  approved_by: currentUser?.name || "Usuário",
+                  ai_suggestion:
+                    updatedQuestion.ai_suggestion ||
+                    approvalData.ai_suggestion ||
+                    question.ai_suggestion,
+                  final_response:
+                    updatedQuestion.final_response ||
+                    updatedQuestion.final_answer ||
+                    finalResponse,
+                  was_edited: Boolean(updatedQuestion.was_edited ?? approvalData.was_edited),
+                  instruction_used: updatedQuestion.instruction_used || approvalData.instruction_used || "",
+                  answered_at: updatedQuestion.answered_at || new Date().toISOString(),
+                  approved_by: updatedQuestion.approved_by || currentUser?.name || "Usuário",
                   ml_answer_response: data.raw_response,
                 }
               : question
           )
         );
-        setAnswerNotice("Resposta enviada ao Mercado Livre");
+        setAnswerNotice(
+          data.already_answered
+            ? data.message || "Essa pergunta já foi respondida no Mercado Livre."
+            : "Resposta enviada ao Mercado Livre"
+        );
       } catch (error) {
         setAnswerError(error.message || "Não foi possível enviar a resposta ao Mercado Livre.");
       } finally {
@@ -1302,9 +1354,8 @@ export default function App() {
         return;
       }
 
-      const realQuestions = Array.isArray(data) ? data.map(mapMercadoLivreQuestionToUi) : [];
-      setQuestions(realQuestions);
-      setSelectedId(realQuestions[0]?.id || null);
+      const syncedQuestions = Array.isArray(data) ? data.map(mapMercadoLivreQuestionToUi) : [];
+      const databaseQuestions = await loadQuestionsFromDatabase();
       setShowConversation(false);
       setMarketplaceFilter("Todos");
       setStatusFilter("Todos");
@@ -1319,15 +1370,13 @@ export default function App() {
                 token_status: "valid",
               }
             : integration
-        )
+          )
       );
 
-      if (realQuestions.length === 0) {
+      if (syncedQuestions.length === 0 && databaseQuestions.length === 0) {
         setQuestionNotice("Nenhuma pergunta pendente encontrada no Mercado Livre.");
       }
     } catch {
-      setQuestions([]);
-      setSelectedId(null);
       setShowConversation(false);
       setQuestionNotice("Não foi possível buscar perguntas do Mercado Livre.");
     } finally {
@@ -1532,7 +1581,7 @@ export default function App() {
             <div className={`conversation-panel ${showConversation ? "show-mobile" : ""}`}>
               <Conversation
                 question={selectedQuestion}
-                onBack={() => setShowConversation(false)}
+                onBack={closeConversation}
                 onApprove={approveQuestion}
                 onGenerate={generateSuggestion}
                 onReject={rejectQuestion}
