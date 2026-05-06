@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -83,7 +83,10 @@ class AiSuggestion(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     question_id = Column(Integer, ForeignKey("questions.id"), nullable=False, unique=True)
     original_suggestion = Column(Text, nullable=False, default="")
+    suggestion_text = Column(Text, nullable=True)
+    edited_text = Column(Text, nullable=True)
     final_response = Column(Text, nullable=True)
+    final_answer = Column(Text, nullable=True)
     was_edited = Column(Boolean, nullable=False, default=False)
     instruction_used = Column(Text, nullable=True)
     approved_by = Column(String(255), nullable=True)
@@ -99,7 +102,7 @@ class CompanySettings(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     company_id = Column(String(64), ForeignKey("companies.id"), nullable=False, unique=True)
-    greeting = Column(Text, nullable=False, default="Olá!")
+    greeting = Column(Text, nullable=False, default="Olá! Obrigado pela pergunta.")
     closing = Column(Text, nullable=False, default="Ficamos à disposição.")
     tone = Column(String(255), nullable=False, default="Técnico, claro e confiável")
     custom_prompt = Column(Text, nullable=True)
@@ -107,3 +110,4 @@ class CompanySettings(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     company = relationship("Company", back_populates="settings")
+

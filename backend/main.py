@@ -22,6 +22,7 @@ from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, CompanySettings, Integration, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
@@ -30,33 +31,92 @@ logger = logging.getLogger(__name__)
 ML_TOKEN_PATH = Path(__file__).with_name("mercadolivre_tokens.json")
 ML_AUTH_BASE_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE_URL = "https://api.mercadolibre.com"
+DATABASE_READY = False
 
 
 def init_database() -> None:
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+    global DATABASE_READY
     try:
-        seed_defaults(db)
-        integration = get_ml_integration(db)
-        if not integration.access_token and ML_TOKEN_PATH.exists():
-            try:
-                legacy_tokens = json.loads(ML_TOKEN_PATH.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                legacy_tokens = {}
-            if legacy_tokens.get("access_token"):
-                integration.access_token = legacy_tokens.get("access_token")
-                integration.refresh_token = legacy_tokens.get("refresh_token")
-                integration.seller_id = str(legacy_tokens.get("seller_id") or legacy_tokens.get("user_id") or "")
-                expires_at = legacy_tokens.get("expires_at")
-                integration.expires_at = (
-                    datetime.fromtimestamp(int(expires_at)) if expires_at else None
+        Base.metadata.create_all(bind=engine)
+        ensure_database_columns()
+        db = SessionLocal()
+        try:
+            seed_defaults(db)
+            integration = get_ml_integration(db)
+            if not integration.access_token and ML_TOKEN_PATH.exists():
+                try:
+                    legacy_tokens = json.loads(ML_TOKEN_PATH.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    legacy_tokens = {}
+                if legacy_tokens.get("access_token"):
+                    integration.access_token = legacy_tokens.get("access_token")
+                    integration.refresh_token = legacy_tokens.get("refresh_token")
+                    integration.seller_id = str(legacy_tokens.get("seller_id") or legacy_tokens.get("user_id") or "")
+                    expires_at = legacy_tokens.get("expires_at")
+                    integration.expires_at = (
+                        datetime.fromtimestamp(int(expires_at)) if expires_at else None
+                    )
+                    integration.token_status = "valid"
+                    integration.last_sync = datetime.utcnow()
+                    integration.updated_at = datetime.utcnow()
+                    db.commit()
+        finally:
+            db.close()
+        DATABASE_READY = True
+    except Exception:
+        DATABASE_READY = False
+        logger.exception("Database initialization failed. API will keep running with frontend/demo fallbacks.")
+
+
+def ensure_database_columns() -> None:
+    columns = {
+        "suggestion_text": "TEXT",
+        "edited_text": "TEXT",
+        "final_answer": "TEXT",
+    }
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            for column, column_type in columns.items():
+                connection.execute(
+                    text(f"ALTER TABLE ai_suggestions ADD COLUMN IF NOT EXISTS {column} {column_type}")
                 )
-                integration.token_status = "valid"
-                integration.last_sync = datetime.utcnow()
-                integration.updated_at = datetime.utcnow()
-                db.commit()
-    finally:
-        db.close()
+        elif engine.dialect.name == "sqlite":
+            existing = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(ai_suggestions)")).fetchall()
+            }
+            for column, column_type in columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE ai_suggestions ADD COLUMN {column} {column_type}"))
+
+
+def normalize_db_status(status: str | None) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized in {"respondida", "respondido", "answered", "responded", "closed"}:
+        return "responded"
+    return "pending"
+
+
+def status_to_ui(status: str | None) -> str:
+    return "Respondida" if normalize_db_status(status) == "responded" else "Pendente"
+
+
+def get_suggestion_text(suggestion: AiSuggestion | None) -> str:
+    if not suggestion:
+        return ""
+    return (
+        suggestion.suggestion_text
+        or suggestion.final_answer
+        or suggestion.final_response
+        or suggestion.original_suggestion
+        or ""
+    )
+
+
+def get_final_answer(suggestion: AiSuggestion | None) -> str:
+    if not suggestion:
+        return ""
+    return suggestion.final_answer or suggestion.final_response or suggestion.edited_text or ""
 
 
 def parse_datetime(value: Any) -> datetime | None:
@@ -110,11 +170,10 @@ def get_ml_integration(db: Session) -> Integration:
 
 def question_to_api(question: QuestionRecord) -> dict[str, Any]:
     suggestion = question.ai_suggestion
-    suggestion_text = ""
-    if suggestion:
-        suggestion_text = suggestion.final_response or suggestion.original_suggestion or ""
+    suggestion_text = get_suggestion_text(suggestion)
     if not suggestion_text:
         suggestion_text = "Sugestão ainda não gerada. Clique em gerar nova sugestão."
+    final_answer = get_final_answer(suggestion)
     return {
         "id": question.id,
         "company_id": question.company_id,
@@ -127,11 +186,15 @@ def question_to_api(question: QuestionRecord) -> dict[str, Any]:
         "question": question.question_text,
         "question_text": question.question_text,
         "created_at": (question.created_at or question.created_in_app_at).isoformat(),
-        "status": question.status,
+        "status": status_to_ui(question.status),
+        "db_status": normalize_db_status(question.status),
         "priority": "Media",
         "ai_suggestion": suggestion_text,
-        "final_response": suggestion.final_response if suggestion else "",
-        "has_ai_suggestion": bool(suggestion and (suggestion.original_suggestion or suggestion.final_response)),
+        "suggestion_text": suggestion.suggestion_text if suggestion else "",
+        "edited_text": suggestion.edited_text if suggestion else "",
+        "final_answer": final_answer,
+        "final_response": final_answer,
+        "has_ai_suggestion": bool(get_suggestion_text(suggestion)),
         "was_edited": suggestion.was_edited if suggestion else False,
         "instruction_used": suggestion.instruction_used if suggestion else "",
         "answered_at": question.answered_at.isoformat() if question.answered_at else None,
@@ -389,7 +452,7 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
 
     question.product_title = normalized.get("product_title") or "Produto Mercado Livre"
     question.question_text = normalized.get("question_text") or ""
-    question.status = normalized.get("status") or "Pendente"
+    question.status = normalize_db_status(normalized.get("status"))
     question.created_at = parse_datetime(normalized.get("created_at"))
     question.raw_payload = normalized.get("raw_payload") or {}
     question.updated_at = datetime.utcnow()
@@ -415,13 +478,17 @@ def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
         )
     if existing:
         existing.original_suggestion = suggestion_text
+        existing.suggestion_text = suggestion_text
         existing.final_response = suggestion_text
+        existing.final_answer = suggestion_text
         existing.updated_at = datetime.utcnow()
     else:
         suggestion = AiSuggestion(
             question=question,
             original_suggestion=suggestion_text,
+            suggestion_text=suggestion_text,
             final_response=suggestion_text,
+            final_answer=suggestion_text,
         )
         db.add(suggestion)
         question.ai_suggestion = suggestion
@@ -966,14 +1033,18 @@ def answer_mercadolivre_question(
         .first()
     )
     if question:
-        question.status = "Respondida"
+        question.status = "responded"
         question.answered_at = now
         question.updated_at = now
         if question.ai_suggestion:
             suggestion = question.ai_suggestion
             if payload.original_suggestion:
                 suggestion.original_suggestion = payload.original_suggestion
+                suggestion.suggestion_text = suggestion.suggestion_text or payload.original_suggestion
+            if payload.was_edited:
+                suggestion.edited_text = answer
             suggestion.final_response = answer
+            suggestion.final_answer = answer
             suggestion.was_edited = payload.was_edited
             suggestion.instruction_used = payload.instruction_used
             suggestion.approved_by = "Admin"
@@ -984,7 +1055,10 @@ def answer_mercadolivre_question(
                 AiSuggestion(
                     question=question,
                     original_suggestion=payload.original_suggestion or answer,
+                    suggestion_text=payload.original_suggestion or answer,
+                    edited_text=answer if payload.was_edited else None,
                     final_response=answer,
+                    final_answer=answer,
                     was_edited=payload.was_edited,
                     instruction_used=payload.instruction_used,
                     approved_by="Admin",
@@ -1165,8 +1239,74 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
     )
     if status:
-        query = query.filter(QuestionRecord.status == status)
+        query = query.filter(QuestionRecord.status == normalize_db_status(status))
     return [question_to_api(question) for question in query.all()]
+
+
+@app.post("/questions/generate")
+def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(get_db)):
+    question_id = payload.get("question_id") or payload.get("id")
+    external_id = payload.get("external_id")
+    question = None
+    if question_id:
+        question = db.get(QuestionRecord, int(question_id))
+    if not question and external_id:
+        question = (
+            db.query(QuestionRecord)
+            .filter(
+                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.provider == DEFAULT_PROVIDER,
+                QuestionRecord.external_id == str(external_id),
+            )
+            .first()
+        )
+    if not question:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
+
+    if question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
+        return question_to_api(question)
+
+    ensure_initial_suggestion(db, question)
+    db.commit()
+    db.refresh(question)
+    return question_to_api(question)
+
+
+@app.post("/questions/answer")
+def answer_question(payload: dict[str, Any], db: Session = Depends(get_db)):
+    question_id = payload.get("question_id") or payload.get("id")
+    external_id = payload.get("external_id")
+    answer = (payload.get("answer") or payload.get("final_answer") or payload.get("final_response") or "").strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="Missing required field: answer")
+
+    question = None
+    if question_id:
+        question = db.get(QuestionRecord, int(question_id))
+    if not question and external_id:
+        question = (
+            db.query(QuestionRecord)
+            .filter(
+                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.provider == DEFAULT_PROVIDER,
+                QuestionRecord.external_id == str(external_id),
+            )
+            .first()
+        )
+    if not question:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
+
+    result = answer_mercadolivre_question(
+        question.external_id,
+        MercadoLivreAnswerPayload(
+            answer=answer,
+            original_suggestion=payload.get("suggestion_text") or payload.get("original_suggestion") or "",
+            was_edited=bool(payload.get("was_edited")),
+            instruction_used=payload.get("instruction_used") or "",
+        ),
+        db,
+    )
+    return result.get("question") or question_to_api(question)
 
 
 @app.get("/questions/{question_id}")
@@ -1199,14 +1339,18 @@ def suggest_answer(question_id: int, db: Session = Depends(get_db)):
         )
     if question.ai_suggestion:
         question.ai_suggestion.original_suggestion = suggestion_text
+        question.ai_suggestion.suggestion_text = suggestion_text
         question.ai_suggestion.final_response = suggestion_text
+        question.ai_suggestion.final_answer = suggestion_text
         question.ai_suggestion.updated_at = datetime.utcnow()
     else:
         db.add(
             AiSuggestion(
                 question=question,
                 original_suggestion=suggestion_text,
+                suggestion_text=suggestion_text,
                 final_response=suggestion_text,
+                final_answer=suggestion_text,
             )
         )
     db.commit()
@@ -1222,11 +1366,13 @@ def approve_question(question_id: int, payload: ApprovePayload, db: Session = De
         question_mock.status = Status.answered
         return question_mock
     now = datetime.utcnow()
-    question.status = "Respondida"
+    question.status = "responded"
     question.answered_at = now
     if question.ai_suggestion:
         suggestion = question.ai_suggestion
+        suggestion.edited_text = payload.answer if payload.answer != get_suggestion_text(suggestion) else suggestion.edited_text
         suggestion.final_response = payload.answer
+        suggestion.final_answer = payload.answer
         suggestion.approved_by = "Admin"
         suggestion.approved_at = now
         suggestion.updated_at = now
@@ -1235,7 +1381,9 @@ def approve_question(question_id: int, payload: ApprovePayload, db: Session = De
             AiSuggestion(
                 question=question,
                 original_suggestion=payload.answer,
+                suggestion_text=payload.answer,
                 final_response=payload.answer,
+                final_answer=payload.answer,
                 approved_by="Admin",
                 approved_at=now,
             )
