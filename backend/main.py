@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+﻿from datetime import datetime, timedelta
 from enum import Enum
 import json
 import logging
@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
@@ -19,6 +19,10 @@ from pydantic import BaseModel, Field
 from integrations.errors import ApiFailureError, ConnectorError, ConnectorErrorCode, serialize_connector_error
 from integrations.models import ConnectionTestResult, IntegrationHealth, NormalizedQuestion
 from integrations.registry import services as integration_services
+from database import Base, SessionLocal, engine, get_db
+from db_models import AiSuggestion, CompanySettings, Integration, QuestionRecord
+from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
+from sqlalchemy.orm import Session
 
 
 load_dotenv()
@@ -26,6 +30,113 @@ logger = logging.getLogger(__name__)
 ML_TOKEN_PATH = Path(__file__).with_name("mercadolivre_tokens.json")
 ML_AUTH_BASE_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE_URL = "https://api.mercadolibre.com"
+
+
+def init_database() -> None:
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        seed_defaults(db)
+        integration = get_ml_integration(db)
+        if not integration.access_token and ML_TOKEN_PATH.exists():
+            try:
+                legacy_tokens = json.loads(ML_TOKEN_PATH.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                legacy_tokens = {}
+            if legacy_tokens.get("access_token"):
+                integration.access_token = legacy_tokens.get("access_token")
+                integration.refresh_token = legacy_tokens.get("refresh_token")
+                integration.seller_id = str(legacy_tokens.get("seller_id") or legacy_tokens.get("user_id") or "")
+                expires_at = legacy_tokens.get("expires_at")
+                integration.expires_at = (
+                    datetime.fromtimestamp(int(expires_at)) if expires_at else None
+                )
+                integration.token_status = "valid"
+                integration.last_sync = datetime.utcnow()
+                integration.updated_at = datetime.utcnow()
+                db.commit()
+    finally:
+        db.close()
+
+
+def parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def get_default_settings(db: Session) -> CompanySettings:
+    settings = (
+        db.query(CompanySettings)
+        .filter(CompanySettings.company_id == DEFAULT_COMPANY_ID)
+        .first()
+    )
+    if settings:
+        return settings
+    seed_defaults(db)
+    return (
+        db.query(CompanySettings)
+        .filter(CompanySettings.company_id == DEFAULT_COMPANY_ID)
+        .one()
+    )
+
+
+def get_ml_integration(db: Session) -> Integration:
+    integration = (
+        db.query(Integration)
+        .filter(
+            Integration.company_id == DEFAULT_COMPANY_ID,
+            Integration.provider == DEFAULT_PROVIDER,
+        )
+        .first()
+    )
+    if integration:
+        return integration
+    seed_defaults(db)
+    return (
+        db.query(Integration)
+        .filter(
+            Integration.company_id == DEFAULT_COMPANY_ID,
+            Integration.provider == DEFAULT_PROVIDER,
+        )
+        .one()
+    )
+
+
+def question_to_api(question: QuestionRecord) -> dict[str, Any]:
+    suggestion = question.ai_suggestion
+    return {
+        "id": question.id,
+        "company_id": question.company_id,
+        "marketplace": "Mercado Livre" if question.provider == DEFAULT_PROVIDER else question.provider,
+        "provider": question.provider,
+        "external_id": question.external_id,
+        "product": question.product_title,
+        "product_title": question.product_title,
+        "customer_name": "Cliente Mercado Livre",
+        "question": question.question_text,
+        "question_text": question.question_text,
+        "created_at": (question.created_at or question.created_in_app_at).isoformat(),
+        "status": question.status,
+        "priority": "Media",
+        "ai_suggestion": suggestion.original_suggestion if suggestion else "",
+        "final_response": suggestion.final_response if suggestion else "",
+        "was_edited": suggestion.was_edited if suggestion else False,
+        "instruction_used": suggestion.instruction_used if suggestion else "",
+        "answered_at": question.answered_at.isoformat() if question.answered_at else None,
+        "approved_by": suggestion.approved_by if suggestion else None,
+        "approved_at": suggestion.approved_at.isoformat() if suggestion and suggestion.approved_at else None,
+        "sku": (question.raw_payload or {}).get("item_id") or "ML",
+        "price": "",
+        "raw_payload": question.raw_payload or {},
+        "is_real": True,
+        "channel": "mercado_livre",
+    }
 
 
 def get_cors_origins() -> list[str]:
@@ -50,26 +161,64 @@ def ml_is_configured() -> bool:
 
 
 def read_ml_tokens() -> dict[str, Any]:
-    if not ML_TOKEN_PATH.exists():
-        return {}
+    db = SessionLocal()
     try:
-        return json.loads(ML_TOKEN_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+        integration = get_ml_integration(db)
+        if not integration.access_token:
+            return {}
+        expires_at = int(integration.expires_at.timestamp()) if integration.expires_at else 0
+        return {
+            "access_token": integration.access_token,
+            "refresh_token": integration.refresh_token,
+            "seller_id": integration.seller_id,
+            "user_id": integration.seller_id,
+            "expires_at": expires_at,
+            "token_status": integration.token_status,
+            "connected_at": integration.created_at.isoformat() if integration.created_at else None,
+            "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
+        }
+    finally:
+        db.close()
 
 
 def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
-    token_data["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 0))
-    token_data["updated_at"] = datetime.utcnow().isoformat()
-    token_data.setdefault("connected_at", token_data["updated_at"])
-    ML_TOKEN_PATH.write_text(json.dumps(token_data, indent=2), encoding="utf-8")
-    return token_data
+    expires_at = datetime.utcnow() + timedelta(seconds=int(token_data.get("expires_in", 0)))
+    db = SessionLocal()
+    try:
+        integration = get_ml_integration(db)
+        integration.access_token = token_data.get("access_token")
+        integration.refresh_token = token_data.get("refresh_token") or integration.refresh_token
+        integration.seller_id = str(token_data.get("user_id") or token_data.get("seller_id") or integration.seller_id or "")
+        integration.expires_at = expires_at
+        integration.token_status = "valid"
+        integration.last_sync = datetime.utcnow()
+        integration.updated_at = datetime.utcnow()
+        db.commit()
+        token_data["expires_at"] = int(expires_at.timestamp())
+        return token_data
+    finally:
+        db.close()
 
 
 def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        integration = get_ml_integration(db)
+        if "access_token" in updates:
+            integration.access_token = updates["access_token"]
+        if "refresh_token" in updates:
+            integration.refresh_token = updates["refresh_token"]
+        if "seller_id" in updates or "user_id" in updates:
+            integration.seller_id = str(updates.get("seller_id") or updates.get("user_id") or "")
+        if "expires_at" in updates:
+            integration.expires_at = datetime.fromtimestamp(int(updates["expires_at"]))
+        integration.token_status = updates.get("token_status") or integration.token_status or "valid"
+        integration.updated_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
     tokens = read_ml_tokens()
     tokens.update(updates)
-    ML_TOKEN_PATH.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
     return tokens
 
 
@@ -210,6 +359,61 @@ def normalize_ml_question(payload: dict[str, Any], access_token: str) -> dict[st
     }
 
 
+def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecord:
+    external_id = str(normalized.get("external_id") or "")
+    if not external_id:
+        raise HTTPException(status_code=502, detail="Mercado Livre question missing external_id")
+
+    question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == external_id,
+        )
+        .first()
+    )
+    if not question:
+        question = QuestionRecord(
+            company_id=DEFAULT_COMPANY_ID,
+            provider=DEFAULT_PROVIDER,
+            external_id=external_id,
+        )
+        db.add(question)
+
+    question.product_title = normalized.get("product_title") or "Produto Mercado Livre"
+    question.question_text = normalized.get("question_text") or ""
+    question.status = normalized.get("status") or "Pendente"
+    question.created_at = parse_datetime(normalized.get("created_at"))
+    question.raw_payload = normalized.get("raw_payload") or {}
+    question.updated_at = datetime.utcnow()
+    return question
+
+
+def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
+    if question.ai_suggestion:
+        return
+    settings = get_default_settings(db)
+    try:
+        suggestion_text = generate_openai_initial_suggestion(
+            product_title=question.product_title,
+            question_text=question.question_text,
+            settings=settings,
+        )
+    except Exception as error:
+        logger.exception("Failed to generate initial AI suggestion for question %s", question.external_id)
+        suggestion_text = (
+            "Não foi possível gerar a sugestão inicial da IA. "
+            "Revise a pergunta e escreva uma resposta antes de enviar."
+        )
+    db.add(
+        AiSuggestion(
+            question=question,
+            original_suggestion=suggestion_text,
+        )
+    )
+
+
 def extract_ml_questions(raw_response: Any) -> list[dict[str, Any]]:
     if isinstance(raw_response, list):
         return raw_response
@@ -284,6 +488,16 @@ class AiSuggestionPayload(BaseModel):
 
 class MercadoLivreAnswerPayload(BaseModel):
     answer: str
+    original_suggestion: str = ""
+    was_edited: bool = False
+    instruction_used: str = ""
+
+
+class CompanySettingsPayload(BaseModel):
+    greeting: str = ""
+    closing: str = ""
+    tone: str = ""
+    custom_prompt: str = ""
 
 
 app = FastAPI(title="Marketplace AI Inbox API", version="0.1.0")
@@ -295,6 +509,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def startup_event():
+    init_database()
 
 
 def raise_connector_http_error(error: ConnectorError) -> None:
@@ -495,7 +714,11 @@ def generate_openai_rewrite(question: str, original_response: str, instruction: 
     return revised_response
 
 
-def generate_openai_initial_suggestion(product_title: str, question_text: str) -> str:
+def generate_openai_initial_suggestion(
+    product_title: str,
+    question_text: str,
+    settings: CompanySettings | None = None,
+) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not configured")
@@ -504,17 +727,24 @@ def generate_openai_initial_suggestion(product_title: str, question_text: str) -
 
     client = OpenAI(api_key=api_key)
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    greeting = settings.greeting if settings else "Olá!"
+    closing = settings.closing if settings else "Ficamos à disposição."
+    tone = settings.tone if settings else "Técnico, claro e confiável"
+    custom_prompt = settings.custom_prompt if settings else ""
     prompt = (
         "Você é um vendedor profissional de e-commerce respondendo perguntas no Mercado Livre.\n"
         "Crie uma resposta inicial pronta para envio.\n\n"
         "Regras:\n"
         "- Responda em português do Brasil.\n"
-        "- Seja educado, direto, útil e levemente persuasivo.\n"
+        f"- Tom desejado: {tone}.\n"
+        f"- Se fizer sentido, use esta saudação curta: {greeting}\n"
+        f"- Se fizer sentido, encerre com: {closing}\n"
         "- Comece com a resposta curta e depois detalhe somente o necessário.\n"
         "- Não invente informações sobre estoque, prazo, garantia, compatibilidade ou características.\n"
         "- Se os dados forem insuficientes, diga que o cliente pode conferir a variação do anúncio ou enviar nova mensagem.\n"
         "- Não mencione IA, sistema, API ou instruções internas.\n"
         "- Máximo de 5 linhas.\n\n"
+        f"Prompt personalizado da empresa: {custom_prompt or 'Nenhum'}\n\n"
         f"Produto: {product_title or 'Produto não informado'}\n"
         f"Pergunta do cliente: {question_text}"
     )
@@ -535,7 +765,7 @@ def ai_health():
 
 
 @app.post("/ai/suggest")
-def suggest_ai_response(payload: AiSuggestionPayload):
+def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_db)):
     question_text = payload.question_text.strip()
     if not question_text:
         raise HTTPException(status_code=400, detail="Missing required field: question_text")
@@ -544,6 +774,7 @@ def suggest_ai_response(payload: AiSuggestionPayload):
         suggestion = generate_openai_initial_suggestion(
             product_title=payload.product_title.strip(),
             question_text=question_text,
+            settings=get_default_settings(db),
         )
         return {"suggestion": suggestion}
     except Exception as error:
@@ -611,7 +842,7 @@ def mercadolivre_callback(code: str = Query(...)):
 
 
 @app.get("/integrations/mercadolivre/questions")
-def mercadolivre_questions():
+def mercadolivre_questions(db: Session = Depends(get_db)):
     saved_tokens = read_ml_tokens()
     if not saved_tokens.get("access_token"):
         raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
@@ -625,10 +856,17 @@ def mercadolivre_questions():
         )
         logger.info("Mercado Livre questions raw response: %s", raw_response)
         print(f"Mercado Livre questions raw response: {raw_response}")
-        return [
-            normalize_ml_question(question_payload, tokens["access_token"])
-            for question_payload in extract_ml_questions(raw_response)
-        ]
+        saved_questions = []
+        for question_payload in extract_ml_questions(raw_response):
+            normalized = normalize_ml_question(question_payload, tokens["access_token"])
+            question = upsert_ml_question(db, normalized)
+            ensure_initial_suggestion(db, question)
+            saved_questions.append(question)
+        integration = get_ml_integration(db)
+        integration.last_sync = datetime.utcnow()
+        integration.token_status = "valid"
+        db.commit()
+        return [question_to_api(question) for question in saved_questions]
     except HTTPException as error:
         if error.status_code == 401:
             tokens = refresh_ml_token_if_needed(force=True)
@@ -639,10 +877,17 @@ def mercadolivre_questions():
             )
             logger.info("Mercado Livre questions raw response after token refresh: %s", raw_response)
             print(f"Mercado Livre questions raw response after token refresh: {raw_response}")
-            return [
-                normalize_ml_question(question_payload, tokens["access_token"])
-                for question_payload in extract_ml_questions(raw_response)
-            ]
+            saved_questions = []
+            for question_payload in extract_ml_questions(raw_response):
+                normalized = normalize_ml_question(question_payload, tokens["access_token"])
+                question = upsert_ml_question(db, normalized)
+                ensure_initial_suggestion(db, question)
+                saved_questions.append(question)
+            integration = get_ml_integration(db)
+            integration.last_sync = datetime.utcnow()
+            integration.token_status = "valid"
+            db.commit()
+            return [question_to_api(question) for question in saved_questions]
         if error.status_code == 403:
             raise HTTPException(
                 status_code=403,
@@ -668,7 +913,11 @@ def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str
 
 
 @app.post("/integrations/mercadolivre/questions/{question_id}/answer")
-def answer_mercadolivre_question(question_id: str, payload: MercadoLivreAnswerPayload):
+def answer_mercadolivre_question(
+    question_id: str,
+    payload: MercadoLivreAnswerPayload,
+    db: Session = Depends(get_db),
+):
     answer = payload.answer.strip()
     if not answer:
         raise HTTPException(status_code=400, detail="Missing required field: answer")
@@ -692,10 +941,49 @@ def answer_mercadolivre_question(question_id: str, payload: MercadoLivreAnswerPa
         else:
             raise
 
+    now = datetime.utcnow()
+    question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+        )
+        .first()
+    )
+    if question:
+        question.status = "Respondida"
+        question.answered_at = now
+        question.updated_at = now
+        if question.ai_suggestion:
+            suggestion = question.ai_suggestion
+            if payload.original_suggestion:
+                suggestion.original_suggestion = payload.original_suggestion
+            suggestion.final_response = answer
+            suggestion.was_edited = payload.was_edited
+            suggestion.instruction_used = payload.instruction_used
+            suggestion.approved_by = "Admin"
+            suggestion.approved_at = now
+            suggestion.updated_at = now
+        else:
+            db.add(
+                AiSuggestion(
+                    question=question,
+                    original_suggestion=payload.original_suggestion or answer,
+                    final_response=answer,
+                    was_edited=payload.was_edited,
+                    instruction_used=payload.instruction_used,
+                    approved_by="Admin",
+                    approved_at=now,
+                )
+            )
+        db.commit()
+
     return {
         "sent": True,
         "message": "Resposta enviada ao Mercado Livre",
         "raw_response": result["body"],
+        "question": question_to_api(question) if question else None,
     }
 
 
@@ -729,24 +1017,29 @@ def rewrite_ai_response(payload: dict[str, Any]):
 
 
 @app.get("/integrations/health", response_model=List[IntegrationHealth])
-def list_integrations_health():
+def list_integrations_health(db: Session = Depends(get_db)):
     health_items = []
     for service in integration_services.values():
         try:
             if service.client.id == "mercado-livre":
-                tokens = read_ml_tokens()
-                has_access_token = bool(tokens.get("access_token"))
-                expires_at = int(tokens.get("expires_at", 0) or 0)
+                integration = get_ml_integration(db)
+                has_access_token = bool(integration.access_token)
                 token_status = "missing"
                 if has_access_token:
-                    token_status = "expired" if expires_at <= int(time.time()) else "valid"
+                    token_status = (
+                        "expired"
+                        if integration.expires_at and integration.expires_at <= datetime.utcnow()
+                        else "valid"
+                    )
+                    integration.token_status = token_status
+                    db.commit()
                 health_items.append(
                     IntegrationHealth(
                         id=service.client.id,
                         channel=service.client.channel,
                         connected=has_access_token,
                         api_status="operational" if has_access_token else "down",
-                        last_sync=format_optional_datetime(ml_connected_at(tokens)),
+                        last_sync=format_optional_datetime(integration.last_sync),
                         last_error=None if has_access_token else "Mercado Livre não conectado.",
                         token_status=token_status,
                     )
@@ -781,6 +1074,43 @@ def list_integrations_health():
     return health_items
 
 
+@app.get("/company/settings")
+def read_company_settings(db: Session = Depends(get_db)):
+    settings = get_default_settings(db)
+    return {
+        "id": settings.id,
+        "company_id": settings.company_id,
+        "greeting": settings.greeting,
+        "closing": settings.closing,
+        "tone": settings.tone,
+        "custom_prompt": settings.custom_prompt or "",
+        "created_at": settings.created_at.isoformat() if settings.created_at else None,
+        "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
+    }
+
+
+@app.put("/company/settings")
+def update_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
+    settings = get_default_settings(db)
+    settings.greeting = payload.greeting.strip() or settings.greeting
+    settings.closing = payload.closing.strip() or settings.closing
+    settings.tone = payload.tone.strip() or settings.tone
+    settings.custom_prompt = payload.custom_prompt.strip()
+    settings.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(settings)
+    return {
+        "id": settings.id,
+        "company_id": settings.company_id,
+        "greeting": settings.greeting,
+        "closing": settings.closing,
+        "tone": settings.tone,
+        "custom_prompt": settings.custom_prompt or "",
+        "created_at": settings.created_at.isoformat() if settings.created_at else None,
+        "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
+    }
+
+
 @app.post("/integrations/{integration_id}/test", response_model=ConnectionTestResult)
 def test_integration_connection(integration_id: str):
     service = integration_services.get(integration_id)
@@ -809,28 +1139,78 @@ def list_integration_questions(integration_id: str):
         raise_connector_http_error(ApiFailureError("Unexpected connector failure.", details={"error": str(error)}))
 
 
-@app.get("/questions", response_model=List[Question])
-def list_questions():
-    return sorted(questions, key=lambda item: item.created_at, reverse=True)
+@app.get("/questions")
+def list_questions(status: str | None = None, db: Session = Depends(get_db)):
+    query = (
+        db.query(QuestionRecord)
+        .filter(QuestionRecord.company_id == DEFAULT_COMPANY_ID)
+        .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
+    )
+    if status:
+        query = query.filter(QuestionRecord.status == status)
+    return [question_to_api(question) for question in query.all()]
 
 
-@app.get("/questions/{question_id}", response_model=Question)
-def get_question(question_id: int):
-    return find_question(question_id)
+@app.get("/questions/{question_id}")
+def get_question(question_id: int, db: Session = Depends(get_db)):
+    question = db.get(QuestionRecord, question_id)
+    if not question or question.company_id != DEFAULT_COMPANY_ID:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
+    return question_to_api(question)
 
 
 @app.post("/questions/{question_id}/suggest", response_model=SuggestionResponse)
-def suggest_answer(question_id: int):
-    question = find_question(question_id)
-    variant = suggestion_variants[question_id % len(suggestion_variants)]
-    question.ai_suggestion = f"{variant}{question.ai_suggestion}"
-    return SuggestionResponse(suggestion=question.ai_suggestion)
+def suggest_answer(question_id: int, db: Session = Depends(get_db)):
+    question = db.get(QuestionRecord, question_id)
+    if not question:
+        question_mock = find_question(question_id)
+        variant = suggestion_variants[question_id % len(suggestion_variants)]
+        question_mock.ai_suggestion = f"{variant}{question_mock.ai_suggestion}"
+        return SuggestionResponse(suggestion=question_mock.ai_suggestion)
+    suggestion_text = generate_openai_initial_suggestion(
+        product_title=question.product_title,
+        question_text=question.question_text,
+        settings=get_default_settings(db),
+    )
+    if question.ai_suggestion:
+        question.ai_suggestion.original_suggestion = suggestion_text
+        question.ai_suggestion.updated_at = datetime.utcnow()
+    else:
+        db.add(AiSuggestion(question=question, original_suggestion=suggestion_text))
+    db.commit()
+    return SuggestionResponse(suggestion=suggestion_text)
 
 
-@app.post("/questions/{question_id}/approve", response_model=Question)
-def approve_question(question_id: int, payload: ApprovePayload):
-    question = find_question(question_id)
-    question.ai_suggestion = payload.answer
-    question.status = Status.answered
-    return question
+@app.post("/questions/{question_id}/approve")
+def approve_question(question_id: int, payload: ApprovePayload, db: Session = Depends(get_db)):
+    question = db.get(QuestionRecord, question_id)
+    if not question:
+        question_mock = find_question(question_id)
+        question_mock.ai_suggestion = payload.answer
+        question_mock.status = Status.answered
+        return question_mock
+    now = datetime.utcnow()
+    question.status = "Respondida"
+    question.answered_at = now
+    if question.ai_suggestion:
+        suggestion = question.ai_suggestion
+        suggestion.final_response = payload.answer
+        suggestion.approved_by = "Admin"
+        suggestion.approved_at = now
+        suggestion.updated_at = now
+    else:
+        db.add(
+            AiSuggestion(
+                question=question,
+                original_suggestion=payload.answer,
+                final_response=payload.answer,
+                approved_by="Admin",
+                approved_at=now,
+            )
+        )
+    db.commit()
+    db.refresh(question)
+    return question_to_api(question)
+
+
 
