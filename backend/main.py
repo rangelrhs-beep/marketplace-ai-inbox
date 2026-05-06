@@ -110,6 +110,11 @@ def get_ml_integration(db: Session) -> Integration:
 
 def question_to_api(question: QuestionRecord) -> dict[str, Any]:
     suggestion = question.ai_suggestion
+    suggestion_text = ""
+    if suggestion:
+        suggestion_text = suggestion.final_response or suggestion.original_suggestion or ""
+    if not suggestion_text:
+        suggestion_text = "Sugestão ainda não gerada. Clique em gerar nova sugestão."
     return {
         "id": question.id,
         "company_id": question.company_id,
@@ -124,8 +129,9 @@ def question_to_api(question: QuestionRecord) -> dict[str, Any]:
         "created_at": (question.created_at or question.created_in_app_at).isoformat(),
         "status": question.status,
         "priority": "Media",
-        "ai_suggestion": suggestion.original_suggestion if suggestion else "",
+        "ai_suggestion": suggestion_text,
         "final_response": suggestion.final_response if suggestion else "",
+        "has_ai_suggestion": bool(suggestion and (suggestion.original_suggestion or suggestion.final_response)),
         "was_edited": suggestion.was_edited if suggestion else False,
         "instruction_used": suggestion.instruction_used if suggestion else "",
         "answered_at": question.answered_at.isoformat() if question.answered_at else None,
@@ -391,7 +397,8 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
 
 
 def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
-    if question.ai_suggestion:
+    existing = question.ai_suggestion
+    if existing and (existing.original_suggestion or existing.final_response):
         return
     settings = get_default_settings(db)
     try:
@@ -406,12 +413,19 @@ def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
             "Não foi possível gerar a sugestão inicial da IA. "
             "Revise a pergunta e escreva uma resposta antes de enviar."
         )
-    db.add(
-        AiSuggestion(
+    if existing:
+        existing.original_suggestion = suggestion_text
+        existing.final_response = suggestion_text
+        existing.updated_at = datetime.utcnow()
+    else:
+        suggestion = AiSuggestion(
             question=question,
             original_suggestion=suggestion_text,
+            final_response=suggestion_text,
         )
-    )
+        db.add(suggestion)
+        question.ai_suggestion = suggestion
+    db.flush()
 
 
 def extract_ml_questions(raw_response: Any) -> list[dict[str, Any]]:
@@ -1077,38 +1091,42 @@ def list_integrations_health(db: Session = Depends(get_db)):
 @app.get("/company/settings")
 def read_company_settings(db: Session = Depends(get_db)):
     settings = get_default_settings(db)
+    return settings_to_api(settings)
+
+
+def settings_to_api(settings: CompanySettings) -> dict[str, Any]:
     return {
         "id": settings.id,
         "company_id": settings.company_id,
-        "greeting": settings.greeting,
-        "closing": settings.closing,
-        "tone": settings.tone,
+        "greeting": settings.greeting or "Olá! Obrigado pela pergunta.",
+        "closing": settings.closing or "Ficamos à disposição.",
+        "tone": settings.tone or "Técnico, claro e confiável",
         "custom_prompt": settings.custom_prompt or "",
         "created_at": settings.created_at.isoformat() if settings.created_at else None,
         "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
     }
 
 
-@app.put("/company/settings")
-def update_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
+def save_company_settings(payload: CompanySettingsPayload, db: Session) -> dict[str, Any]:
     settings = get_default_settings(db)
-    settings.greeting = payload.greeting.strip() or settings.greeting
-    settings.closing = payload.closing.strip() or settings.closing
-    settings.tone = payload.tone.strip() or settings.tone
+    settings.greeting = payload.greeting.strip() or "Olá! Obrigado pela pergunta."
+    settings.closing = payload.closing.strip() or "Ficamos à disposição."
+    settings.tone = payload.tone.strip() or "Técnico, claro e confiável"
     settings.custom_prompt = payload.custom_prompt.strip()
     settings.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(settings)
-    return {
-        "id": settings.id,
-        "company_id": settings.company_id,
-        "greeting": settings.greeting,
-        "closing": settings.closing,
-        "tone": settings.tone,
-        "custom_prompt": settings.custom_prompt or "",
-        "created_at": settings.created_at.isoformat() if settings.created_at else None,
-        "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
-    }
+    return settings_to_api(settings)
+
+
+@app.put("/company/settings")
+def update_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
+    return save_company_settings(payload, db)
+
+
+@app.post("/company/settings")
+def post_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
+    return save_company_settings(payload, db)
 
 
 @app.post("/integrations/{integration_id}/test", response_model=ConnectionTestResult)
@@ -1167,16 +1185,30 @@ def suggest_answer(question_id: int, db: Session = Depends(get_db)):
         variant = suggestion_variants[question_id % len(suggestion_variants)]
         question_mock.ai_suggestion = f"{variant}{question_mock.ai_suggestion}"
         return SuggestionResponse(suggestion=question_mock.ai_suggestion)
-    suggestion_text = generate_openai_initial_suggestion(
-        product_title=question.product_title,
-        question_text=question.question_text,
-        settings=get_default_settings(db),
-    )
+    try:
+        suggestion_text = generate_openai_initial_suggestion(
+            product_title=question.product_title,
+            question_text=question.question_text,
+            settings=get_default_settings(db),
+        )
+    except Exception:
+        logger.exception("Failed to generate AI suggestion on demand for question %s", question.id)
+        suggestion_text = (
+            "Não foi possível gerar a sugestão da IA agora. "
+            "Revise a pergunta e escreva uma resposta antes de enviar."
+        )
     if question.ai_suggestion:
         question.ai_suggestion.original_suggestion = suggestion_text
+        question.ai_suggestion.final_response = suggestion_text
         question.ai_suggestion.updated_at = datetime.utcnow()
     else:
-        db.add(AiSuggestion(question=question, original_suggestion=suggestion_text))
+        db.add(
+            AiSuggestion(
+                question=question,
+                original_suggestion=suggestion_text,
+                final_response=suggestion_text,
+            )
+        )
     db.commit()
     return SuggestionResponse(suggestion=suggestion_text)
 

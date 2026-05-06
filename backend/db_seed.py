@@ -51,10 +51,10 @@ def seed_defaults(db: Session) -> None:
         db.add(
             CompanySettings(
                 company_id=DEFAULT_COMPANY_ID,
-                greeting="Olá!",
+                greeting="Olá! Obrigado pela pergunta.",
                 closing="Ficamos à disposição.",
                 tone="Técnico, claro e confiável",
-                custom_prompt="Responda como especialista em CPAP e produtos respiratórios quando fizer sentido.",
+                custom_prompt="",
             )
         )
 
