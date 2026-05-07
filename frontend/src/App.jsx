@@ -677,6 +677,8 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
         <p>{question.ai_suggestion}</p>
       </div>
 
+      <RelatedProducts products={question.related_products} />
+
       <div className="pending-actions">
         <button className="primary" onClick={() => onApprove(question.id, question.ai_suggestion)} disabled={isApproving}>
           {isApproving ? <RefreshCw size={18} className="spin" /> : <Check size={18} />}
@@ -694,6 +696,35 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
         ) : null}
       </div>
     </article>
+  );
+}
+
+function RelatedProducts({ products }) {
+  const visibleProducts = (products || []).slice(0, 3);
+  if (visibleProducts.length === 0) return null;
+
+  return (
+    <div className="related-products">
+      <span>Produtos relacionados encontrados</span>
+      <div className="related-products-list">
+        {visibleProducts.map((product) => (
+          <article className="related-product" key={product.external_id || product.id || product.permalink}>
+            {product.thumbnail ? <img src={product.thumbnail} alt="" /> : <div className="related-product-thumb" />}
+            <div>
+              <strong>{product.title}</strong>
+              <small>
+                {product.price ? `${product.currency_id || ""} ${product.price}`.trim() : "Preço não informado"}
+              </small>
+            </div>
+            {product.permalink ? (
+              <a href={product.permalink} target="_blank" rel="noreferrer">
+                Abrir anúncio
+              </a>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -956,6 +987,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           ) : (
             <p className="ai-response-text">{currentText}</p>
           )}
+
+          <RelatedProducts products={question.related_products} />
 
           <div className="rewrite-box">
             <input
