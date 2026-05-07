@@ -129,6 +129,12 @@ function getMarketplaceColor(marketplace, integrations) {
   return integrations.find((integration) => integration.name === marketplace)?.color || "#2563eb";
 }
 
+function getAnsweredSourceLabel(source) {
+  if (source === "app") return "Respondida pelo app";
+  if (source === "mercado_livre_portal") return "Respondida no Mercado Livre";
+  return "";
+}
+
 function normalizeInstruction(instruction) {
   return instruction
     .toLowerCase()
@@ -643,6 +649,9 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
       <p>{question.question}</p>
       <div className="row-meta">
         <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
+        {question.status === "Respondida" && question.answered_source ? (
+          <span className="pill answer-source">{getAnsweredSourceLabel(question.answered_source)}</span>
+        ) : null}
         <span className={`pill priority ${priorityClass[question.priority]}`}>
           {question.priority}
         </span>
@@ -786,7 +795,12 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               Respondida em {question.answered_at ? formatDate(question.answered_at) : formatDate(question.created_at)}
             </p>
           </div>
-          <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
+          <div className="conversation-pills">
+            <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
+            {question.answered_source ? (
+              <span className="pill answer-source">{getAnsweredSourceLabel(question.answered_source)}</span>
+            ) : null}
+          </div>
         </header>
 
         <div className="chat-surface">
@@ -821,6 +835,10 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               <div>
                 <dt>Aprovada por</dt>
                 <dd>{question.approved_by || "Não informado"}</dd>
+              </div>
+              <div>
+                <dt>Origem</dt>
+                <dd>{getAnsweredSourceLabel(question.answered_source) || "Não informado"}</dd>
               </div>
             </dl>
           </div>
@@ -1062,6 +1080,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
+  const [answeredSourceFilter, setAnsweredSourceFilter] = useState("Todas");
   const [showConversation, setShowConversation] = useState(false);
 
   const questions = appData.questions;
@@ -1219,9 +1238,13 @@ export default function App() {
       const statusMatches = forcedStatus
         ? question.status === forcedStatus
         : statusFilter === "Todos" || question.status === statusFilter;
-      return marketplaceMatches && statusMatches;
+      const answeredSourceMatches =
+        active !== "Respondidas" ||
+        answeredSourceFilter === "Todas" ||
+        question.answered_source === answeredSourceFilter;
+      return marketplaceMatches && statusMatches && answeredSourceMatches;
     });
-  }, [active, visibleQuestions, marketplaceFilter, statusFilter]);
+  }, [active, visibleQuestions, marketplaceFilter, statusFilter, answeredSourceFilter]);
 
   const metrics = {
     pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
@@ -1378,6 +1401,7 @@ export default function App() {
                   was_edited: Boolean(updatedQuestion.was_edited ?? approvalData.was_edited),
                   instruction_used: updatedQuestion.instruction_used || approvalData.instruction_used || "",
                   answered_at: updatedQuestion.answered_at || new Date().toISOString(),
+                  answered_source: updatedQuestion.answered_source || (data.already_answered ? "mercado_livre_portal" : "app"),
                   approved_by: updatedQuestion.approved_by || currentUser?.name || "Usuário",
                   ml_answer_response: data.raw_response,
                 }
@@ -1675,6 +1699,19 @@ export default function App() {
                 ))}
               </select>
             </label>
+            {active === "Respondidas" ? (
+              <label>
+                Origem da resposta
+                <select
+                  value={answeredSourceFilter}
+                  onChange={(event) => setAnsweredSourceFilter(event.target.value)}
+                >
+                  <option value="Todas">Todas</option>
+                  <option value="app">Respondidas pelo app</option>
+                  <option value="mercado_livre_portal">Respondidas no Mercado Livre</option>
+                </select>
+              </label>
+            ) : null}
           </div>
 
           <div className="question-list">

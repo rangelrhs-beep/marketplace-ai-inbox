@@ -584,6 +584,18 @@ button:disabled {
   color: #2457c5;
 }
 
+.answer-source {
+  background: #eef3ff;
+  color: #2457c5;
+}
+
+.conversation-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .status.rejected {
   background: #ffebee;
   color: #b4232f;
