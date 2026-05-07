@@ -22,7 +22,7 @@ from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
-from sqlalchemy import cast, or_, text
+from sqlalchemy import Text, cast, or_, text
 from sqlalchemy.orm import Session
 
 
@@ -813,37 +813,41 @@ def search_related_products(question_text: str, limit: int = 5, db: Session | No
     owns_session = db is None
     session = db or SessionLocal()
     try:
-        terms = extract_search_terms(question_text)
-        if not terms:
-            logger.info("Related product search skipped: no useful terms")
-            return []
-        filters = []
-        for term in terms:
-            pattern = f"%{term}%"
-            filters.append(ProductCache.title.ilike(pattern))
-            filters.append(ProductCache.seller_custom_field.ilike(pattern))
-            filters.append(cast(ProductCache.attributes_json, Text).ilike(pattern))
-        candidates = (
-            session.query(ProductCache)
-            .filter(
-                ProductCache.company_id == DEFAULT_COMPANY_ID,
-                ProductCache.provider == DEFAULT_PROVIDER,
-                ProductCache.status == "active",
-                or_(*filters),
+        try:
+            terms = extract_search_terms(question_text)
+            if not terms:
+                logger.info("Related product search skipped: no useful terms")
+                return []
+            filters = []
+            for term in terms:
+                pattern = f"%{term}%"
+                filters.append(ProductCache.title.ilike(pattern))
+                filters.append(ProductCache.seller_custom_field.ilike(pattern))
+                filters.append(cast(ProductCache.attributes_json, Text).ilike(pattern))
+            candidates = (
+                session.query(ProductCache)
+                .filter(
+                    ProductCache.company_id == DEFAULT_COMPANY_ID,
+                    ProductCache.provider == DEFAULT_PROVIDER,
+                    ProductCache.status == "active",
+                    or_(*filters),
+                )
+                .order_by(ProductCache.updated_at.desc())
+                .limit(50)
+                .all()
             )
-            .order_by(ProductCache.updated_at.desc())
-            .limit(50)
-            .all()
-        )
-        scored = [
-            (score_product_relevance(product, terms, question_text), product)
-            for product in candidates
-        ]
-        scored = [(score, product) for score, product in scored if score > 0]
-        scored.sort(key=lambda item: item[0], reverse=True)
-        products = [product_to_api(product) for _, product in scored[:limit]]
-        logger.info("Related products found count=%s terms=%s", len(products), terms[:6])
-        return products
+            scored = [
+                (score_product_relevance(product, terms, question_text), product)
+                for product in candidates
+            ]
+            scored = [(score, product) for score, product in scored if score > 0]
+            scored.sort(key=lambda item: item[0], reverse=True)
+            products = [product_to_api(product) for _, product in scored[:limit]]
+            logger.info("Related products found count=%s terms=%s", len(products), terms[:6])
+            return products
+        except Exception:
+            logger.exception("Related product search failed; continuing without product context")
+            return []
     finally:
         if owns_session:
             session.close()
