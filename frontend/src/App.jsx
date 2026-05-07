@@ -1241,6 +1241,7 @@ export default function App() {
       const answeredSourceMatches =
         active !== "Respondidas" ||
         answeredSourceFilter === "Todas" ||
+        (answeredSourceFilter === "unknown" && !question.answered_source) ||
         question.answered_source === answeredSourceFilter;
       return marketplaceMatches && statusMatches && answeredSourceMatches;
     });
@@ -1709,6 +1710,7 @@ export default function App() {
                   <option value="Todas">Todas</option>
                   <option value="app">Respondidas pelo app</option>
                   <option value="mercado_livre_portal">Respondidas no Mercado Livre</option>
+                  <option value="unknown">Origem não identificada</option>
                 </select>
               </label>
             ) : null}
