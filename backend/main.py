@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
@@ -526,6 +526,145 @@ def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str,
         raise
 
 
+def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[str, Any]:
+    logger.info("Mercado Livre sync started source=%s", source)
+    saved_tokens = read_ml_tokens()
+    if not saved_tokens.get("access_token"):
+        logger.warning("Mercado Livre sync skipped source=%s reason=missing_access_token", source)
+        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
+
+    stats = {
+        "created": 0,
+        "updated": 0,
+        "questions_fetched": 0,
+        "suggestions_generated": 0,
+        "marked_responded": 0,
+    }
+
+    def run_with_tokens(force_refresh: bool = False) -> dict[str, Any]:
+        tokens = refresh_ml_token_if_needed(force=force_refresh)
+        seller_id = get_ml_seller_id(tokens)
+        raw_response = fetch_ml_questions_by_seller(
+            seller_id=seller_id,
+            access_token=tokens["access_token"],
+        )
+        logger.info("Mercado Livre questions raw response source=%s body=%s", source, raw_response)
+        print(f"Mercado Livre questions raw response source={source}: {raw_response}")
+
+        fetched_external_ids: set[str] = set()
+        saved_questions: list[QuestionRecord] = []
+        questions_payload = extract_ml_questions(raw_response)
+        stats["questions_fetched"] = len(questions_payload)
+
+        for question_payload in questions_payload:
+            normalized = normalize_ml_question(question_payload, tokens["access_token"])
+            external_id = str(normalized.get("external_id") or "")
+            if not external_id:
+                logger.warning("Mercado Livre sync ignored question without external_id source=%s payload=%s", source, question_payload)
+                continue
+            fetched_external_ids.add(external_id)
+            existing_question = (
+                db.query(QuestionRecord)
+                .filter(
+                    QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                    QuestionRecord.provider == DEFAULT_PROVIDER,
+                    QuestionRecord.external_id == external_id,
+                )
+                .first()
+            )
+            had_suggestion = bool(get_suggestion_text(existing_question.ai_suggestion)) if existing_question else False
+            question = upsert_ml_question(db, normalized)
+            stats["updated" if existing_question else "created"] += 1
+            ensure_initial_suggestion(db, question)
+            if not had_suggestion and get_suggestion_text(question.ai_suggestion):
+                stats["suggestions_generated"] += 1
+            saved_questions.append(question)
+
+        local_pending_questions = (
+            db.query(QuestionRecord)
+            .filter(
+                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.provider == DEFAULT_PROVIDER,
+                QuestionRecord.status == "pending",
+            )
+            .all()
+        )
+        for question in local_pending_questions:
+            if question.external_id in fetched_external_ids:
+                continue
+            try:
+                question_detail = fetch_ml_question_detail(question.external_id, tokens["access_token"])
+            except HTTPException as error:
+                logger.warning(
+                    "Could not verify pending ML question during sync source=%s external_id=%s detail=%s",
+                    source,
+                    question.external_id,
+                    error.detail,
+                )
+                continue
+            if not ml_question_is_answered(question_detail):
+                continue
+            final_answer = extract_ml_answer_text(question_detail) or "Respondida no Mercado Livre."
+            updated_question = save_answered_question_state(
+                db,
+                question_id=question.external_id,
+                approved_answer=final_answer,
+                payload=MercadoLivreAnswerPayload(answer=final_answer),
+                raw_response=question_detail,
+            )
+            stats["marked_responded"] += 1
+            if updated_question:
+                saved_questions.append(updated_question)
+
+        integration = get_ml_integration(db)
+        integration.last_sync = datetime.utcnow()
+        integration.token_status = "valid"
+        db.commit()
+        logger.info(
+            "Mercado Livre sync finished source=%s fetched=%s created=%s updated=%s suggestions=%s marked_responded=%s",
+            source,
+            stats["questions_fetched"],
+            stats["created"],
+            stats["updated"],
+            stats["suggestions_generated"],
+            stats["marked_responded"],
+        )
+        return {
+            "questions": [question_to_api(question) for question in saved_questions],
+            "stats": stats,
+        }
+
+    try:
+        return run_with_tokens()
+    except HTTPException as error:
+        if error.status_code != 401:
+            logger.exception("Mercado Livre sync failed source=%s", source)
+            raise
+        logger.info("Mercado Livre sync refreshing token source=%s", source)
+        return run_with_tokens(force_refresh=True)
+
+
+def run_mercadolivre_sync_background(source: str, payload: Any | None = None) -> None:
+    db = SessionLocal()
+    try:
+        logger.info("Mercado Livre background sync started source=%s payload=%s", source, safe_log_payload(payload))
+        sync_mercadolivre_questions(db, source=source)
+    except Exception:
+        logger.exception("Mercado Livre background sync error source=%s", source)
+    finally:
+        db.close()
+
+
+def safe_log_payload(payload: Any, *, max_length: int = 2000) -> str:
+    try:
+        text = json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        text = repr(payload)
+    if len(text) > max_length:
+        return f"{text[:max_length]}... [truncated]"
+    return text
+
+
 class Status(str, Enum):
     pending = "Pendente"
     approved = "Aprovada"
@@ -938,57 +1077,30 @@ def mercadolivre_callback(code: str = Query(...)):
 
 @app.get("/integrations/mercadolivre/questions")
 def mercadolivre_questions(db: Session = Depends(get_db)):
-    saved_tokens = read_ml_tokens()
-    if not saved_tokens.get("access_token"):
-        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
-
-    tokens = refresh_ml_token_if_needed()
     try:
-        seller_id = get_ml_seller_id(tokens)
-        raw_response = fetch_ml_questions_by_seller(
-            seller_id=seller_id,
-            access_token=tokens["access_token"],
-        )
-        logger.info("Mercado Livre questions raw response: %s", raw_response)
-        print(f"Mercado Livre questions raw response: {raw_response}")
-        saved_questions = []
-        for question_payload in extract_ml_questions(raw_response):
-            normalized = normalize_ml_question(question_payload, tokens["access_token"])
-            question = upsert_ml_question(db, normalized)
-            ensure_initial_suggestion(db, question)
-            saved_questions.append(question)
-        integration = get_ml_integration(db)
-        integration.last_sync = datetime.utcnow()
-        integration.token_status = "valid"
-        db.commit()
-        return [question_to_api(question) for question in saved_questions]
+        result = sync_mercadolivre_questions(db, source="manual")
+        return result["questions"]
     except HTTPException as error:
-        if error.status_code == 401:
-            tokens = refresh_ml_token_if_needed(force=True)
-            seller_id = get_ml_seller_id(tokens)
-            raw_response = fetch_ml_questions_by_seller(
-                seller_id=seller_id,
-                access_token=tokens["access_token"],
-            )
-            logger.info("Mercado Livre questions raw response after token refresh: %s", raw_response)
-            print(f"Mercado Livre questions raw response after token refresh: {raw_response}")
-            saved_questions = []
-            for question_payload in extract_ml_questions(raw_response):
-                normalized = normalize_ml_question(question_payload, tokens["access_token"])
-                question = upsert_ml_question(db, normalized)
-                ensure_initial_suggestion(db, question)
-                saved_questions.append(question)
-            integration = get_ml_integration(db)
-            integration.last_sync = datetime.utcnow()
-            integration.token_status = "valid"
-            db.commit()
-            return [question_to_api(question) for question in saved_questions]
         if error.status_code == 403:
             raise HTTPException(
                 status_code=403,
                 detail="Permissão insuficiente para acessar perguntas.",
             ) from error
         raise
+
+
+@app.post("/integrations/mercadolivre/notifications")
+def mercadolivre_notifications(
+    background_tasks: BackgroundTasks,
+    payload: Any = Body(default=None),
+):
+    try:
+        logger.info("Mercado Livre notification received payload=%s", safe_log_payload(payload))
+        print(f"Mercado Livre notification received payload={safe_log_payload(payload)}")
+        background_tasks.add_task(run_mercadolivre_sync_background, "webhook", payload)
+    except Exception:
+        logger.exception("Mercado Livre notification handler failed before scheduling background sync")
+    return {"ok": True}
 
 
 def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str, Any]:
