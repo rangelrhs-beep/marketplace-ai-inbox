@@ -48,6 +48,7 @@ class Integration(Base):
     refresh_token = Column(Text, nullable=True)
     seller_id = Column(String(120), nullable=True)
     token_status = Column(String(50), nullable=False, default="missing")
+    expires_in = Column(Integer, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     last_sync = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

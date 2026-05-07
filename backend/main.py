@@ -69,25 +69,39 @@ def init_database() -> None:
 
 
 def ensure_database_columns() -> None:
-    columns = {
+    ai_suggestion_columns = {
         "suggestion_text": "TEXT",
         "edited_text": "TEXT",
         "final_answer": "TEXT",
     }
+    integration_columns = {
+        "expires_in": "INTEGER",
+    }
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql":
-            for column, column_type in columns.items():
+            for column, column_type in ai_suggestion_columns.items():
                 connection.execute(
                     text(f"ALTER TABLE ai_suggestions ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                )
+            for column, column_type in integration_columns.items():
+                connection.execute(
+                    text(f"ALTER TABLE integrations ADD COLUMN IF NOT EXISTS {column} {column_type}")
                 )
         elif engine.dialect.name == "sqlite":
             existing = {
                 row[1]
                 for row in connection.execute(text("PRAGMA table_info(ai_suggestions)")).fetchall()
             }
-            for column, column_type in columns.items():
+            for column, column_type in ai_suggestion_columns.items():
                 if column not in existing:
                     connection.execute(text(f"ALTER TABLE ai_suggestions ADD COLUMN {column} {column_type}"))
+            existing_integrations = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(integrations)")).fetchall()
+            }
+            for column, column_type in integration_columns.items():
+                if column not in existing_integrations:
+                    connection.execute(text(f"ALTER TABLE integrations ADD COLUMN {column} {column_type}"))
 
 
 def normalize_db_status(status: str | None) -> str:
@@ -233,7 +247,7 @@ def read_ml_tokens() -> dict[str, Any]:
     db = SessionLocal()
     try:
         integration = get_ml_integration(db)
-        if not integration.access_token:
+        if not integration.access_token and not integration.refresh_token:
             return {}
         expires_at = int(integration.expires_at.timestamp()) if integration.expires_at else 0
         return {
@@ -241,6 +255,7 @@ def read_ml_tokens() -> dict[str, Any]:
             "refresh_token": integration.refresh_token,
             "seller_id": integration.seller_id,
             "user_id": integration.seller_id,
+            "expires_in": integration.expires_in,
             "expires_at": expires_at,
             "token_status": integration.token_status,
             "connected_at": integration.created_at.isoformat() if integration.created_at else None,
@@ -251,13 +266,15 @@ def read_ml_tokens() -> dict[str, Any]:
 
 
 def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
-    expires_at = datetime.utcnow() + timedelta(seconds=int(token_data.get("expires_in", 0)))
+    expires_in = int(token_data.get("expires_in") or 0)
+    expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
     db = SessionLocal()
     try:
         integration = get_ml_integration(db)
         integration.access_token = token_data.get("access_token")
         integration.refresh_token = token_data.get("refresh_token") or integration.refresh_token
         integration.seller_id = str(token_data.get("user_id") or token_data.get("seller_id") or integration.seller_id or "")
+        integration.expires_in = expires_in
         integration.expires_at = expires_at
         integration.token_status = "valid"
         integration.last_sync = datetime.utcnow()
@@ -279,6 +296,8 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
             integration.refresh_token = updates["refresh_token"]
         if "seller_id" in updates or "user_id" in updates:
             integration.seller_id = str(updates.get("seller_id") or updates.get("user_id") or "")
+        if "expires_in" in updates:
+            integration.expires_in = int(updates["expires_in"])
         if "expires_at" in updates:
             integration.expires_at = datetime.fromtimestamp(int(updates["expires_at"]))
         integration.token_status = updates.get("token_status") or integration.token_status or "valid"
@@ -355,30 +374,84 @@ def ml_request_json_with_status(
 
 
 def refresh_ml_token_if_needed(force: bool = False) -> dict[str, Any]:
-    tokens = read_ml_tokens()
-    if not tokens:
-        raise HTTPException(status_code=401, detail="Mercado Livre is not connected")
+    db = SessionLocal()
+    try:
+        access_token = get_valid_mercadolivre_token(db, force_refresh=force)
+        integration = get_ml_integration(db)
+        return {
+            "access_token": access_token,
+            "refresh_token": integration.refresh_token,
+            "seller_id": integration.seller_id,
+            "user_id": integration.seller_id,
+            "expires_at": int(integration.expires_at.timestamp()) if integration.expires_at else 0,
+            "token_status": integration.token_status,
+        }
+    finally:
+        db.close()
 
-    should_refresh = force or int(tokens.get("expires_at", 0)) <= int(time.time()) + 120
-    if not should_refresh:
-        return tokens
 
-    refresh_token = tokens.get("refresh_token")
-    if not refresh_token:
-        raise HTTPException(status_code=401, detail="Mercado Livre refresh_token is missing")
+def get_valid_mercadolivre_token(db: Session | None = None, *, force_refresh: bool = False) -> str:
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        integration = get_ml_integration(session)
+        if not integration.access_token and not integration.refresh_token:
+            logger.warning("Mercado Livre token unavailable: no access_token or refresh_token")
+            raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
 
-    config = get_ml_config()
-    refreshed = ml_request_json(
-        f"{ML_API_BASE_URL}/oauth/token",
-        method="POST",
-        data={
-            "grant_type": "refresh_token",
-            "client_id": config["client_id"],
-            "client_secret": config["client_secret"],
-            "refresh_token": refresh_token,
-        },
-    )
-    return save_ml_tokens(refreshed)
+        refresh_threshold = datetime.utcnow() + timedelta(minutes=5)
+        if (
+            integration.access_token
+            and integration.expires_at
+            and integration.expires_at > refresh_threshold
+            and not force_refresh
+        ):
+            logger.info("Mercado Livre token still valid until %s", integration.expires_at.isoformat())
+            return integration.access_token
+
+        if not integration.refresh_token:
+            logger.warning("Mercado Livre token refresh failed: missing refresh_token")
+            integration.token_status = "expired"
+            integration.updated_at = datetime.utcnow()
+            session.commit()
+            raise HTTPException(status_code=401, detail="Mercado Livre refresh_token is missing")
+
+        logger.info("Mercado Livre token refresh attempted")
+        config = get_ml_config()
+        try:
+            refreshed = ml_request_json(
+                f"{ML_API_BASE_URL}/oauth/token",
+                method="POST",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": config["client_id"],
+                    "client_secret": config["client_secret"],
+                    "refresh_token": integration.refresh_token,
+                },
+            )
+        except HTTPException:
+            logger.exception("Mercado Livre token refresh failed")
+            integration.token_status = "expired"
+            integration.updated_at = datetime.utcnow()
+            session.commit()
+            raise
+
+        expires_in = int(refreshed.get("expires_in") or integration.expires_in or 0)
+        integration.access_token = refreshed.get("access_token") or integration.access_token
+        integration.refresh_token = refreshed.get("refresh_token") or integration.refresh_token
+        integration.expires_in = expires_in
+        integration.expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        integration.seller_id = str(refreshed.get("user_id") or refreshed.get("seller_id") or integration.seller_id or "")
+        integration.token_status = "valid"
+        integration.updated_at = datetime.utcnow()
+        session.commit()
+        logger.info("Mercado Livre token refresh succeeded; expires_at=%s", integration.expires_at.isoformat())
+        if not integration.access_token:
+            raise HTTPException(status_code=401, detail="Mercado Livre token refresh did not return access_token")
+        return integration.access_token
+    finally:
+        if owns_session:
+            session.close()
 
 
 def get_ml_seller_id(tokens: dict[str, Any]) -> str:
@@ -528,11 +601,6 @@ def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str,
 
 def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[str, Any]:
     logger.info("Mercado Livre sync started source=%s", source)
-    saved_tokens = read_ml_tokens()
-    if not saved_tokens.get("access_token"):
-        logger.warning("Mercado Livre sync skipped source=%s reason=missing_access_token", source)
-        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
-
     stats = {
         "created": 0,
         "updated": 0,
@@ -542,7 +610,13 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
     }
 
     def run_with_tokens(force_refresh: bool = False) -> dict[str, Any]:
-        tokens = refresh_ml_token_if_needed(force=force_refresh)
+        access_token = get_valid_mercadolivre_token(db, force_refresh=force_refresh)
+        integration = get_ml_integration(db)
+        tokens = {
+            "access_token": access_token,
+            "seller_id": integration.seller_id,
+            "user_id": integration.seller_id,
+        }
         seller_id = get_ml_seller_id(tokens)
         raw_response = fetch_ml_questions_by_seller(
             seller_id=seller_id,
@@ -1103,6 +1177,12 @@ def mercadolivre_notifications(
     return {"ok": True}
 
 
+@app.post("/jobs/sync-mercadolivre")
+def sync_mercadolivre_job(db: Session = Depends(get_db)):
+    result = sync_mercadolivre_questions(db, source="job")
+    return {"ok": True, "stats": result["stats"]}
+
+
 def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str, Any]:
     question_identifier: int | str = int(question_id) if str(question_id).isdigit() else question_id
     response_status, response_body = ml_request_json_with_status(
@@ -1231,14 +1311,10 @@ def answer_mercadolivre_question(
     if not answer:
         raise HTTPException(status_code=400, detail="Missing required field: answer")
 
-    saved_tokens = read_ml_tokens()
-    if not saved_tokens.get("access_token"):
-        raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
-
     try:
-        tokens = refresh_ml_token_if_needed()
+        access_token = get_valid_mercadolivre_token(db)
         try:
-            question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+            question_detail = fetch_ml_question_detail(question_id, access_token)
             if ml_question_is_answered(question_detail):
                 question = save_answered_question_state(
                     db,
@@ -1258,12 +1334,12 @@ def answer_mercadolivre_question(
             if status_error.status_code in {401, 403}:
                 raise
             logger.warning("Could not verify Mercado Livre question status before answering: %s", status_error.detail)
-        result = send_ml_answer(question_id, answer, tokens["access_token"])
+        result = send_ml_answer(question_id, answer, access_token)
     except HTTPException as error:
         if error.status_code == 401:
-            tokens = refresh_ml_token_if_needed(force=True)
+            access_token = get_valid_mercadolivre_token(db, force_refresh=True)
             try:
-                question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+                question_detail = fetch_ml_question_detail(question_id, access_token)
                 if ml_question_is_answered(question_detail):
                     question = save_answered_question_state(
                         db,
@@ -1284,12 +1360,12 @@ def answer_mercadolivre_question(
                     raise
                 logger.warning("Could not verify Mercado Livre question status after refresh: %s", status_error.detail)
             try:
-                result = send_ml_answer(question_id, answer, tokens["access_token"])
+                result = send_ml_answer(question_id, answer, access_token)
             except HTTPException as send_error:
                 if not is_already_answered_error(send_error):
                     raise
                 try:
-                    question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+                    question_detail = fetch_ml_question_detail(question_id, access_token)
                 except HTTPException:
                     question_detail = {}
                 question = save_answered_question_state(
@@ -1313,8 +1389,8 @@ def answer_mercadolivre_question(
             ) from error
         elif is_already_answered_error(error):
             try:
-                tokens = refresh_ml_token_if_needed()
-                question_detail = fetch_ml_question_detail(question_id, tokens["access_token"])
+                access_token = get_valid_mercadolivre_token(db)
+                question_detail = fetch_ml_question_detail(question_id, access_token)
             except HTTPException:
                 question_detail = {}
             question = save_answered_question_state(
@@ -1392,24 +1468,29 @@ def list_integrations_health(db: Session = Depends(get_db)):
         try:
             if service.client.id == "mercado-livre":
                 integration = get_ml_integration(db)
-                has_access_token = bool(integration.access_token)
-                token_status = "missing"
-                if has_access_token:
-                    token_status = (
-                        "expired"
-                        if integration.expires_at and integration.expires_at <= datetime.utcnow()
-                        else "valid"
-                    )
-                    integration.token_status = token_status
-                    db.commit()
+                connected = False
+                token_status = integration.token_status or "missing"
+                last_error = "Mercado Livre não conectado."
+                if integration.access_token or integration.refresh_token:
+                    try:
+                        get_valid_mercadolivre_token(db)
+                        db.refresh(integration)
+                        connected = True
+                        token_status = "valid"
+                        last_error = None
+                    except HTTPException as error:
+                        db.refresh(integration)
+                        token_status = integration.token_status or "expired"
+                        last_error = "Mercado Livre token expirado. Reconecte a integração."
+                        logger.warning("Mercado Livre health token refresh failed: %s", error.detail)
                 health_items.append(
                     IntegrationHealth(
                         id=service.client.id,
                         channel=service.client.channel,
-                        connected=has_access_token,
-                        api_status="operational" if has_access_token else "down",
+                        connected=connected,
+                        api_status="operational" if connected else "down",
                         last_sync=format_optional_datetime(integration.last_sync),
-                        last_error=None if has_access_token else "Mercado Livre não conectado.",
+                        last_error=last_error,
                         token_status=token_status,
                     )
                 )
