@@ -21,6 +21,7 @@ class Company(Base):
     users = relationship("User", back_populates="company")
     integrations = relationship("Integration", back_populates="company")
     questions = relationship("QuestionRecord", back_populates="company")
+    products = relationship("ProductCache", back_populates="company")
     settings = relationship("CompanySettings", back_populates="company", uselist=False)
 
 
@@ -96,6 +97,35 @@ class AiSuggestion(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     question = relationship("QuestionRecord", back_populates="ai_suggestion")
+
+
+class ProductCache(Base):
+    __tablename__ = "products_cache"
+    __table_args__ = (UniqueConstraint("company_id", "provider", "external_id", name="uq_product_cache_external"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(String(64), ForeignKey("companies.id"), nullable=False)
+    provider = Column(String(80), nullable=False)
+    external_id = Column(String(120), nullable=False)
+    title = Column(Text, nullable=False, default="")
+    permalink = Column(Text, nullable=True)
+    price = Column(String(80), nullable=True)
+    currency_id = Column(String(20), nullable=True)
+    status = Column(String(80), nullable=True)
+    available_quantity = Column(Integer, nullable=True)
+    thumbnail = Column(Text, nullable=True)
+    category_id = Column(String(120), nullable=True)
+    listing_type_id = Column(String(120), nullable=True)
+    condition = Column(String(80), nullable=True)
+    seller_custom_field = Column(Text, nullable=True)
+    attributes_json = Column(JsonType, nullable=False, default=list)
+    variations_json = Column(JsonType, nullable=False, default=list)
+    raw_payload = Column(JsonType, nullable=False, default=dict)
+    last_synced_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    company = relationship("Company", back_populates="products")
 
 
 class CompanySettings(Base):
