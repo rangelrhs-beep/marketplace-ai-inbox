@@ -43,6 +43,7 @@ def init_database() -> None:
         db = SessionLocal()
         try:
             seed_defaults(db)
+            backfill_answered_source_rules(db)
             integration = get_ml_integration(db)
             if not integration.access_token and ML_TOKEN_PATH.exists():
                 try:
@@ -423,6 +424,53 @@ def format_optional_datetime(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def delete_local_question(db: Session, question: QuestionRecord) -> None:
+    if question.ai_suggestion:
+        db.delete(question.ai_suggestion)
+        db.flush()
+    db.delete(question)
+    db.flush()
+
+
+def backfill_answered_source_rules(db: Session) -> None:
+    portal_start = datetime(2026, 5, 7, 13, 25)
+    portal_end = datetime(2026, 5, 7, 13, 29)
+    portal_questions = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.status == "responded",
+            or_(
+                QuestionRecord.answered_source == "mercado_livre_portal",
+                (
+                    or_(QuestionRecord.answered_source.is_(None), QuestionRecord.answered_source != "app")
+                    & (QuestionRecord.answered_at >= portal_start)
+                    & (QuestionRecord.answered_at <= portal_end)
+                ),
+            ),
+        )
+        .all()
+    )
+    for question in portal_questions:
+        logger.info("Backfill removing portal-answered question external_id=%s", question.external_id)
+        delete_local_question(db, question)
+
+    updated = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.status == "responded",
+            QuestionRecord.answered_source.is_(None),
+        )
+        .update({QuestionRecord.answered_source: "app"}, synchronize_session=False)
+    )
+    if updated:
+        logger.info("Backfill marked app answered questions count=%s", updated)
+    db.commit()
+
+
 def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | None = None, access_token: str | None = None) -> dict[str, Any]:
     body = None
     headers = {"Accept": "application/json"}
@@ -688,11 +736,11 @@ def extract_ml_questions(raw_response: Any) -> list[dict[str, Any]]:
     return questions_payload if isinstance(questions_payload, list) else []
 
 
-def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
+def fetch_ml_questions_by_seller_status(seller_id: str, access_token: str, status: str) -> dict[str, Any]:
     query = urlencode(
         {
             "seller_id": seller_id,
-            "status": "unanswered",
+            "status": status,
             "api_version": "4",
         }
     )
@@ -708,6 +756,14 @@ def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str,
                 access_token=access_token,
             )
         raise
+
+
+def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
+    return fetch_ml_questions_by_seller_status(seller_id, access_token, "unanswered")
+
+
+def fetch_ml_answered_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
+    return fetch_ml_questions_by_seller_status(seller_id, access_token, "answered")
 
 
 def fetch_ml_item_ids_by_seller(seller_id: str, access_token: str) -> list[str]:
@@ -1052,18 +1108,8 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
                 continue
             if not ml_question_is_answered(question_detail):
                 continue
-            final_answer = extract_ml_answer_text(question_detail) or "Respondida no Mercado Livre."
-            updated_question = save_answered_question_state(
-                db,
-                question_id=question.external_id,
-                approved_answer=final_answer,
-                payload=MercadoLivreAnswerPayload(answer=final_answer),
-                raw_response=question_detail,
-                answered_source="mercado_livre_portal",
-            )
+            delete_local_question(db, question)
             stats["marked_responded"] += 1
-            if updated_question:
-                saved_questions.append(updated_question)
 
         integration = get_ml_integration(db)
         integration.last_sync = datetime.utcnow()
@@ -1621,18 +1667,58 @@ def extract_ml_answer_text(question_payload: dict[str, Any] | None) -> str:
     if not isinstance(question_payload, dict):
         return ""
     answer = question_payload.get("answer") or {}
-    if not isinstance(answer, dict):
-        return ""
-    return answer.get("text") or answer.get("text_translated") or ""
+    if isinstance(answer, dict):
+        return answer.get("text") or answer.get("text_translated") or ""
+    return question_payload.get("text") or question_payload.get("text_translated") or ""
 
 
 def extract_ml_answer_created_at(question_payload: dict[str, Any] | None) -> datetime | None:
     if not isinstance(question_payload, dict):
         return None
     answer = question_payload.get("answer") or {}
-    if not isinstance(answer, dict):
-        return None
-    return parse_datetime(answer.get("date_created") or answer.get("created_at"))
+    if isinstance(answer, dict):
+        return parse_datetime(answer.get("date_created") or answer.get("created_at"))
+    return parse_datetime(question_payload.get("date_created") or question_payload.get("created_at"))
+
+
+def ml_portal_question_to_api(payload: dict[str, Any], access_token: str) -> dict[str, Any]:
+    normalized = normalize_ml_question(payload, access_token)
+    answered_at = extract_ml_answer_created_at(payload)
+    return {
+        "id": f"ml-live-{normalized['external_id']}",
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "Mercado Livre",
+        "provider": DEFAULT_PROVIDER,
+        "external_id": normalized["external_id"],
+        "product": normalized["product_title"],
+        "product_title": normalized["product_title"],
+        "customer_name": "Cliente Mercado Livre",
+        "question": normalized["question_text"],
+        "question_text": normalized["question_text"],
+        "created_at": payload.get("date_created") or payload.get("created_at") or normalized["created_at"],
+        "status": "Respondida",
+        "db_status": "responded",
+        "priority": "Media",
+        "ai_suggestion": "",
+        "suggestion_text": "",
+        "edited_text": "",
+        "final_answer": extract_ml_answer_text(payload),
+        "final_response": extract_ml_answer_text(payload),
+        "has_ai_suggestion": False,
+        "was_edited": False,
+        "instruction_used": "",
+        "answered_at": answered_at.isoformat() if answered_at else None,
+        "answered_source": "mercado_livre_portal",
+        "approved_by": "Mercado Livre",
+        "approved_at": answered_at.isoformat() if answered_at else None,
+        "sku": (payload or {}).get("item_id") or "ML",
+        "price": "",
+        "raw_payload": payload,
+        "related_products": [],
+        "is_real": True,
+        "is_live": True,
+        "channel": "mercado_livre",
+    }
 
 
 def ml_question_is_answered(question_payload: dict[str, Any] | None) -> bool:
@@ -1640,6 +1726,60 @@ def ml_question_is_answered(question_payload: dict[str, Any] | None) -> bool:
         return False
     status = normalize_db_status(question_payload.get("status"))
     return status == "responded" or bool(extract_ml_answer_text(question_payload))
+
+
+def get_live_portal_answered_questions(db: Session, *, days: int = 15) -> list[dict[str, Any]]:
+    try:
+        access_token = get_valid_mercadolivre_token(db)
+        integration = get_ml_integration(db)
+        seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+        raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
+    except HTTPException as error:
+        if error.status_code == 401:
+            try:
+                access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+                integration = get_ml_integration(db)
+                seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+                raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
+            except Exception:
+                logger.exception("Could not fetch live portal answered Mercado Livre questions after refresh")
+                return []
+        else:
+            logger.warning("Could not fetch live portal answered Mercado Livre questions: %s", error.detail)
+            return []
+    except Exception:
+        logger.exception("Could not fetch live portal answered Mercado Livre questions")
+        return []
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    local_questions = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+        )
+        .all()
+    )
+    local_by_external_id = {question.external_id: question for question in local_questions}
+    live_questions = []
+    for payload in extract_ml_questions(raw_response):
+        if not ml_question_is_answered(payload):
+            continue
+        external_id = str(payload.get("id") or payload.get("question_id") or "")
+        if not external_id:
+            continue
+        answered_at = extract_ml_answer_created_at(payload)
+        if answered_at and answered_at < cutoff:
+            continue
+        local_question = local_by_external_id.get(external_id)
+        if local_question and local_question.answered_source == "app":
+            continue
+        if local_question and normalize_db_status(local_question.status) == "pending":
+            logger.info("Deleting local pending question answered in ML portal external_id=%s", external_id)
+            delete_local_question(db, local_question)
+            db.commit()
+        live_questions.append(ml_portal_question_to_api(payload, access_token))
+    return live_questions
 
 
 def is_already_answered_error(error: HTTPException) -> bool:
@@ -1719,6 +1859,32 @@ def save_answered_question_state(
     return question
 
 
+def handle_portal_answered_question(
+    db: Session,
+    *,
+    question_id: str,
+    question_detail: dict[str, Any],
+    access_token: str,
+) -> dict[str, Any] | None:
+    question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+        )
+        .first()
+    )
+    if question and question.answered_source == "app":
+        return question_to_api(question, db=db)
+    if question:
+        delete_local_question(db, question)
+        db.commit()
+    if question_detail:
+        return ml_portal_question_to_api(question_detail, access_token)
+    return None
+
+
 @app.post("/integrations/mercadolivre/questions/{question_id}/answer")
 def answer_mercadolivre_question(
     question_id: str,
@@ -1734,20 +1900,18 @@ def answer_mercadolivre_question(
         try:
             question_detail = fetch_ml_question_detail(question_id, access_token)
             if ml_question_is_answered(question_detail):
-                question = save_answered_question_state(
+                live_question = handle_portal_answered_question(
                     db,
                     question_id=question_id,
-                    approved_answer=answer,
-                    payload=payload,
-                    raw_response=question_detail,
-                    answered_source="mercado_livre_portal",
+                    question_detail=question_detail,
+                    access_token=access_token,
                 )
                 return {
                     "sent": False,
                     "already_answered": True,
                     "message": "Essa pergunta já foi respondida no Mercado Livre.",
                     "raw_response": question_detail,
-                    "question": question_to_api(question, db=db) if question else None,
+                    "question": live_question,
                 }
         except HTTPException as status_error:
             if status_error.status_code in {401, 403}:
@@ -1760,20 +1924,18 @@ def answer_mercadolivre_question(
             try:
                 question_detail = fetch_ml_question_detail(question_id, access_token)
                 if ml_question_is_answered(question_detail):
-                    question = save_answered_question_state(
+                    live_question = handle_portal_answered_question(
                         db,
                         question_id=question_id,
-                        approved_answer=answer,
-                        payload=payload,
-                        raw_response=question_detail,
-                        answered_source="mercado_livre_portal",
+                        question_detail=question_detail,
+                        access_token=access_token,
                     )
                     return {
                         "sent": False,
                         "already_answered": True,
                         "message": "Essa pergunta já foi respondida no Mercado Livre.",
                         "raw_response": question_detail,
-                        "question": question_to_api(question, db=db) if question else None,
+                        "question": live_question,
                     }
             except HTTPException as status_error:
                 if status_error.status_code == 403:
@@ -1788,20 +1950,18 @@ def answer_mercadolivre_question(
                     question_detail = fetch_ml_question_detail(question_id, access_token)
                 except HTTPException:
                     question_detail = {}
-                question = save_answered_question_state(
+                live_question = handle_portal_answered_question(
                     db,
                     question_id=question_id,
-                    approved_answer=answer,
-                    payload=payload,
-                    raw_response=question_detail,
-                    answered_source="mercado_livre_portal",
+                    question_detail=question_detail,
+                    access_token=access_token,
                 )
                 return {
                     "sent": False,
                     "already_answered": True,
                     "message": "Essa pergunta já foi respondida no Mercado Livre.",
                     "raw_response": question_detail,
-                    "question": question_to_api(question, db=db) if question else None,
+                    "question": live_question,
                 }
         elif error.status_code == 403:
             raise HTTPException(
@@ -1814,20 +1974,18 @@ def answer_mercadolivre_question(
                 question_detail = fetch_ml_question_detail(question_id, access_token)
             except HTTPException:
                 question_detail = {}
-            question = save_answered_question_state(
+            live_question = handle_portal_answered_question(
                 db,
                 question_id=question_id,
-                approved_answer=answer,
-                payload=payload,
-                raw_response=question_detail,
-                answered_source="mercado_livre_portal",
+                question_detail=question_detail,
+                access_token=access_token,
             )
             return {
                 "sent": False,
                 "already_answered": True,
                 "message": "Essa pergunta já foi respondida no Mercado Livre.",
                 "raw_response": question_detail,
-                "question": question_to_api(question, db=db) if question else None,
+                "question": live_question,
             }
         else:
             raise
@@ -2023,12 +2181,21 @@ def list_integration_questions(integration_id: str):
 def list_questions(status: str | None = None, db: Session = Depends(get_db)):
     query = (
         db.query(QuestionRecord)
-        .filter(QuestionRecord.company_id == DEFAULT_COMPANY_ID)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            or_(
+                QuestionRecord.status == "pending",
+                QuestionRecord.answered_source == "app",
+            ),
+        )
         .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
     )
     if status:
         query = query.filter(QuestionRecord.status == normalize_db_status(status))
-    return [question_to_api(question, db=db) for question in query.all()]
+    local_questions = [question_to_api(question, db=db) for question in query.all()]
+    if status and normalize_db_status(status) != "responded":
+        return local_questions
+    return local_questions + get_live_portal_answered_questions(db)
 
 
 @app.get("/products")
