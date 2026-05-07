@@ -22,7 +22,7 @@ from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
-from sqlalchemy import text
+from sqlalchemy import cast, or_, text
 from sqlalchemy.orm import Session
 
 
@@ -250,12 +250,17 @@ def get_ml_integration(db: Session) -> Integration:
     )
 
 
-def question_to_api(question: QuestionRecord) -> dict[str, Any]:
+def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict[str, Any]:
     suggestion = question.ai_suggestion
     suggestion_text = get_suggestion_text(suggestion)
     if not suggestion_text:
         suggestion_text = "Sugestão ainda não gerada. Clique em gerar nova sugestão."
     final_answer = get_final_answer(suggestion)
+    related_products = search_related_products(
+        f"{question.product_title or ''} {question.question_text or ''}",
+        limit=3,
+        db=db,
+    ) if db else []
     return {
         "id": question.id,
         "company_id": question.company_id,
@@ -285,6 +290,7 @@ def question_to_api(question: QuestionRecord) -> dict[str, Any]:
         "sku": (question.raw_payload or {}).get("item_id") or "ML",
         "price": "",
         "raw_payload": question.raw_payload or {},
+        "related_products": related_products,
         "is_real": True,
         "channel": "mercado_livre",
     }
@@ -605,12 +611,24 @@ def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
     if existing and (existing.original_suggestion or existing.final_response):
         return
     settings = get_default_settings(db)
+    related_products = search_related_products(
+        f"{question.product_title or ''} {question.question_text or ''}",
+        limit=5,
+        db=db,
+    )
+    logger.info(
+        "Injecting related products into initial AI suggestion external_id=%s count=%s",
+        question.external_id,
+        len(related_products),
+    )
     try:
         suggestion_text = generate_openai_initial_suggestion(
             product_title=question.product_title,
             question_text=question.question_text,
             settings=settings,
+            related_products=related_products,
         )
+        logger.info("AI initial suggestion generated external_id=%s", question.external_id)
     except Exception as error:
         logger.exception("Failed to generate initial AI suggestion for question %s", question.external_id)
         suggestion_text = (
@@ -713,6 +731,122 @@ def product_to_api(product: ProductCache) -> dict[str, Any]:
         "created_at": product.created_at.isoformat() if product.created_at else None,
         "updated_at": product.updated_at.isoformat() if product.updated_at else None,
     }
+
+
+def related_product_to_ai(product: dict[str, Any]) -> str:
+    parts = [
+        f"titulo={product.get('title') or ''}",
+        f"link={product.get('permalink') or ''}",
+        f"preco={product.get('price') or ''} {product.get('currency_id') or ''}".strip(),
+        f"status={product.get('status') or ''}",
+        f"quantidade_disponivel={product.get('available_quantity')}",
+    ]
+    attributes = product.get("attributes_json") or []
+    if isinstance(attributes, list):
+        attribute_summary = []
+        for attribute in attributes[:8]:
+            if not isinstance(attribute, dict):
+                continue
+            name = attribute.get("name") or attribute.get("id")
+            value = attribute.get("value_name") or attribute.get("value_id")
+            if name and value:
+                attribute_summary.append(f"{name}: {value}")
+        if attribute_summary:
+            parts.append(f"atributos={'; '.join(attribute_summary)}")
+    return " | ".join(str(part) for part in parts if part)
+
+
+def build_related_products_context(products: list[dict[str, Any]]) -> str:
+    if not products:
+        return "Nenhum produto ativo relacionado encontrado no cache."
+    return "\n".join(
+        f"- {related_product_to_ai(product)}"
+        for product in products[:5]
+    )
+
+
+def extract_search_terms(text_value: str) -> list[str]:
+    normalized = (
+        text_value.lower()
+        .replace("/", " ")
+        .replace("-", " ")
+        .replace("_", " ")
+    )
+    stopwords = {
+        "para", "com", "sem", "uma", "uns", "das", "dos", "que", "tem", "esse", "essa",
+        "este", "esta", "produto", "pergunta", "cliente", "serve", "posso", "pode",
+        "qual", "como", "quando", "onde", "mais", "menos", "mercado", "livre",
+    }
+    terms: list[str] = []
+    for raw_term in normalized.split():
+        term = raw_term.strip(".,;:!?()[]{}\"'")
+        if len(term) < 3 or term in stopwords or term.isdigit():
+            continue
+        if term not in terms:
+            terms.append(term)
+    return terms[:12]
+
+
+def score_product_relevance(product: ProductCache, terms: list[str], question_text: str) -> int:
+    searchable = " ".join(
+        [
+            product.title or "",
+            product.seller_custom_field or "",
+            json.dumps(product.attributes_json or [], ensure_ascii=False),
+        ]
+    ).lower()
+    score = 0
+    for term in terms:
+        if term in (product.title or "").lower():
+            score += 4
+        if term in (product.seller_custom_field or "").lower():
+            score += 3
+        if term in searchable:
+            score += 1
+    title = (product.title or "").lower()
+    if title and title in question_text.lower():
+        score += 8
+    return score
+
+
+def search_related_products(question_text: str, limit: int = 5, db: Session | None = None) -> list[dict[str, Any]]:
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        terms = extract_search_terms(question_text)
+        if not terms:
+            logger.info("Related product search skipped: no useful terms")
+            return []
+        filters = []
+        for term in terms:
+            pattern = f"%{term}%"
+            filters.append(ProductCache.title.ilike(pattern))
+            filters.append(ProductCache.seller_custom_field.ilike(pattern))
+            filters.append(cast(ProductCache.attributes_json, Text).ilike(pattern))
+        candidates = (
+            session.query(ProductCache)
+            .filter(
+                ProductCache.company_id == DEFAULT_COMPANY_ID,
+                ProductCache.provider == DEFAULT_PROVIDER,
+                ProductCache.status == "active",
+                or_(*filters),
+            )
+            .order_by(ProductCache.updated_at.desc())
+            .limit(50)
+            .all()
+        )
+        scored = [
+            (score_product_relevance(product, terms, question_text), product)
+            for product in candidates
+        ]
+        scored = [(score, product) for score, product in scored if score > 0]
+        scored.sort(key=lambda item: item[0], reverse=True)
+        products = [product_to_api(product) for _, product in scored[:limit]]
+        logger.info("Related products found count=%s terms=%s", len(products), terms[:6])
+        return products
+    finally:
+        if owns_session:
+            session.close()
 
 
 def upsert_ml_product(db: Session, item_payload: dict[str, Any]) -> tuple[ProductCache, bool]:
@@ -915,7 +1049,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             stats["marked_responded"],
         )
         return {
-            "questions": [question_to_api(question) for question in saved_questions],
+            "questions": [question_to_api(question, db=db) for question in saved_questions],
             "stats": stats,
         }
 
@@ -1192,6 +1326,7 @@ def generate_openai_rewrite(
     original_response: str,
     instruction: str,
     settings: CompanySettings | None = None,
+    related_products: list[dict[str, Any]] | None = None,
 ) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1205,6 +1340,7 @@ def generate_openai_rewrite(
     closing = settings.closing if settings else "Ficamos à disposição."
     tone = settings.tone if settings else "Técnico, claro e confiável"
     custom_prompt = settings.custom_prompt if settings else ""
+    related_products_context = build_related_products_context(related_products or [])
 
     prompt = (
         "Você é um vendedor profissional de e-commerce respondendo perguntas no Mercado Livre. "
@@ -1218,10 +1354,15 @@ def generate_openai_rewrite(
         "- Comece com uma resposta curta e depois adicione detalhe útil.\n"
         "- Não invente detalhes de produto, estoque, prazo, garantia, compatibilidade ou características.\n"
         "- Se a informação for incerta, responda com cautela e oriente o cliente a conferir a variação do anúncio ou enviar nova mensagem.\n"
+        "- NUNCA invente links, produtos, estoque ou compatibilidades.\n"
+        "- Use SOMENTE produtos ativos listados no contexto de produtos relacionados.\n"
+        "- Se sugerir produto complementar, inclua apenas link real do cache e somente quando a relevância for clara.\n"
+        "- Nunca prometa estoque indisponível.\n"
         "- Evite frases genéricas como 'recomendamos verificar'.\n"
         "- Máximo de 5 linhas, salvo se a instrução pedir outra coisa.\n"
         "- Retorne apenas a resposta final pronta para envio. Sem explicação, sem meta texto.\n\n"
         f"Prompt personalizado da empresa: {custom_prompt or 'Nenhum'}\n\n"
+        f"Produtos ativos relacionados encontrados no cache:\n{related_products_context}\n\n"
         f"Pergunta do cliente:\n{question}\n\n"
         f"Resposta atual do vendedor:\n{original_response}\n\n"
         f"Instrução de reescrita:\n{instruction}"
@@ -1237,6 +1378,7 @@ def generate_openai_initial_suggestion(
     product_title: str,
     question_text: str,
     settings: CompanySettings | None = None,
+    related_products: list[dict[str, Any]] | None = None,
 ) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1250,6 +1392,7 @@ def generate_openai_initial_suggestion(
     closing = settings.closing if settings else "Ficamos à disposição."
     tone = settings.tone if settings else "Técnico, claro e confiável"
     custom_prompt = settings.custom_prompt if settings else ""
+    related_products_context = build_related_products_context(related_products or [])
     prompt = (
         "Você é um vendedor profissional de e-commerce respondendo perguntas no Mercado Livre.\n"
         "Crie uma resposta inicial pronta para envio.\n\n"
@@ -1260,10 +1403,17 @@ def generate_openai_initial_suggestion(
         f"- Se fizer sentido, encerre com: {closing}\n"
         "- Comece com a resposta curta e depois detalhe somente o necessário.\n"
         "- Não invente informações sobre estoque, prazo, garantia, compatibilidade ou características.\n"
+        "- NUNCA invente links ou produtos.\n"
+        "- Use SOMENTE produtos ativos listados no contexto de produtos relacionados.\n"
+        "- Se houver produto complementar claramente relevante, sugira de forma natural com o link real do Mercado Livre.\n"
+        "- Exemplos: pergunta sobre CPAP pode mencionar máscaras compatíveis se encontradas; pergunta sobre máscara pode mencionar CPAP compatível; pergunta sobre umidificador pode mencionar tubo/filtro disponível.\n"
+        "- Não force recomendação se a relevância for baixa.\n"
+        "- Nunca prometa estoque indisponível.\n"
         "- Se os dados forem insuficientes, diga que o cliente pode conferir a variação do anúncio ou enviar nova mensagem.\n"
         "- Não mencione IA, sistema, API ou instruções internas.\n"
         "- Máximo de 5 linhas.\n\n"
         f"Prompt personalizado da empresa: {custom_prompt or 'Nenhum'}\n\n"
+        f"Produtos ativos relacionados encontrados no cache:\n{related_products_context}\n\n"
         f"Produto: {product_title or 'Produto não informado'}\n"
         f"Pergunta do cliente: {question_text}"
     )
@@ -1294,7 +1444,13 @@ def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_
             product_title=payload.product_title.strip(),
             question_text=question_text,
             settings=get_default_settings(db),
+            related_products=search_related_products(
+                f"{payload.product_title} {question_text}",
+                limit=5,
+                db=db,
+            ),
         )
+        logger.info("AI initial suggestion generated from /ai/suggest")
         return {"suggestion": suggestion}
     except Exception as error:
         logger.exception("OpenAI initial suggestion failed")
@@ -1544,7 +1700,7 @@ def answer_mercadolivre_question(
                     "already_answered": True,
                     "message": "Essa pergunta já foi respondida no Mercado Livre.",
                     "raw_response": question_detail,
-                    "question": question_to_api(question) if question else None,
+                    "question": question_to_api(question, db=db) if question else None,
                 }
         except HTTPException as status_error:
             if status_error.status_code in {401, 403}:
@@ -1569,7 +1725,7 @@ def answer_mercadolivre_question(
                         "already_answered": True,
                         "message": "Essa pergunta já foi respondida no Mercado Livre.",
                         "raw_response": question_detail,
-                        "question": question_to_api(question) if question else None,
+                        "question": question_to_api(question, db=db) if question else None,
                     }
             except HTTPException as status_error:
                 if status_error.status_code == 403:
@@ -1596,7 +1752,7 @@ def answer_mercadolivre_question(
                     "already_answered": True,
                     "message": "Essa pergunta já foi respondida no Mercado Livre.",
                     "raw_response": question_detail,
-                    "question": question_to_api(question) if question else None,
+                    "question": question_to_api(question, db=db) if question else None,
                 }
         elif error.status_code == 403:
             raise HTTPException(
@@ -1621,7 +1777,7 @@ def answer_mercadolivre_question(
                 "already_answered": True,
                 "message": "Essa pergunta já foi respondida no Mercado Livre.",
                 "raw_response": question_detail,
-                "question": question_to_api(question) if question else None,
+                "question": question_to_api(question, db=db) if question else None,
             }
         else:
             raise
@@ -1639,7 +1795,7 @@ def answer_mercadolivre_question(
         "already_answered": False,
         "message": "Resposta enviada ao Mercado Livre",
         "raw_response": result["body"],
-        "question": question_to_api(question) if question else None,
+        "question": question_to_api(question, db=db) if question else None,
     }
 
 
@@ -1660,13 +1816,17 @@ def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing required field: instruction")
 
     try:
+        related_products = search_related_products(question, limit=5, db=db)
+        logger.info("Injecting related products into AI rewrite count=%s", len(related_products))
         rewritten_text = generate_openai_rewrite(
             question,
             original_response,
             instruction,
             settings=get_default_settings(db),
+            related_products=related_products,
         )
-        return {"rewritten_text": rewritten_text}
+        logger.info("AI rewrite generated successfully")
+        return {"rewritten_text": rewritten_text, "related_products": related_products}
     except Exception as error:
         logger.exception("OpenAI rewrite failed")
         print(f"OpenAI rewrite failed: {error}")
@@ -1818,7 +1978,7 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
     )
     if status:
         query = query.filter(QuestionRecord.status == normalize_db_status(status))
-    return [question_to_api(question) for question in query.all()]
+    return [question_to_api(question, db=db) for question in query.all()]
 
 
 @app.get("/products")
@@ -1864,15 +2024,20 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
 
     if not force and question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
-        return question_to_api(question)
+        return question_to_api(question, db=db)
 
     if force:
         try:
-            suggestion_text = generate_openai_initial_suggestion(
-                product_title=question.product_title,
-                question_text=question.question_text,
-                settings=get_default_settings(db),
-            )
+          suggestion_text = generate_openai_initial_suggestion(
+              product_title=question.product_title,
+              question_text=question.question_text,
+              settings=get_default_settings(db),
+              related_products=search_related_products(
+                  f"{question.product_title or ''} {question.question_text or ''}",
+                  limit=5,
+                  db=db,
+              ),
+          )
         except Exception:
             logger.exception("Failed to regenerate AI suggestion for question %s", question.id)
             suggestion_text = (
@@ -1904,7 +2069,7 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
         ensure_initial_suggestion(db, question)
     db.commit()
     db.refresh(question)
-    return question_to_api(question)
+    return question_to_api(question, db=db)
 
 
 @app.post("/questions/answer")
@@ -1949,7 +2114,7 @@ def get_question(question_id: int, db: Session = Depends(get_db)):
     question = db.get(QuestionRecord, question_id)
     if not question or question.company_id != DEFAULT_COMPANY_ID:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
-    return question_to_api(question)
+    return question_to_api(question, db=db)
 
 
 @app.post("/questions/{question_id}/suggest", response_model=SuggestionResponse)
@@ -1965,6 +2130,11 @@ def suggest_answer(question_id: int, db: Session = Depends(get_db)):
             product_title=question.product_title,
             question_text=question.question_text,
             settings=get_default_settings(db),
+            related_products=search_related_products(
+                f"{question.product_title or ''} {question.question_text or ''}",
+                limit=5,
+                db=db,
+            ),
         )
     except Exception:
         logger.exception("Failed to generate AI suggestion on demand for question %s", question.id)
@@ -2025,7 +2195,7 @@ def approve_question(question_id: int, payload: ApprovePayload, db: Session = De
         )
     db.commit()
     db.refresh(question)
-    return question_to_api(question)
+    return question_to_api(question, db=db)
 
 
 
