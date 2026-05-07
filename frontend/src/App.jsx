@@ -240,8 +240,10 @@ function IntegrationCard({
   integration,
   onConnect,
   onFetchRealQuestions,
+  onSyncProducts,
   canFetchRealQuestions,
   isFetchingRealQuestions,
+  isSyncingProducts,
 }) {
   const isConnected = integration.status === "Conectado";
 
@@ -260,6 +262,9 @@ function IntegrationCard({
           <>
             <p>{integration.store}</p>
             <small>Última sincronização: {formatDate(integration.lastSync)}</small>
+            {integration.lastProductsSync ? (
+              <small>Último sync de produtos: {formatDate(integration.lastProductsSync)}</small>
+            ) : null}
             <small>Token: {integration.token_status || "valid"}</small>
           </>
         ) : (
@@ -280,6 +285,14 @@ function IntegrationCard({
                 {isFetchingRealQuestions ? "Sincronizando..." : "Sincronizar perguntas"}
               </button>
             ) : null}
+            <button
+              className="secondary"
+              onClick={onSyncProducts}
+              disabled={isSyncingProducts}
+            >
+              <RefreshCw size={17} className={isSyncingProducts ? "spin" : ""} />
+              {isSyncingProducts ? "Sincronizando produtos..." : "Sincronizar produtos"}
+            </button>
           </>
         ) : (
           <button className="primary" onClick={() => onConnect(integration)}>
@@ -329,8 +342,10 @@ function IntegrationsPage({
   integrationHealth,
   onConnect,
   onFetchRealQuestions,
+  onSyncProducts,
   onTestHealth,
   fetchingRealQuestions,
+  syncingProducts,
   testingIntegrationId,
   pendingIntegration,
   onCancelConnect,
@@ -371,11 +386,13 @@ function IntegrationsPage({
             integration={integration}
             onConnect={onConnect}
             onFetchRealQuestions={onFetchRealQuestions}
+            onSyncProducts={onSyncProducts}
             canFetchRealQuestions={
               integration.id === "mercado-livre" &&
               integration.status === "Conectado"
             }
             isFetchingRealQuestions={fetchingRealQuestions}
+            isSyncingProducts={syncingProducts}
           />
         ))}
       </div>
@@ -564,7 +581,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
   );
 }
 
-function AnalyticsPage({ questions, appData }) {
+function AnalyticsPage({ questions, appData, productsSummary }) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
   const highPriority = questions.filter((question) => question.priority === "Alta").length;
@@ -598,9 +615,9 @@ function AnalyticsPage({ questions, appData }) {
           <p>Fila que merece atenção mais rápida.</p>
         </article>
         <article className="settings-card">
-          <span>Uso</span>
-          <h2>{appData.usageLogs.reduce((total, log) => total + log.count, 0)}</h2>
-          <p>Eventos registrados de IA e operação.</p>
+          <span>Produtos cacheados</span>
+          <h2>{productsSummary.total}</h2>
+          <p>{productsSummary.active} ativos · {productsSummary.inactive} inativos</p>
         </article>
       </div>
     </section>
@@ -1001,6 +1018,8 @@ export default function App() {
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
+  const [syncingProducts, setSyncingProducts] = useState(false);
+  const [productsSummary, setProductsSummary] = useState({ total: 0, active: 0, inactive: 0 });
   const [sendingAnswerId, setSendingAnswerId] = useState(null);
   const [generatingQuestionId, setGeneratingQuestionId] = useState(null);
   const [answerNotice, setAnswerNotice] = useState("");
@@ -1046,6 +1065,21 @@ export default function App() {
     return data;
   }
 
+  async function loadProductsSummary() {
+    const response = await fetch(`${API_URL}/products`);
+    const products = await response.json();
+    if (!response.ok || !Array.isArray(products)) {
+      throw new Error("Não foi possível carregar produtos cacheados.");
+    }
+    const active = products.filter((product) => product.status === "active").length;
+    setProductsSummary({
+      total: products.length,
+      active,
+      inactive: products.length - active,
+    });
+    return products;
+  }
+
   useEffect(() => {
     setSelectedId((current) => current || questions[0]?.id || null);
   }, [questions]);
@@ -1082,6 +1116,7 @@ export default function App() {
 
     loadPersistedQuestions();
     loadCompanySettings();
+    loadProductsSummary().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1431,6 +1466,38 @@ export default function App() {
     }
   }
 
+  async function syncMercadoLivreProducts() {
+    setSyncingProducts(true);
+    setQuestionNotice("");
+    try {
+      const response = await fetch(`${API_URL}/integrations/mercadolivre/products/sync`, {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "Não foi possível sincronizar produtos.");
+      }
+      setProductsSummary({
+        total: data.fetched || 0,
+        active: data.active || 0,
+        inactive: data.inactive || 0,
+      });
+      const syncedAt = new Date().toISOString();
+      setIntegrations((current) =>
+        current.map((integration) =>
+          integration.id === "mercado-livre"
+            ? { ...integration, lastProductsSync: syncedAt }
+            : integration
+        )
+      );
+      setQuestionNotice("Produtos do Mercado Livre sincronizados.");
+    } catch (error) {
+      setQuestionNotice(error.message || "Não foi possível sincronizar produtos.");
+    } finally {
+      setSyncingProducts(false);
+    }
+  }
+
   async function testIntegrationHealth(id) {
     setTestingIntegrationId(id);
     try {
@@ -1486,8 +1553,10 @@ export default function App() {
             integrationHealth={integrationHealth}
             onConnect={openConnectModal}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
+            onSyncProducts={syncMercadoLivreProducts}
             onTestHealth={testIntegrationHealth}
             fetchingRealQuestions={fetchingMlQuestions}
+            syncingProducts={syncingProducts}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
             onCancelConnect={() => setPendingIntegration(null)}
@@ -1510,7 +1579,7 @@ export default function App() {
             }
           />
         ) : isAnalytics ? (
-          <AnalyticsPage questions={visibleQuestions} appData={appData} />
+          <AnalyticsPage questions={visibleQuestions} appData={appData} productsSummary={productsSummary} />
         ) : (
           <>
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
