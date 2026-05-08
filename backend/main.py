@@ -24,6 +24,7 @@ from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
 from sqlalchemy import Text, cast, or_, text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 ML_TOKEN_PATH = Path(__file__).with_name("mercadolivre_tokens.json")
 ML_AUTH_BASE_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE_URL = "https://api.mercadolibre.com"
+ML_PRODUCTION_REDIRECT_URI = "https://marketplace-ai-backend-ky72.onrender.com/integrations/mercadolivre/callback"
 DATABASE_READY = False
 
 
@@ -341,6 +343,19 @@ def get_ml_config() -> dict[str, str]:
 def ml_is_configured() -> bool:
     config = get_ml_config()
     return all(config.values())
+
+
+def get_ml_config_errors(config: dict[str, str]) -> list[str]:
+    errors = []
+    if not config["client_id"]:
+        errors.append("MERCADOLIVRE_CLIENT_ID missing")
+    if not config["client_secret"]:
+        errors.append("MERCADOLIVRE_CLIENT_SECRET missing")
+    if not config["redirect_uri"]:
+        errors.append("MERCADOLIVRE_REDIRECT_URI missing")
+    elif config["redirect_uri"] != ML_PRODUCTION_REDIRECT_URI:
+        errors.append(f"MERCADOLIVRE_REDIRECT_URI must be {ML_PRODUCTION_REDIRECT_URI}")
+    return errors
 
 
 def read_ml_tokens() -> dict[str, Any]:
@@ -1144,6 +1159,10 @@ def run_mercadolivre_sync_background(source: str, payload: Any | None = None) ->
     try:
         logger.info("Mercado Livre background sync started source=%s payload=%s", source, safe_log_payload(payload))
         sync_mercadolivre_questions(db, source=source)
+    except OperationalError:
+        logger.exception("Mercado Livre background sync database connection error source=%s", source)
+    except SQLAlchemyError:
+        logger.exception("Mercado Livre background sync database error source=%s", source)
     except Exception:
         logger.exception("Mercado Livre background sync error source=%s", source)
     finally:
@@ -1170,20 +1189,6 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
         return False
     topic = str(payload.get("topic") or payload.get("type") or "").strip().lower()
     resource = str(payload.get("resource") or payload.get("path") or payload.get("url") or "").strip().lower()
-    candidate_text = " ".join(
-        str(value).lower()
-        for key, value in payload.items()
-        if key in {"topic", "resource", "path", "url", "application_id", "user_id"} and value is not None
-    )
-    unrelated_topics = {
-        "items",
-        "orders_v2",
-        "stock-locations",
-        "shipments",
-        "payments",
-        "user-products",
-        "messages",
-    }
 
     if topic == "questions":
         logger.info(
@@ -1192,29 +1197,15 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
             resource,
         )
         return True
-    if "/questions" in resource or "questions/" in resource:
+    if "/questions" in resource:
         logger.info(
             "Mercado Livre notification processed for question sync topic=%s resource=%s reason=resource_questions",
             topic,
             resource,
         )
         return True
-    if "question" in candidate_text or "questions" in candidate_text or "q&a" in candidate_text:
-        logger.info(
-            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=payload_mentions_questions",
-            topic,
-            resource,
-        )
-        return True
-    if topic in unrelated_topics:
-        logger.info(
-            "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=unrelated_topic",
-            topic,
-            resource,
-        )
-        return False
     logger.info(
-        "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=no_question_signal",
+        "Notification ignored for question sync topic=%s resource=%s reason=unrelated_or_no_question_resource",
         topic,
         resource,
     )
@@ -1602,12 +1593,14 @@ def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_
 @app.get("/integrations/mercadolivre/auth-url")
 def mercadolivre_auth_url():
     config = get_ml_config()
-    if not ml_is_configured():
+    config_errors = get_ml_config_errors(config)
+    if config_errors:
         return {
             "configured": False,
             "auth_url": None,
             "fallback_available": True,
-            "message": "Mercado Livre OAuth is not configured. Set ML_CLIENT_ID, ML_CLIENT_SECRET and ML_REDIRECT_URI.",
+            "message": "Mercado Livre OAuth is not configured correctly.",
+            "errors": config_errors,
         }
 
     query = urlencode(
@@ -1618,14 +1611,17 @@ def mercadolivre_auth_url():
             "state": "marketplace-ai-inbox",
         }
     )
-    return {"configured": True, "auth_url": f"{ML_AUTH_BASE_URL}?{query}"}
+    auth_url = f"{ML_AUTH_BASE_URL}?{query}"
+    logger.info("Mercado Livre auth_url generated redirect_uri=%s auth_url=%s", config["redirect_uri"], auth_url)
+    return {"configured": True, "auth_url": auth_url, "redirect_uri": config["redirect_uri"]}
 
 
 @app.get("/integrations/mercadolivre/callback")
 def mercadolivre_callback(code: str = Query(...)):
     config = get_ml_config()
-    if not ml_is_configured():
-        raise HTTPException(status_code=400, detail="Mercado Livre OAuth is not configured")
+    config_errors = get_ml_config_errors(config)
+    if config_errors:
+        raise HTTPException(status_code=400, detail={"message": "Mercado Livre OAuth is not configured correctly.", "errors": config_errors})
 
     token_data = ml_request_json(
         f"{ML_API_BASE_URL}/oauth/token",
@@ -2166,6 +2162,32 @@ def list_integrations_health(db: Session = Depends(get_db)):
                     last_sync=None,
                     last_error=error.message,
                     token_status="missing",
+                )
+            )
+        except (OperationalError, SQLAlchemyError) as error:
+            logger.exception("Integration health database error for %s", service.client.id)
+            health_items.append(
+                IntegrationHealth(
+                    id=service.client.id,
+                    channel=service.client.channel,
+                    connected=False,
+                    api_status="down",
+                    last_sync=None,
+                    last_error=f"Database temporarily unavailable: {error.__class__.__name__}",
+                    token_status="unknown",
+                )
+            )
+        except Exception as error:
+            logger.exception("Integration health unexpected error for %s", service.client.id)
+            health_items.append(
+                IntegrationHealth(
+                    id=service.client.id,
+                    channel=service.client.channel,
+                    connected=False,
+                    api_status="down",
+                    last_sync=None,
+                    last_error=f"Health check unavailable: {error.__class__.__name__}",
+                    token_status="unknown",
                 )
             )
     return health_items
