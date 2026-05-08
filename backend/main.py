@@ -394,9 +394,23 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
         integration.token_status = "valid"
         integration.last_sync = datetime.utcnow()
         integration.updated_at = datetime.utcnow()
+        seller_id_present = bool(integration.seller_id)
+        refresh_token_present = bool(integration.refresh_token)
         db.commit()
+        logger.info(
+            "Mercado Livre OAuth token save succeeded seller_id_present=%s refresh_token_present=%s",
+            seller_id_present,
+            refresh_token_present,
+        )
         token_data["expires_at"] = int(expires_at.timestamp())
+        token_data["refresh_token"] = integration.refresh_token
+        token_data["seller_id"] = integration.seller_id
+        token_data["user_id"] = integration.seller_id
         return token_data
+    except Exception:
+        db.rollback()
+        logger.exception("Mercado Livre OAuth token save DB error")
+        raise
     finally:
         db.close()
 
@@ -405,27 +419,41 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
     db = SessionLocal()
     try:
         integration = get_ml_integration(db)
-        if "access_token" in updates:
+        if updates.get("access_token"):
             integration.access_token = updates["access_token"]
-        if "refresh_token" in updates:
+        if updates.get("refresh_token"):
             integration.refresh_token = updates["refresh_token"]
         if "seller_id" in updates or "user_id" in updates:
-            integration.seller_id = str(updates.get("seller_id") or updates.get("user_id") or "")
+            resolved_seller_id = updates.get("seller_id") or updates.get("user_id") or integration.seller_id
+            integration.seller_id = str(resolved_seller_id or "")
         if "expires_in" in updates:
             integration.expires_in = int(updates["expires_in"])
         if "expires_at" in updates:
             integration.expires_at = datetime.fromtimestamp(int(updates["expires_at"]))
         integration.token_status = updates.get("token_status") or integration.token_status or "valid"
         integration.updated_at = datetime.utcnow()
+        tokens = {
+            "access_token": integration.access_token,
+            "refresh_token": integration.refresh_token,
+            "seller_id": integration.seller_id,
+            "user_id": integration.seller_id,
+            "expires_in": integration.expires_in,
+            "expires_at": int(integration.expires_at.timestamp()) if integration.expires_at else 0,
+            "token_status": integration.token_status,
+            "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
+        }
         db.commit()
+        logger.info("Mercado Livre token metadata update succeeded fields=%s", sorted(updates.keys()))
+        return tokens
+    except Exception:
+        db.rollback()
+        logger.exception("Mercado Livre token metadata update DB error")
+        raise
     finally:
         db.close()
-    tokens = read_ml_tokens()
-    tokens.update(updates)
-    return tokens
 
 
-def retry_database_write(operation, *, label: str, attempts: int = 3):
+def retry_database_write(operation, *, label: str, attempts: int = 5):
     last_error = None
     for attempt in range(1, attempts + 1):
         try:
@@ -433,15 +461,21 @@ def retry_database_write(operation, *, label: str, attempts: int = 3):
         except (OperationalError, SQLAlchemyError) as error:
             last_error = error
             logger.warning(
-                "Database write failed label=%s attempt=%s/%s error=%s",
+                "Database write failed label=%s attempt=%s/%s error_class=%s error_message=%s",
                 label,
                 attempt,
                 attempts,
                 error.__class__.__name__,
+                str(error),
             )
             if attempt < attempts:
                 time.sleep(0.8 * attempt)
-    logger.exception("Database write exhausted retries label=%s", label)
+    logger.error(
+        "Database write exhausted retries label=%s last_error_class=%s last_error_message=%s",
+        label,
+        last_error.__class__.__name__ if last_error else "unknown",
+        str(last_error) if last_error else "unknown",
+    )
     raise HTTPException(
         status_code=503,
         detail="Mercado Livre authorized, but database save failed. Please retry.",
@@ -648,7 +682,6 @@ def get_ml_seller_id(tokens: dict[str, Any]) -> str:
     seller_id = me.get("id")
     if not seller_id:
         raise HTTPException(status_code=502, detail="Could not resolve Mercado Livre seller_id")
-    update_ml_tokens({"seller_id": seller_id})
     return str(seller_id)
 
 
@@ -720,6 +753,7 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
 def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
     existing = question.ai_suggestion
     if existing and (existing.original_suggestion or existing.final_response):
+        logger.info("OpenAI skipped because suggestion already exists external_id=%s", question.external_id)
         return
     settings = get_default_settings(db)
     related_products = search_related_products(
@@ -1205,7 +1239,7 @@ def safe_log_payload(payload: Any, *, max_length: int = 2000) -> str:
 def should_process_mercadolivre_question_notification(payload: Any) -> bool:
     if not isinstance(payload, dict):
         logger.info(
-            "webhook topic=%s resource=%s action=ignored reason=payload_not_object",
+            "webhook action=ignored topic=%s resource=%s reason=payload_not_object",
             None,
             None,
         )
@@ -1215,20 +1249,20 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
 
     if topic == "questions":
         logger.info(
-            "webhook topic=%s resource=%s action=question_sync_started reason=topic_questions",
+            "webhook action=question_sync_started topic=%s resource=%s reason=topic_questions",
             topic,
             resource,
         )
         return True
     if "/questions" in resource:
         logger.info(
-            "webhook topic=%s resource=%s action=question_sync_started reason=resource_questions",
+            "webhook action=question_sync_started topic=%s resource=%s reason=resource_questions",
             topic,
             resource,
         )
         return True
     logger.info(
-        "webhook topic=%s resource=%s action=ignored reason=unrelated_or_no_question_resource",
+        "webhook action=ignored topic=%s resource=%s reason=unrelated_or_no_question_resource",
         topic,
         resource,
     )
@@ -1666,6 +1700,12 @@ def mercadolivre_callback(code: str = Query(...)):
         )
     except HTTPException as error:
         logger.warning("Could not resolve Mercado Livre seller_id after OAuth: %s", error.detail)
+    except (OperationalError, SQLAlchemyError) as error:
+        logger.warning(
+            "Mercado Livre OAuth token saved, but seller_id database update failed error_class=%s error_message=%s",
+            error.__class__.__name__,
+            str(error),
+        )
     frontend_url = os.getenv("FRONTEND_URL")
     if frontend_url:
         return RedirectResponse(f"{frontend_url.rstrip('/')}/?ml_connected=true")
@@ -2143,12 +2183,10 @@ def list_integrations_health(db: Session = Depends(get_db)):
                 if integration.access_token or integration.refresh_token:
                     try:
                         get_valid_mercadolivre_token(db)
-                        db.refresh(integration)
                         connected = True
                         token_status = "valid"
                         last_error = None
                     except HTTPException as error:
-                        db.refresh(integration)
                         token_status = integration.token_status or "expired"
                         last_error = "Mercado Livre token expirado. Reconecte a integração."
                         logger.warning("Mercado Livre health token refresh failed: %s", error.detail)
@@ -2290,23 +2328,37 @@ def list_integration_questions(integration_id: str):
 
 @app.get("/questions")
 def list_questions(status: str | None = None, db: Session = Depends(get_db)):
-    query = (
-        db.query(QuestionRecord)
-        .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
-            or_(
-                QuestionRecord.status == "pending",
-                QuestionRecord.answered_source == "app",
-            ),
+    try:
+        query = (
+            db.query(QuestionRecord)
+            .filter(
+                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                or_(
+                    QuestionRecord.status == "pending",
+                    QuestionRecord.answered_source == "app",
+                ),
+            )
+            .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
         )
-        .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
-    )
-    if status:
-        query = query.filter(QuestionRecord.status == normalize_db_status(status))
-    local_questions = [question_to_api(question, db=db) for question in query.all()]
+        if status:
+            query = query.filter(QuestionRecord.status == normalize_db_status(status))
+        local_questions = [question_to_api(question, db=db) for question in query.all()]
+    except (OperationalError, SQLAlchemyError):
+        logger.exception("Questions database unavailable while loading local questions")
+        return []
+
     if status and normalize_db_status(status) != "responded":
         return local_questions
-    return local_questions + get_live_portal_answered_questions(db)
+
+    try:
+        live_portal_questions = get_live_portal_answered_questions(db)
+    except (OperationalError, SQLAlchemyError):
+        logger.exception("Questions database unavailable while loading live portal answers")
+        live_portal_questions = []
+    except Exception:
+        logger.exception("Live portal answered questions unavailable; returning local questions only")
+        live_portal_questions = []
+    return local_questions + live_portal_questions
 
 
 @app.get("/products")
