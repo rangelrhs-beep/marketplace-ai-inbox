@@ -1160,6 +1160,67 @@ def safe_log_payload(payload: Any, *, max_length: int = 2000) -> str:
     return text
 
 
+def should_process_mercadolivre_question_notification(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        logger.info(
+            "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=payload_not_object",
+            None,
+            None,
+        )
+        return False
+    topic = str(payload.get("topic") or payload.get("type") or "").strip().lower()
+    resource = str(payload.get("resource") or payload.get("path") or payload.get("url") or "").strip().lower()
+    candidate_text = " ".join(
+        str(value).lower()
+        for key, value in payload.items()
+        if key in {"topic", "resource", "path", "url", "application_id", "user_id"} and value is not None
+    )
+    unrelated_topics = {
+        "items",
+        "orders_v2",
+        "stock-locations",
+        "shipments",
+        "payments",
+        "user-products",
+        "messages",
+    }
+
+    if topic == "questions":
+        logger.info(
+            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=topic_questions",
+            topic,
+            resource,
+        )
+        return True
+    if "/questions" in resource or "questions/" in resource:
+        logger.info(
+            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=resource_questions",
+            topic,
+            resource,
+        )
+        return True
+    if "question" in candidate_text or "questions" in candidate_text or "q&a" in candidate_text:
+        logger.info(
+            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=payload_mentions_questions",
+            topic,
+            resource,
+        )
+        return True
+    if topic in unrelated_topics:
+        logger.info(
+            "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=unrelated_topic",
+            topic,
+            resource,
+        )
+        return False
+    logger.info(
+        "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=no_question_signal",
+        topic,
+        resource,
+    )
+    return False
+
+
 class Status(str, Enum):
     pending = "Pendente"
     approved = "Aprovada"
@@ -1614,10 +1675,12 @@ def mercadolivre_notifications(
     try:
         logger.info("Mercado Livre notification received payload=%s", safe_log_payload(payload))
         print(f"Mercado Livre notification received payload={safe_log_payload(payload)}")
+        if not should_process_mercadolivre_question_notification(payload):
+            return {"ok": True, "processed": False}
         background_tasks.add_task(run_mercadolivre_sync_background, "webhook", payload)
     except Exception:
         logger.exception("Mercado Livre notification handler failed before scheduling background sync")
-    return {"ok": True}
+    return {"ok": True, "processed": True}
 
 
 @app.post("/jobs/sync-mercadolivre")
