@@ -1,6 +1,7 @@
 import os
 
 from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -24,12 +25,21 @@ engine_options = {
 }
 
 if not is_sqlite:
+    if os.getenv("DB_USE_NULLPOOL", "").lower() in {"1", "true", "yes"}:
+        engine_options["poolclass"] = NullPool
+    else:
+        engine_options.update(
+            {
+                "pool_recycle": int(os.getenv("DB_POOL_RECYCLE", "120")),
+                "pool_size": int(os.getenv("DB_POOL_SIZE", "1")),
+                "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "0")),
+                "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
+            }
+        )
     engine_options.update(
         {
-            "pool_recycle": 180,
-            "pool_size": int(os.getenv("DB_POOL_SIZE", "2")),
-            "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "1")),
-            "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
+            "client_encoding": "utf8",
+            "use_native_hstore": False,
         }
     )
 

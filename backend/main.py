@@ -425,6 +425,29 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
     return tokens
 
 
+def retry_database_write(operation, *, label: str, attempts: int = 3):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except (OperationalError, SQLAlchemyError) as error:
+            last_error = error
+            logger.warning(
+                "Database write failed label=%s attempt=%s/%s error=%s",
+                label,
+                attempt,
+                attempts,
+                error.__class__.__name__,
+            )
+            if attempt < attempts:
+                time.sleep(0.8 * attempt)
+    logger.exception("Database write exhausted retries label=%s", label)
+    raise HTTPException(
+        status_code=503,
+        detail="Mercado Livre authorized, but database save failed. Please retry.",
+    ) from last_error
+
+
 def ml_connected_at(tokens: dict[str, Any]) -> datetime | None:
     raw_value = tokens.get("connected_at") or tokens.get("updated_at")
     if not raw_value:
@@ -1182,7 +1205,7 @@ def safe_log_payload(payload: Any, *, max_length: int = 2000) -> str:
 def should_process_mercadolivre_question_notification(payload: Any) -> bool:
     if not isinstance(payload, dict):
         logger.info(
-            "Mercado Livre notification ignored for question sync topic=%s resource=%s reason=payload_not_object",
+            "webhook topic=%s resource=%s action=ignored reason=payload_not_object",
             None,
             None,
         )
@@ -1192,20 +1215,20 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
 
     if topic == "questions":
         logger.info(
-            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=topic_questions",
+            "webhook topic=%s resource=%s action=question_sync_started reason=topic_questions",
             topic,
             resource,
         )
         return True
     if "/questions" in resource:
         logger.info(
-            "Mercado Livre notification processed for question sync topic=%s resource=%s reason=resource_questions",
+            "webhook topic=%s resource=%s action=question_sync_started reason=resource_questions",
             topic,
             resource,
         )
         return True
     logger.info(
-        "Notification ignored for question sync topic=%s resource=%s reason=unrelated_or_no_question_resource",
+        "webhook topic=%s resource=%s action=ignored reason=unrelated_or_no_question_resource",
         topic,
         resource,
     )
@@ -1634,10 +1657,13 @@ def mercadolivre_callback(code: str = Query(...)):
             "redirect_uri": config["redirect_uri"],
         },
     )
-    tokens = save_ml_tokens(token_data)
+    tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
     try:
         seller_id = get_ml_seller_id(tokens)
-        tokens = update_ml_tokens({"seller_id": seller_id})
+        tokens = retry_database_write(
+            lambda: update_ml_tokens({"seller_id": seller_id}),
+            label="mercadolivre_oauth_save_seller_id",
+        )
     except HTTPException as error:
         logger.warning("Could not resolve Mercado Livre seller_id after OAuth: %s", error.detail)
     frontend_url = os.getenv("FRONTEND_URL")
@@ -2173,7 +2199,7 @@ def list_integrations_health(db: Session = Depends(get_db)):
                     connected=False,
                     api_status="down",
                     last_sync=None,
-                    last_error=f"Database temporarily unavailable: {error.__class__.__name__}",
+                    last_error="database_unavailable",
                     token_status="unknown",
                 )
             )
