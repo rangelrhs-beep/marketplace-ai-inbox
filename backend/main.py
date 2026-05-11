@@ -24,7 +24,7 @@ from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
 from sqlalchemy import Text, cast, or_, text
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
@@ -35,11 +35,14 @@ ML_AUTH_BASE_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE_URL = "https://api.mercadolibre.com"
 ML_PRODUCTION_REDIRECT_URI = "https://marketplace-ai-backend-ky72.onrender.com/integrations/mercadolivre/callback"
 DATABASE_READY = False
+PROCESSED_ML_NOTIFICATION_IDS: dict[str, float] = {}
 
 
 def init_database() -> None:
     global DATABASE_READY
+    DATABASE_READY = False
     try:
+        logger.info("Database startup migration started")
         Base.metadata.create_all(bind=engine)
         ensure_database_columns()
         db = SessionLocal()
@@ -69,12 +72,14 @@ def init_database() -> None:
         finally:
             db.close()
         DATABASE_READY = True
+        logger.info("Database startup migration finished")
     except Exception:
         DATABASE_READY = False
         logger.exception("Database initialization failed. API will keep running with frontend/demo fallbacks.")
 
 
 def ensure_database_columns() -> None:
+    logger.info("Database column/index compatibility check started")
     ai_suggestion_columns = {
         "suggestion_text": "TEXT",
         "edited_text": "TEXT",
@@ -111,18 +116,32 @@ def ensure_database_columns() -> None:
     }
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql":
+            existing_columns = {
+                (row[0], row[1])
+                for row in connection.execute(
+                    text(
+                        "SELECT table_name, column_name "
+                        "FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() "
+                        "AND table_name IN ('ai_suggestions', 'integrations', 'questions')"
+                    )
+                ).fetchall()
+            }
             for column, column_type in ai_suggestion_columns.items():
-                connection.execute(
-                    text(f"ALTER TABLE ai_suggestions ADD COLUMN IF NOT EXISTS {column} {column_type}")
-                )
+                if ("ai_suggestions", column) not in existing_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE ai_suggestions ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                    )
             for column, column_type in integration_columns.items():
-                connection.execute(
-                    text(f"ALTER TABLE integrations ADD COLUMN IF NOT EXISTS {column} {column_type}")
-                )
+                if ("integrations", column) not in existing_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE integrations ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                    )
             for column, column_type in question_columns.items():
-                connection.execute(
-                    text(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {column} {column_type}")
-                )
+                if ("questions", column) not in existing_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE questions ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                    )
             connection.execute(
                 text(
                     "CREATE TABLE IF NOT EXISTS products_cache ("
@@ -136,6 +155,34 @@ def ensure_database_columns() -> None:
                     "ON products_cache (company_id, provider, external_id)"
                 )
             )
+            existing_suggestion_unique_index = connection.execute(
+                text(
+                    "SELECT 1 FROM pg_indexes "
+                    "WHERE schemaname = current_schema() "
+                    "AND tablename = 'ai_suggestions' "
+                    "AND indexdef ILIKE '%UNIQUE%' "
+                    "AND indexdef ILIKE '%question_id%' "
+                    "LIMIT 1"
+                )
+            ).first()
+            if existing_suggestion_unique_index:
+                logger.info("ai_suggestions.question_id unique index already exists")
+            else:
+                duplicate_suggestion = connection.execute(
+                    text(
+                        "SELECT question_id FROM ai_suggestions "
+                        "GROUP BY question_id HAVING COUNT(*) > 1 LIMIT 1"
+                    )
+                ).first()
+                if duplicate_suggestion:
+                    logger.warning("Skipped ai_suggestions.question_id unique index because duplicates exist")
+                else:
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_suggestions_question_id "
+                            "ON ai_suggestions (question_id)"
+                        )
+                    )
         elif engine.dialect.name == "sqlite":
             existing = {
                 row[1]
@@ -190,6 +237,22 @@ def ensure_database_columns() -> None:
                     "ON products_cache (company_id, provider, external_id)"
                 )
             )
+            duplicate_suggestion = connection.execute(
+                text(
+                    "SELECT question_id FROM ai_suggestions "
+                    "GROUP BY question_id HAVING COUNT(*) > 1 LIMIT 1"
+                )
+            ).first()
+            if duplicate_suggestion:
+                logger.warning("Skipped ai_suggestions.question_id unique index because duplicates exist")
+            else:
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_suggestions_question_id "
+                        "ON ai_suggestions (question_id)"
+                    )
+                )
+    logger.info("Database column/index compatibility check finished")
 
 
 def normalize_db_status(status: str | None) -> str:
@@ -497,6 +560,54 @@ def retry_database_write(operation, *, label: str, attempts: int = 5):
     ) from last_error
 
 
+def is_deadlock_error(error: BaseException) -> bool:
+    text_value = str(error).lower()
+    original = getattr(error, "orig", None)
+    original_text = str(original).lower() if original else ""
+    original_class = original.__class__.__name__.lower() if original else ""
+    return (
+        "deadlock detected" in text_value
+        or "deadlock detected" in original_text
+        or "deadlockdetected" in error.__class__.__name__.lower()
+        or "deadlockdetected" in original_class
+    )
+
+
+def run_db_deadlock_retry(operation, *, db: Session, label: str, attempts: int = 3):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except IntegrityError as error:
+            last_error = error
+            db.rollback()
+            logger.warning(
+                "Database integrity conflict retry label=%s attempt=%s/%s error_class=%s error_message=%s",
+                label,
+                attempt,
+                attempts,
+                error.__class__.__name__,
+                str(error),
+            )
+            if attempt < attempts:
+                time.sleep(0.3 * (2 ** (attempt - 1)))
+        except OperationalError as error:
+            if not is_deadlock_error(error):
+                raise
+            last_error = error
+            db.rollback()
+            logger.warning(
+                "Database deadlock retry label=%s attempt=%s/%s error_message=%s",
+                label,
+                attempt,
+                attempts,
+                str(error),
+            )
+            if attempt < attempts:
+                time.sleep(0.4 * (2 ** (attempt - 1)))
+    raise last_error
+
+
 def ml_connected_at(tokens: dict[str, Any]) -> datetime | None:
     raw_value = tokens.get("connected_at") or tokens.get("updated_at")
     if not raw_value:
@@ -773,8 +884,19 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
 
 
 def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
-    existing = question.ai_suggestion
-    if existing and (existing.original_suggestion or existing.final_response):
+    if normalize_db_status(question.status) != "pending":
+        logger.info("OpenAI skipped because question is not pending external_id=%s", question.external_id)
+        return
+    if not question.id:
+        db.flush()
+    existing = (
+        db.query(AiSuggestion)
+        .filter(AiSuggestion.question_id == question.id)
+        .first()
+    )
+    if existing:
+        question.ai_suggestion = existing
+    if existing and get_suggestion_text(existing):
         logger.info("OpenAI skipped because suggestion already exists external_id=%s", question.external_id)
         return
     settings = get_default_settings(db)
@@ -802,15 +924,27 @@ def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
             "Não foi possível gerar a sugestão inicial da IA. "
             "Revise a pergunta e escreva uma resposta antes de enviar."
         )
+    latest = (
+        db.query(AiSuggestion)
+        .filter(AiSuggestion.question_id == question.id)
+        .first()
+    )
+    if latest and get_suggestion_text(latest):
+        question.ai_suggestion = latest
+        logger.info("Duplicate suggestion skipped external_id=%s question_id=%s", question.external_id, question.id)
+        return
+    existing = latest or existing
     if existing:
         existing.original_suggestion = suggestion_text
         existing.suggestion_text = suggestion_text
         existing.final_response = suggestion_text
         existing.final_answer = suggestion_text
         existing.updated_at = datetime.utcnow()
+        question.ai_suggestion = existing
     else:
         suggestion = AiSuggestion(
             question=question,
+            question_id=question.id,
             original_suggestion=suggestion_text,
             suggestion_text=suggestion_text,
             final_response=suggestion_text,
@@ -1173,6 +1307,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             had_suggestion = bool(get_suggestion_text(existing_question.ai_suggestion)) if existing_question else False
             question = upsert_ml_question(db, normalized)
             stats["updated" if existing_question else "created"] += 1
+            db.flush()
             ensure_initial_suggestion(db, question)
             if not had_suggestion and get_suggestion_text(question.ai_suggestion):
                 stats["suggestions_generated"] += 1
@@ -1224,13 +1359,26 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
         }
 
     try:
-        return run_with_tokens()
+        return run_db_deadlock_retry(
+            lambda: run_with_tokens(),
+            db=db,
+            label=f"sync_mercadolivre_questions:{source}",
+        )
     except HTTPException as error:
         if error.status_code != 401:
             logger.exception("Mercado Livre sync failed source=%s", source)
             raise
         logger.info("Mercado Livre sync refreshing token source=%s", source)
-        return run_with_tokens(force_refresh=True)
+        return run_db_deadlock_retry(
+            lambda: run_with_tokens(force_refresh=True),
+            db=db,
+            label=f"sync_mercadolivre_questions_refresh:{source}",
+        )
+    except (IntegrityError, OperationalError) as error:
+        logger.exception("Mercado Livre sync database write failed source=%s", source)
+        if source == "webhook":
+            return {"questions": [], "stats": stats}
+        raise
 
 
 def run_mercadolivre_sync_background(source: str, payload: Any | None = None) -> None:
@@ -1238,6 +1386,7 @@ def run_mercadolivre_sync_background(source: str, payload: Any | None = None) ->
     try:
         logger.info("Mercado Livre background sync started source=%s payload=%s", source, safe_log_payload(payload))
         sync_mercadolivre_questions(db, source=source)
+        logger.info("Mercado Livre background sync completed source=%s", source)
     except OperationalError:
         logger.exception("Mercado Livre background sync database connection error source=%s", source)
     except SQLAlchemyError:
@@ -1288,6 +1437,36 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
         topic,
         resource,
     )
+    return False
+
+
+def get_mercadolivre_notification_id(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    raw_id = (
+        payload.get("_id")
+        or payload.get("id")
+        or payload.get("notification_id")
+        or payload.get("resource")
+    )
+    notification_id = str(raw_id or "").strip()
+    return notification_id or None
+
+
+def mark_mercadolivre_notification_seen(notification_id: str | None, *, ttl_seconds: int = 600) -> bool:
+    if not notification_id:
+        return False
+    now = time.time()
+    expired_ids = [
+        stored_id
+        for stored_id, seen_at in PROCESSED_ML_NOTIFICATION_IDS.items()
+        if now - seen_at > ttl_seconds
+    ]
+    for stored_id in expired_ids:
+        PROCESSED_ML_NOTIFICATION_IDS.pop(stored_id, None)
+    if notification_id in PROCESSED_ML_NOTIFICATION_IDS:
+        return True
+    PROCESSED_ML_NOTIFICATION_IDS[notification_id] = now
     return False
 
 
@@ -1797,6 +1976,13 @@ def mercadolivre_notifications(
         print(f"Mercado Livre notification received payload={safe_log_payload(payload)}")
         if not should_process_mercadolivre_question_notification(payload):
             return {"ok": True, "processed": False}
+        if not DATABASE_READY:
+            logger.warning("Mercado Livre question webhook skipped because startup/database is not ready")
+            return {"ok": True, "processed": False, "reason": "startup_not_ready"}
+        notification_id = get_mercadolivre_notification_id(payload)
+        if mark_mercadolivre_notification_seen(notification_id):
+            logger.info("Mercado Livre duplicate question webhook skipped notification_id=%s", notification_id)
+            return {"ok": True, "processed": False, "reason": "duplicate_notification"}
         background_tasks.add_task(run_mercadolivre_sync_background, "webhook", payload)
     except Exception:
         logger.exception("Mercado Livre notification handler failed before scheduling background sync")
