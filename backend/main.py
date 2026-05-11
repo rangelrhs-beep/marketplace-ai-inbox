@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -1542,6 +1542,11 @@ def root_health():
         "status": "ok",
         "service": "marketplace-ai-backend",
     }
+
+
+@app.head("/")
+def root_head_health():
+    return Response(status_code=200)
 
 
 @app.on_event("startup")
