@@ -27,6 +27,7 @@ class IntegrationHealth(BaseModel):
     last_sync: Optional[str] = None
     last_error: Optional[str] = None
     token_status: str = "unknown"
+    refresh_available: bool = False
 
 
 class ConnectionTestResult(BaseModel):
