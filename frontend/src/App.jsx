@@ -245,11 +245,13 @@ function IntegrationLogo({ integration }) {
 function IntegrationCard({
   integration,
   onConnect,
+  onDisconnect,
   onFetchRealQuestions,
   onSyncProducts,
   canFetchRealQuestions,
   isFetchingRealQuestions,
   isSyncingProducts,
+  isDisconnecting,
 }) {
   const isConnected = integration.status === "Conectado";
 
@@ -299,6 +301,14 @@ function IntegrationCard({
               <RefreshCw size={17} className={isSyncingProducts ? "spin" : ""} />
               {isSyncingProducts ? "Sincronizando produtos..." : "Sincronizar produtos"}
             </button>
+            <button
+              className="danger"
+              onClick={onDisconnect}
+              disabled={isDisconnecting}
+            >
+              {isDisconnecting ? <RefreshCw size={17} className="spin" /> : <X size={17} />}
+              {isDisconnecting ? "Desconectando..." : "Desconectar"}
+            </button>
           </>
         ) : (
           <button className="primary" onClick={() => onConnect(integration)}>
@@ -347,11 +357,13 @@ function IntegrationsPage({
   integrations,
   integrationHealth,
   onConnect,
+  onDisconnect,
   onFetchRealQuestions,
   onSyncProducts,
   onTestHealth,
   fetchingRealQuestions,
   syncingProducts,
+  disconnecting,
   testingIntegrationId,
   pendingIntegration,
   onCancelConnect,
@@ -391,6 +403,7 @@ function IntegrationsPage({
             key={integration.id}
             integration={integration}
             onConnect={onConnect}
+            onDisconnect={onDisconnect}
             onFetchRealQuestions={onFetchRealQuestions}
             onSyncProducts={onSyncProducts}
             canFetchRealQuestions={
@@ -399,6 +412,7 @@ function IntegrationsPage({
             }
             isFetchingRealQuestions={fetchingRealQuestions}
             isSyncingProducts={syncingProducts}
+            isDisconnecting={disconnecting}
           />
         ))}
       </div>
@@ -1070,6 +1084,7 @@ export default function App() {
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
+  const [disconnectingMl, setDisconnectingMl] = useState(false);
   const [productsSummary, setProductsSummary] = useState({ total: 0, active: 0, inactive: 0 });
   const [sendingAnswerId, setSendingAnswerId] = useState(null);
   const [generatingQuestionId, setGeneratingQuestionId] = useState(null);
@@ -1132,6 +1147,28 @@ export default function App() {
     return products;
   }
 
+  async function refreshIntegrationHealth() {
+    try {
+      const response = await fetch(`${API_URL}/integrations/health`);
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error("Invalid integration health response");
+      }
+      const mercadoLivreHealth = data.filter((health) => health.id === "mercado-livre");
+      setIntegrationHealth(mercadoLivreHealth);
+      setIntegrations((current) =>
+        applyBackendHealthToIntegrations(current, mercadoLivreHealth, CURRENT_COMPANY.id)
+      );
+      return mercadoLivreHealth;
+    } catch {
+      setIntegrationHealth(initialIntegrationHealth);
+      setIntegrations((current) =>
+        applyBackendHealthToIntegrations(current, initialIntegrationHealth, CURRENT_COMPANY.id)
+      );
+      return initialIntegrationHealth;
+    }
+  }
+
   useEffect(() => {
     setSelectedId((current) => current || questions[0]?.id || null);
   }, [questions]);
@@ -1172,27 +1209,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    async function loadIntegrationHealth() {
-      try {
-        const response = await fetch(`${API_URL}/integrations/health`);
-        const data = await response.json();
-        if (!response.ok || !Array.isArray(data)) {
-          throw new Error("Invalid integration health response");
-        }
-        const mercadoLivreHealth = data.filter((health) => health.id === "mercado-livre");
-        setIntegrationHealth(mercadoLivreHealth);
-        setIntegrations((current) =>
-          applyBackendHealthToIntegrations(current, mercadoLivreHealth, CURRENT_COMPANY.id)
-        );
-      } catch {
-        setIntegrationHealth(initialIntegrationHealth);
-        setIntegrations((current) =>
-          applyBackendHealthToIntegrations(current, initialIntegrationHealth, CURRENT_COMPANY.id)
-        );
-      }
-    }
-
-    loadIntegrationHealth();
+    refreshIntegrationHealth();
   }, []);
 
   useEffect(() => {
@@ -1456,6 +1473,28 @@ export default function App() {
     }
   }
 
+  async function disconnectMercadoLivre() {
+    setDisconnectingMl(true);
+    setQuestionNotice("");
+    try {
+      const response = await fetch(`${API_URL}/integrations/mercadolivre/disconnect`, {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.success !== true) {
+        throw new Error(data.detail || data.message || "Não foi possível desconectar Mercado Livre.");
+      }
+      await refreshIntegrationHealth();
+      setShowConversation(false);
+      setSelectedId(null);
+      setQuestionNotice("Mercado Livre desconectado.");
+    } catch (error) {
+      setQuestionNotice(error.message || "Não foi possível desconectar Mercado Livre.");
+    } finally {
+      setDisconnectingMl(false);
+    }
+  }
+
   async function fetchMercadoLivreQuestions() {
     setFetchingMlQuestions(true);
     setQuestionNotice("");
@@ -1610,11 +1649,13 @@ export default function App() {
             integrations={integrations}
             integrationHealth={integrationHealth}
             onConnect={openConnectModal}
+            onDisconnect={disconnectMercadoLivre}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
             onSyncProducts={syncMercadoLivreProducts}
             onTestHealth={testIntegrationHealth}
             fetchingRealQuestions={fetchingMlQuestions}
             syncingProducts={syncingProducts}
+            disconnecting={disconnectingMl}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
             onCancelConnect={() => setPendingIntegration(null)}
