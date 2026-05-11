@@ -450,12 +450,69 @@ def non_empty_token(value: Any) -> str | None:
     return token or None
 
 
+def get_ml_token_debug_snapshot(db: Session) -> dict[str, Any]:
+    integration = get_ml_integration(db)
+    refresh_available = bool(integration.refresh_token)
+    return {
+        "has_access_token": bool(integration.access_token),
+        "has_refresh_token": refresh_available,
+        "expires_at": integration.expires_at.isoformat() if integration.expires_at else None,
+        "token_status": integration.token_status or "unknown",
+        "seller_id": integration.seller_id or None,
+        "refresh_available": refresh_available,
+        "can_auto_refresh": refresh_available,
+    }
+
+
+def reload_ml_token_debug_snapshot() -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        return get_ml_token_debug_snapshot(db)
+    finally:
+        db.close()
+
+
+def validate_ml_oauth_persistence(*, require_seller_id: bool = False) -> dict[str, Any]:
+    snapshot = reload_ml_token_debug_snapshot()
+    missing_fields = []
+    if not snapshot["has_access_token"]:
+        missing_fields.append("access_token")
+    if not snapshot["has_refresh_token"]:
+        missing_fields.append("refresh_token")
+    if not snapshot["expires_at"]:
+        missing_fields.append("expires_at")
+    if require_seller_id and not snapshot["seller_id"]:
+        missing_fields.append("seller_id")
+    if missing_fields:
+        logger.critical(
+            "Mercado Livre OAuth persistence validation failed missing_fields=%s refresh_token_persisted=%s",
+            missing_fields,
+            snapshot["has_refresh_token"],
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Mercado Livre authorized, but token persistence validation failed.",
+                "missing_fields": missing_fields,
+            },
+        )
+    logger.info(
+        "Mercado Livre OAuth persistence validation succeeded refresh_token_persisted=%s can_auto_refresh=%s",
+        snapshot["has_refresh_token"],
+        snapshot["can_auto_refresh"],
+    )
+    return snapshot
+
+
 def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
     expires_in = int(token_data.get("expires_in") or 0)
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
     access_token = non_empty_token(token_data.get("access_token"))
     refresh_token = non_empty_token(token_data.get("refresh_token"))
     refresh_token_received = bool(refresh_token)
+    if not access_token:
+        logger.critical("Mercado Livre OAuth token save failed: access_token missing in token response")
+        raise HTTPException(status_code=502, detail="Mercado Livre token response missing access_token")
     db = SessionLocal()
     try:
         integration = get_ml_integration(db)
@@ -476,6 +533,10 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
             "Mercado Livre OAuth token save succeeded seller_id_present=%s refresh_token_received=%s refresh_token_present=%s",
             seller_id_present,
             refresh_token_received,
+            refresh_token_present,
+        )
+        logger.info(
+            "Mercado Livre OAuth refresh token persisted=%s",
             refresh_token_present,
         )
         token_data["expires_at"] = int(expires_at.timestamp())
@@ -521,7 +582,12 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
             "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
         }
         db.commit()
-        logger.info("Mercado Livre token metadata update succeeded fields=%s", sorted(updates.keys()))
+        logger.info(
+            "Mercado Livre token metadata update succeeded fields=%s refresh_token_received=%s refresh_token_persisted=%s",
+            sorted(updates.keys()),
+            bool(refresh_token),
+            bool(integration.refresh_token),
+        )
         return tokens
     except Exception:
         db.rollback()
@@ -793,7 +859,7 @@ def get_valid_mercadolivre_token(db: Session | None = None, *, force_refresh: bo
         integration.updated_at = datetime.utcnow()
         session.commit()
         logger.info(
-            "Mercado Livre token refresh succeeded; expires_at=%s refresh_token_received=%s refresh_token_present=%s",
+            "Mercado Livre token refresh succeeded; expires_at=%s refresh_token_received=%s refresh_token_persisted=%s",
             integration.expires_at.isoformat(),
             bool(refreshed_refresh_token),
             bool(integration.refresh_token),
@@ -1890,15 +1956,7 @@ def mercadolivre_auth_url():
 @app.get("/integrations/mercadolivre/debug-token")
 def mercadolivre_debug_token(db: Session = Depends(get_db)):
     try:
-        integration = get_ml_integration(db)
-        return {
-            "has_access_token": bool(integration.access_token),
-            "has_refresh_token": bool(integration.refresh_token),
-            "expires_at": integration.expires_at.isoformat() if integration.expires_at else None,
-            "token_status": integration.token_status or "unknown",
-            "seller_id": integration.seller_id or None,
-            "refresh_available": bool(integration.refresh_token),
-        }
+        return get_ml_token_debug_snapshot(db)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Mercado Livre debug-token database unavailable")
         return {
@@ -1908,6 +1966,7 @@ def mercadolivre_debug_token(db: Session = Depends(get_db)):
             "token_status": "unknown",
             "seller_id": None,
             "refresh_available": False,
+            "can_auto_refresh": False,
         }
 
 
@@ -1934,20 +1993,31 @@ def mercadolivre_callback(code: str = Query(...)):
         bool(non_empty_token(token_data.get("refresh_token"))),
     )
     tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
+    validate_ml_oauth_persistence(require_seller_id=False)
     try:
         seller_id = get_ml_seller_id(tokens)
+    except HTTPException as error:
+        logger.critical("Could not resolve Mercado Livre seller_id after OAuth: %s", error.detail)
+        raise HTTPException(
+            status_code=502,
+            detail="Mercado Livre authorized, but seller_id could not be resolved.",
+        ) from error
+    try:
         tokens = retry_database_write(
             lambda: update_ml_tokens({"seller_id": seller_id}),
             label="mercadolivre_oauth_save_seller_id",
         )
-    except HTTPException as error:
-        logger.warning("Could not resolve Mercado Livre seller_id after OAuth: %s", error.detail)
     except (OperationalError, SQLAlchemyError) as error:
-        logger.warning(
+        logger.critical(
             "Mercado Livre OAuth token saved, but seller_id database update failed error_class=%s error_message=%s",
             error.__class__.__name__,
             str(error),
         )
+        raise HTTPException(
+            status_code=503,
+            detail="Mercado Livre authorized, but seller_id persistence failed.",
+        ) from error
+    validate_ml_oauth_persistence(require_seller_id=True)
     frontend_url = os.getenv("FRONTEND_URL")
     if frontend_url:
         return RedirectResponse(f"{frontend_url.rstrip('/')}/?ml_connected=true")
