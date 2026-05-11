@@ -1357,6 +1357,14 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root_health():
+    return {
+        "status": "ok",
+        "service": "marketplace-ai-backend",
+    }
+
+
 @app.on_event("startup")
 def startup_event():
     init_database()
@@ -1705,6 +1713,7 @@ def mercadolivre_debug_token(db: Session = Depends(get_db)):
             "expires_at": integration.expires_at.isoformat() if integration.expires_at else None,
             "token_status": integration.token_status or "unknown",
             "seller_id": integration.seller_id or None,
+            "refresh_available": bool(integration.refresh_token),
         }
     except (OperationalError, SQLAlchemyError):
         logger.exception("Mercado Livre debug-token database unavailable")
@@ -1714,7 +1723,7 @@ def mercadolivre_debug_token(db: Session = Depends(get_db)):
             "expires_at": None,
             "token_status": "unknown",
             "seller_id": None,
-            "last_error": "database_unavailable",
+            "refresh_available": False,
         }
 
 
@@ -1795,9 +1804,13 @@ def mercadolivre_notifications(
 
 
 @app.post("/jobs/sync-mercadolivre")
-def sync_mercadolivre_job(db: Session = Depends(get_db)):
-    result = sync_mercadolivre_questions(db, source="job")
-    return {"ok": True, "stats": result["stats"]}
+def sync_mercadolivre_job():
+    logger.info("Mercado Livre scheduled question sync skipped; use manual sync or question webhook")
+    return {
+        "ok": True,
+        "skipped": True,
+        "message": "Question sync runs only from manual sync or question webhook.",
+    }
 
 
 @app.post("/integrations/mercadolivre/products/sync")
