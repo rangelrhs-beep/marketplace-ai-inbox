@@ -1970,6 +1970,26 @@ def mercadolivre_debug_token(db: Session = Depends(get_db)):
         }
 
 
+@app.post("/integrations/mercadolivre/disconnect")
+def mercadolivre_disconnect(db: Session = Depends(get_db)):
+    try:
+        integration = get_ml_integration(db)
+        integration.access_token = None
+        integration.refresh_token = None
+        integration.expires_at = None
+        integration.expires_in = None
+        integration.seller_id = None
+        integration.token_status = "missing"
+        integration.updated_at = datetime.utcnow()
+        db.commit()
+        logger.info("Mercado Livre integration disconnected tokens_cleared=true")
+        return {"success": True}
+    except (OperationalError, SQLAlchemyError) as error:
+        db.rollback()
+        logger.exception("Mercado Livre disconnect database error")
+        raise HTTPException(status_code=503, detail="Não foi possível desconectar Mercado Livre.") from error
+
+
 @app.get("/integrations/mercadolivre/callback")
 def mercadolivre_callback(code: str = Query(...)):
     config = get_ml_config()
