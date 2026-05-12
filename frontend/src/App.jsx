@@ -1412,6 +1412,22 @@ export default function App() {
           );
         }
 
+        if (data.already_answered) {
+          const alreadyAnsweredMessage =
+            data.message || "Resposta já realizada por outro usuário no Mercado Livre.";
+          setQuestions((current) =>
+            current
+              .filter((question) => question.id !== id)
+              .concat(data.question ? [{ ...data.question, status: "Respondida" }] : [])
+          );
+          setShowConversation(false);
+          setSelectedId(null);
+          setAnswerNotice(alreadyAnsweredMessage);
+          setAnswerError("");
+          await loadQuestionsFromDatabase().catch(() => {});
+          return;
+        }
+
         const updatedQuestion = data.question || data;
         setQuestions((current) =>
           current.map((question) =>
@@ -1438,11 +1454,7 @@ export default function App() {
               : question
           )
         );
-        setAnswerNotice(
-          data.already_answered
-            ? data.message || "Essa pergunta já foi respondida no Mercado Livre."
-            : "Resposta enviada ao Mercado Livre"
-        );
+        setAnswerNotice("Resposta enviada ao Mercado Livre");
       } catch (error) {
         setAnswerError(error.message || "Não foi possível enviar a resposta ao Mercado Livre.");
       } finally {
