@@ -1958,11 +1958,9 @@ def mercadolivre_auth_url():
 
     auth_url = build_mercadolivre_auth_url(config)
     logger.info(
-        "Mercado Livre auth_url generated scope=%s redirect_uri=%s client_id_present=%s auth_url=%s",
-        "offline_access",
+        "mercadolivre_auth_url_scope=offline_access mercadolivre_redirect_uri=%s mercadolivre_client_id_present=%s",
         config["redirect_uri"],
         bool(config["client_id"]),
-        auth_url,
     )
     return {
         "auth_url": auth_url,
@@ -1972,6 +1970,7 @@ def mercadolivre_auth_url():
 
 
 @app.get("/integrations/mercadolivre/oauth-config")
+@app.get("/integrations/mercadolivre/oauth-config/")
 def mercadolivre_oauth_config():
     config = get_ml_config()
     auth_url = build_mercadolivre_auth_url(config) if config["client_id"] and config["redirect_uri"] else None
@@ -2040,17 +2039,11 @@ def mercadolivre_callback(code: str = Query(...)):
         },
     )
     logger.info(
-        "Mercado Livre OAuth token exchange succeeded token_response_keys=%s refresh_token_received=%s token_metadata=%s",
-        sorted(token_data.keys()),
+        "token_response_keys=%s refresh_token_received=%s expires_in_present=%s user_id_present=%s",
+        list(token_data.keys()),
         bool(non_empty_token(token_data.get("refresh_token"))),
-        {
-            "has_access_token": bool(non_empty_token(token_data.get("access_token"))),
-            "has_refresh_token": bool(non_empty_token(token_data.get("refresh_token"))),
-            "expires_in": token_data.get("expires_in"),
-            "user_id": token_data.get("user_id"),
-            "seller_id": token_data.get("seller_id"),
-            "scope": token_data.get("scope"),
-        },
+        token_data.get("expires_in") is not None,
+        token_data.get("user_id") is not None or token_data.get("seller_id") is not None,
     )
     tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
     validate_ml_oauth_persistence(require_seller_id=False)
