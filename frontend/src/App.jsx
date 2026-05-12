@@ -98,6 +98,7 @@ const statusClass = {
   Respondida: "answered",
   Rejeitada: "rejected",
   Conectado: "approved",
+  "Conectado temporariamente": "pending",
   "Não conectado": "disconnected",
 };
 
@@ -179,6 +180,8 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId) 
   const isCpapExpress = companyId === CURRENT_COMPANY.id;
   const isMercadoLivreConnected =
     isCpapExpress && isBackendIntegrationConnected(mercadoLivreHealth);
+  const isTemporaryConnection =
+    isMercadoLivreConnected && mercadoLivreHealth?.token_status === "missing_refresh_token";
 
   return integrations.map((integration) => {
     if (integration.id !== "mercado-livre") {
@@ -187,7 +190,11 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId) 
 
     return {
       ...integration,
-      status: isMercadoLivreConnected ? "Conectado" : "Não conectado",
+      status: isTemporaryConnection
+        ? "Conectado temporariamente"
+        : isMercadoLivreConnected
+          ? "Conectado"
+          : "Não conectado",
       store: isMercadoLivreConnected ? "CPAP Express Mercado Livre" : "",
       lastSync: isMercadoLivreConnected ? mercadoLivreHealth?.last_sync || new Date().toISOString() : "",
       token_status: mercadoLivreHealth?.token_status || "missing",
@@ -253,7 +260,7 @@ function IntegrationCard({
   isSyncingProducts,
   isDisconnecting,
 }) {
-  const isConnected = integration.status === "Conectado";
+  const isConnected = integration.status === "Conectado" || integration.status === "Conectado temporariamente";
 
   return (
     <article className="integration-card">
@@ -372,6 +379,7 @@ function IntegrationsPage({
   onConfirmConnect,
 }) {
   const connectedCount = integrations.filter((item) => item.status === "Conectado").length;
+  const temporaryCount = integrations.filter((item) => item.status === "Conectado temporariamente").length;
 
   return (
     <section className="integrations-page">
@@ -388,7 +396,7 @@ function IntegrationsPage({
       <div className="integration-hero">
         <div>
           <span>Central de canais</span>
-          <h2>{connectedCount} integrações conectadas</h2>
+          <h2>{connectedCount + temporaryCount} integrações conectadas</h2>
           <p>
             Autorize canais oficiais, sincronize perguntas e deixe a IA pronta para responder sem
             pedir senha do marketplace.
@@ -410,7 +418,7 @@ function IntegrationsPage({
             onSyncProducts={onSyncProducts}
             canFetchRealQuestions={
               integration.id === "mercado-livre" &&
-              integration.status === "Conectado"
+              (integration.status === "Conectado" || integration.status === "Conectado temporariamente")
             }
             isFetchingRealQuestions={fetchingRealQuestions}
             isSyncingProducts={syncingProducts}
