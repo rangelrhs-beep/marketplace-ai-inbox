@@ -133,7 +133,15 @@ function getMarketplaceColor(marketplace, integrations) {
 function getAnsweredSourceLabel(source) {
   if (source === "app") return "Respondida pelo app";
   if (source === "mercado_livre_portal") return "Respondida no Mercado Livre";
-  return "";
+  return "Ainda não respondida";
+}
+
+function displayValue(value) {
+  return value === undefined || value === null || value === "" ? "Não disponível" : value;
+}
+
+function displayOrderValue(value) {
+  return value === undefined || value === null || value === "" ? "Não vinculado" : value;
 }
 
 function normalizeInstruction(instruction) {
@@ -152,7 +160,17 @@ function mapMercadoLivreQuestionToUi(question, index) {
     company_id: "cpap_express",
     marketplace: "Mercado Livre",
     product: question.product || question.product_title || rawPayload.item_id || "Produto Mercado Livre",
+    product_title: question.product_title || question.product || rawPayload.item_id || "Produto Mercado Livre",
+    product_sku: question.product_sku || rawPayload.seller_custom_field || rawPayload.item_id || "",
+    product_image_url: question.product_image_url || rawPayload.thumbnail || "",
+    product_permalink: question.product_permalink || rawPayload.permalink || "",
+    product_status: question.product_status || "",
+    product_available_quantity: question.product_available_quantity ?? null,
+    product_price: question.product_price || "",
     customer_name: "Cliente Mercado Livre",
+    external_product_id: question.external_product_id || rawPayload.item_id || rawPayload.item?.id || "",
+    external_order_id: question.external_order_id || rawPayload.order_id || rawPayload.order?.id || "",
+    external_customer_id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || "",
     question: question.question || question.question_text || rawPayload.text || "",
     created_at: question.created_at || rawPayload.date_created || new Date().toISOString(),
     status: question.status || "Pendente",
@@ -762,6 +780,96 @@ function RelatedProducts({ products }) {
   );
 }
 
+function DetailMetadata({ question }) {
+  const productImage = question.product_image_url || question.cached_product?.thumbnail;
+  const productTitle = question.product_title || question.product;
+  const productSku = question.product_sku || question.sku || question.cached_product?.seller_custom_field;
+  const productPermalink = question.product_permalink || question.cached_product?.permalink;
+  const listingStatus = question.product_status || question.cached_product?.status;
+  const availableQuantity =
+    question.product_available_quantity ?? question.cached_product?.available_quantity;
+  const productPrice = question.product_price || question.price || question.cached_product?.price;
+  const customerLabel =
+    question.customer_name && question.customer_name !== "Cliente Mercado Livre"
+      ? question.customer_name
+      : question.external_customer_id;
+
+  return (
+    <div className="detail-metadata">
+      <section className="detail-card product-info-card">
+        <div className="detail-card-heading">
+          <span>Informações do produto</span>
+          {productPermalink ? (
+            <a href={productPermalink} target="_blank" rel="noreferrer">
+              Abrir anúncio
+            </a>
+          ) : null}
+        </div>
+        <div className="product-meta-row">
+          {productImage ? (
+            <img src={productImage} alt="" />
+          ) : (
+            <div className="product-meta-placeholder">
+              <Store size={22} />
+            </div>
+          )}
+          <div>
+            <strong>{displayValue(productTitle)}</strong>
+            <small>SKU: {displayValue(productSku)}</small>
+            <small>Item: {displayValue(question.external_product_id)}</small>
+          </div>
+        </div>
+        <dl>
+          <div>
+            <dt>Status do anúncio</dt>
+            <dd>{displayValue(listingStatus)}</dd>
+          </div>
+          <div>
+            <dt>Quantidade disponível</dt>
+            <dd>{displayValue(availableQuantity)}</dd>
+          </div>
+          <div>
+            <dt>Preço</dt>
+            <dd>{displayValue(productPrice)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="detail-card">
+        <div className="detail-card-heading">
+          <span>Informações da pergunta</span>
+        </div>
+        <dl>
+          <div>
+            <dt>Marketplace</dt>
+            <dd>{displayValue(question.marketplace)}</dd>
+          </div>
+          <div>
+            <dt>ID da pergunta</dt>
+            <dd>{displayValue(question.external_id)}</dd>
+          </div>
+          <div>
+            <dt>Data da pergunta</dt>
+            <dd>{question.created_at ? formatDate(question.created_at) : "Não disponível"}</dd>
+          </div>
+          <div>
+            <dt>Cliente</dt>
+            <dd>{displayValue(customerLabel)}</dd>
+          </div>
+          <div>
+            <dt>Pedido</dt>
+            <dd>{displayOrderValue(question.external_order_id)}</dd>
+          </div>
+          <div>
+            <dt>Origem da resposta</dt>
+            <dd>{getAnsweredSourceLabel(question.answered_source)}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
 function Conversation({ question, onBack, onApprove, onGenerate, onReject, readOnly, isApproving }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState("");
@@ -829,6 +937,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
         </header>
 
         <div className="chat-surface">
+          <DetailMetadata question={question} />
+
           <div className="message customer">
             <span>{question.customer_name}</span>
             <p>{question.question}</p>
@@ -999,6 +1109,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
       </header>
 
       <div className="chat-surface">
+        <DetailMetadata question={question} />
+
         <div className="message customer">
           <span>{question.customer_name}</span>
           <p>{question.question}</p>
