@@ -284,6 +284,61 @@ def get_final_answer(suggestion: AiSuggestion | None) -> str:
     return suggestion.final_answer or suggestion.final_response or suggestion.edited_text or ""
 
 
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def extract_question_item_id(raw_payload: dict[str, Any]) -> str | None:
+    item = raw_payload.get("item")
+    return str(first_present(
+        raw_payload.get("item_id"),
+        raw_payload.get("external_product_id"),
+        item.get("id") if isinstance(item, dict) else None,
+    ) or "") or None
+
+
+def extract_question_customer_id(raw_payload: dict[str, Any]) -> str | None:
+    buyer = raw_payload.get("buyer") or raw_payload.get("from") or raw_payload.get("user") or {}
+    return str(first_present(
+        raw_payload.get("buyer_id"),
+        raw_payload.get("user_id"),
+        raw_payload.get("customer_id"),
+        buyer.get("id") if isinstance(buyer, dict) else None,
+    ) or "") or None
+
+
+def extract_question_customer_name(raw_payload: dict[str, Any]) -> str | None:
+    buyer = raw_payload.get("buyer") or raw_payload.get("from") or raw_payload.get("user") or {}
+    if isinstance(buyer, dict):
+        full_name = " ".join(
+            part for part in [buyer.get("first_name"), buyer.get("last_name")] if part
+        ).strip()
+        return first_present(buyer.get("nickname"), buyer.get("name"), full_name)
+    return None
+
+
+def get_cached_product_for_question(db: Session | None, raw_payload: dict[str, Any]) -> ProductCache | None:
+    item_id = extract_question_item_id(raw_payload)
+    if not db or not item_id:
+        return None
+    try:
+        return (
+            db.query(ProductCache)
+            .filter(
+                ProductCache.company_id == DEFAULT_COMPANY_ID,
+                ProductCache.provider == DEFAULT_PROVIDER,
+                ProductCache.external_id == item_id,
+            )
+            .first()
+        )
+    except SQLAlchemyError:
+        logger.exception("Could not load cached product for question item_id=%s", item_id)
+        return None
+
+
 def parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
@@ -350,6 +405,31 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         db=db,
     ) if db else []
     raw_payload = question.raw_payload or {}
+    cached_product = get_cached_product_for_question(db, raw_payload)
+    cached_product_api = product_to_api(cached_product) if cached_product else None
+    external_product_id = extract_question_item_id(raw_payload)
+    external_customer_id = extract_question_customer_id(raw_payload)
+    extracted_customer_name = extract_question_customer_name(raw_payload)
+    external_order_id = first_present(
+        raw_payload.get("order_id"),
+        raw_payload.get("order", {}).get("id") if isinstance(raw_payload.get("order"), dict) else None,
+        raw_payload.get("external_order_id"),
+    )
+    product_sku = first_present(
+        cached_product.seller_custom_field if cached_product else None,
+        raw_payload.get("seller_custom_field"),
+        raw_payload.get("seller_sku"),
+        external_product_id,
+    )
+    product_title = first_present(cached_product.title if cached_product else None, question.product_title)
+    product_image_url = first_present(cached_product.thumbnail if cached_product else None, raw_payload.get("thumbnail"))
+    product_permalink = first_present(cached_product.permalink if cached_product else None, raw_payload.get("permalink"))
+    product_status = first_present(cached_product.status if cached_product else None, raw_payload.get("status_item"))
+    product_available_quantity = first_present(
+        cached_product.available_quantity if cached_product else None,
+        raw_payload.get("available_quantity"),
+    )
+    product_price = first_present(cached_product.price if cached_product else None, raw_payload.get("price"))
     created_at_value = raw_payload.get("date_created") or raw_payload.get("created_at")
     if not created_at_value:
         created_at_value = (question.created_at or question.created_in_app_at).isoformat()
@@ -359,9 +439,19 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         "marketplace": "Mercado Livre" if question.provider == DEFAULT_PROVIDER else question.provider,
         "provider": question.provider,
         "external_id": question.external_id,
-        "product": question.product_title,
-        "product_title": question.product_title,
-        "customer_name": "Cliente Mercado Livre",
+        "product": product_title,
+        "product_title": product_title,
+        "customer_name": extracted_customer_name or "Cliente Mercado Livre",
+        "external_product_id": external_product_id,
+        "external_order_id": str(external_order_id) if external_order_id else None,
+        "external_customer_id": external_customer_id,
+        "product_sku": product_sku,
+        "product_image_url": product_image_url,
+        "product_permalink": product_permalink,
+        "product_status": product_status,
+        "product_available_quantity": product_available_quantity,
+        "product_price": product_price,
+        "cached_product": cached_product_api,
         "question": question.question_text,
         "question_text": question.question_text,
         "created_at": created_at_value,
@@ -380,8 +470,8 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         "answered_source": question.answered_source,
         "approved_by": suggestion.approved_by if suggestion else None,
         "approved_at": suggestion.approved_at.isoformat() if suggestion and suggestion.approved_at else None,
-        "sku": (question.raw_payload or {}).get("item_id") or "ML",
-        "price": "",
+        "sku": product_sku or "ML",
+        "price": product_price or "",
         "raw_payload": raw_payload,
         "related_products": related_products,
         "is_real": True,
