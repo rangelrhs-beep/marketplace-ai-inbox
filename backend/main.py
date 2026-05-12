@@ -1945,12 +1945,18 @@ def mercadolivre_auth_url():
             "response_type": "code",
             "client_id": config["client_id"],
             "redirect_uri": config["redirect_uri"],
+            "scope": "offline_access",
             "state": "marketplace-ai-inbox",
         }
     )
     auth_url = f"{ML_AUTH_BASE_URL}?{query}"
     logger.info("Mercado Livre auth_url generated redirect_uri=%s auth_url=%s", config["redirect_uri"], auth_url)
-    return {"configured": True, "auth_url": auth_url, "redirect_uri": config["redirect_uri"]}
+    return {
+        "configured": True,
+        "auth_url": auth_url,
+        "redirect_uri": config["redirect_uri"],
+        "scope": "offline_access",
+    }
 
 
 @app.get("/integrations/mercadolivre/debug-token")
@@ -2700,6 +2706,10 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         return local_questions
 
     try:
+        integration = get_ml_integration(db)
+        if not integration.access_token and not integration.refresh_token:
+            logger.info("Skipping live portal answered fetch: Mercado Livre disconnected")
+            return local_questions
         live_portal_questions = get_live_portal_answered_questions(db)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
