@@ -1458,12 +1458,17 @@ export default function App() {
     if (id === "mercado-livre") {
       try {
         const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
-        const data = await response.json();
-        if (data.configured && data.auth_url) {
-          window.location.href = data.auth_url;
+        const data = await response.json().catch(() => ({}));
+        const authUrl = data.auth_url || data.url;
+        if (response.ok && authUrl) {
+          window.location.href = authUrl;
           return;
         }
-        setQuestionNotice("OAuth do Mercado Livre não está configurado no backend.");
+        setQuestionNotice(
+          data.message ||
+            data.detail ||
+            "OAuth do Mercado Livre não retornou uma URL de autorização."
+        );
       } catch {
         setQuestionNotice("Não foi possível iniciar a conexão com o Mercado Livre.");
       } finally {
