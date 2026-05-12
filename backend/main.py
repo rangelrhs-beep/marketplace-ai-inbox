@@ -2276,7 +2276,7 @@ def answer_mercadolivre_question(
                 return {
                     "sent": False,
                     "already_answered": True,
-                    "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                    "message": "Resposta já realizada por outro usuário no Mercado Livre.",
                     "raw_response": question_detail,
                     "question": live_question,
                 }
@@ -2300,7 +2300,7 @@ def answer_mercadolivre_question(
                     return {
                         "sent": False,
                         "already_answered": True,
-                        "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                        "message": "Resposta já realizada por outro usuário no Mercado Livre.",
                         "raw_response": question_detail,
                         "question": live_question,
                     }
@@ -2326,7 +2326,7 @@ def answer_mercadolivre_question(
                 return {
                     "sent": False,
                     "already_answered": True,
-                    "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                    "message": "Resposta já realizada por outro usuário no Mercado Livre.",
                     "raw_response": question_detail,
                     "question": live_question,
                 }
@@ -2350,7 +2350,7 @@ def answer_mercadolivre_question(
             return {
                 "sent": False,
                 "already_answered": True,
-                "message": "Essa pergunta já foi respondida no Mercado Livre.",
+                "message": "Resposta já realizada por outro usuário no Mercado Livre.",
                 "raw_response": question_detail,
                 "question": live_question,
             }
