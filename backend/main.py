@@ -2038,6 +2038,10 @@ def mercadolivre_callback(code: str = Query(...)):
             "redirect_uri": config["redirect_uri"],
         },
     )
+    logger.warning("ML_TOKEN_RESPONSE_KEYS=%s", list(token_data.keys()))
+    logger.warning("ML_REFRESH_TOKEN_RECEIVED=%s", bool(token_data.get("refresh_token")))
+    logger.warning("ML_EXPIRES_IN_PRESENT=%s", bool(token_data.get("expires_in")))
+    logger.warning("ML_USER_ID_PRESENT=%s", bool(token_data.get("user_id")))
     logger.info(
         "token_response_keys=%s refresh_token_received=%s expires_in_present=%s user_id_present=%s",
         list(token_data.keys()),
@@ -2045,8 +2049,19 @@ def mercadolivre_callback(code: str = Query(...)):
         token_data.get("expires_in") is not None,
         token_data.get("user_id") is not None or token_data.get("seller_id") is not None,
     )
-    tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
-    validate_ml_oauth_persistence(require_seller_id=False)
+    token_debug = {
+        "token_response_keys": list(token_data.keys()),
+        "refresh_token_received": bool(token_data.get("refresh_token")),
+    }
+    try:
+        tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
+        validate_ml_oauth_persistence(require_seller_id=False)
+    except HTTPException as error:
+        detail = error.detail if isinstance(error.detail, dict) else {"message": error.detail}
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={**detail, **token_debug},
+        ) from error
     try:
         seller_id = get_ml_seller_id(tokens)
     except HTTPException as error:
