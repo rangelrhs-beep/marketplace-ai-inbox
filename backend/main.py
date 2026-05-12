@@ -453,11 +453,14 @@ def non_empty_token(value: Any) -> str | None:
 def get_ml_token_debug_snapshot(db: Session) -> dict[str, Any]:
     integration = get_ml_integration(db)
     refresh_available = bool(integration.refresh_token)
+    token_status = integration.token_status or "unknown"
+    if integration.access_token and not refresh_available:
+        token_status = "missing_refresh_token"
     return {
         "has_access_token": bool(integration.access_token),
         "has_refresh_token": refresh_available,
         "expires_at": integration.expires_at.isoformat() if integration.expires_at else None,
-        "token_status": integration.token_status or "unknown",
+        "token_status": token_status,
         "seller_id": integration.seller_id or None,
         "refresh_available": refresh_available,
         "can_auto_refresh": refresh_available,
@@ -1950,9 +1953,13 @@ def mercadolivre_auth_url():
         }
     )
     auth_url = f"{ML_AUTH_BASE_URL}?{query}"
-    logger.info("Mercado Livre auth_url generated redirect_uri=%s auth_url=%s", config["redirect_uri"], auth_url)
+    logger.info(
+        "Mercado Livre auth_url generated scope=%s redirect_uri=%s client_id_present=%s",
+        "offline_access",
+        config["redirect_uri"],
+        bool(config["client_id"]),
+    )
     return {
-        "configured": True,
         "auth_url": auth_url,
         "redirect_uri": config["redirect_uri"],
         "scope": "offline_access",
@@ -2015,7 +2022,8 @@ def mercadolivre_callback(code: str = Query(...)):
         },
     )
     logger.info(
-        "Mercado Livre OAuth token exchange succeeded refresh_token_received=%s",
+        "Mercado Livre OAuth token exchange succeeded token_response_keys=%s refresh_token_received=%s",
+        sorted(token_data.keys()),
         bool(non_empty_token(token_data.get("refresh_token"))),
     )
     tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
@@ -2531,21 +2539,26 @@ def list_integrations_health(db: Session = Depends(get_db)):
                 token_status = integration.token_status or "missing"
                 last_error = "Mercado Livre não conectado."
                 if integration.access_token or integration.refresh_token:
-                    try:
-                        get_valid_mercadolivre_token(db)
+                    if integration.access_token and not refresh_available:
                         connected = True
-                        token_status = "valid"
-                        last_error = None
-                    except HTTPException as error:
-                        token_status = integration.token_status or "expired"
-                        last_error = "Mercado Livre token expirado. Reconecte a integração."
-                        logger.warning("Mercado Livre health token refresh failed: %s", error.detail)
+                        token_status = "missing_refresh_token"
+                        last_error = "Mercado Livre conectado temporariamente sem refresh_token. Reconecte a integração."
+                    else:
+                        try:
+                            get_valid_mercadolivre_token(db)
+                            connected = True
+                            token_status = "valid"
+                            last_error = None
+                        except HTTPException as error:
+                            token_status = integration.token_status or "expired"
+                            last_error = "Mercado Livre token expirado. Reconecte a integração."
+                            logger.warning("Mercado Livre health token refresh failed: %s", error.detail)
                 health_items.append(
                     IntegrationHealth(
                         id=service.client.id,
                         channel=service.client.channel,
                         connected=connected,
-                        api_status="operational" if connected else "down",
+                        api_status="degraded" if token_status == "missing_refresh_token" else "operational" if connected else "down",
                         last_sync=format_optional_datetime(integration.last_sync),
                         last_error=last_error,
                         token_status=token_status,
