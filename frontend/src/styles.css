@@ -1295,6 +1295,16 @@ button:disabled {
   line-height: 1.55;
 }
 
+.connect-modal .modal-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ffd2d8;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #b4232f;
+  font-weight: 700;
+}
+
 .modal-close {
   position: absolute;
   top: 16px;

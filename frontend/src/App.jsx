@@ -321,7 +321,7 @@ function IntegrationCard({
   );
 }
 
-function ConnectModal({ integration, onCancel, onConfirm }) {
+function ConnectModal({ integration, onCancel, onConfirm, error }) {
   if (!integration) {
     return null;
   }
@@ -339,11 +339,12 @@ function ConnectModal({ integration, onCancel, onConfirm }) {
           Ao continuar, você será redirecionado para a página oficial de login e autorização do
           marketplace. O Marketplace AI Inbox nunca pede nem armazena sua senha.
         </p>
+        {error ? <p className="modal-error">{error}</p> : null}
         <div className="modal-actions">
-          <button className="secondary" onClick={onCancel}>
+          <button className="secondary" type="button" onClick={onCancel}>
             Cancelar
           </button>
-          <button className="primary" onClick={() => onConfirm(integration.id)}>
+          <button className="primary" type="button" onClick={() => onConfirm(integration.id)}>
             <ExternalLink size={17} />
             Continuar
           </button>
@@ -366,6 +367,7 @@ function IntegrationsPage({
   disconnecting,
   testingIntegrationId,
   pendingIntegration,
+  connectError,
   onCancelConnect,
   onConfirmConnect,
 }) {
@@ -463,6 +465,7 @@ function IntegrationsPage({
         integration={pendingIntegration}
         onCancel={onCancelConnect}
         onConfirm={onConfirmConnect}
+        error={connectError}
       />
     </section>
   );
@@ -1082,6 +1085,7 @@ export default function App() {
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
   const [pendingIntegration, setPendingIntegration] = useState(null);
+  const [connectError, setConnectError] = useState("");
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
   const [disconnectingMl, setDisconnectingMl] = useState(false);
@@ -1451,11 +1455,13 @@ export default function App() {
   }
 
   function openConnectModal(integration) {
+    setConnectError("");
     setPendingIntegration(integration);
   }
 
   async function confirmConnect(id) {
     if (id === "mercado-livre") {
+      setConnectError("");
       try {
         const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
         const data = await response.json().catch(() => ({}));
@@ -1464,15 +1470,14 @@ export default function App() {
           window.location.href = authUrl;
           return;
         }
-        setQuestionNotice(
+        setConnectError(
           data.message ||
             data.detail ||
-            "OAuth do Mercado Livre não retornou uma URL de autorização."
+            "Não foi possível iniciar conexão com Mercado Livre."
         );
-      } catch {
-        setQuestionNotice("Não foi possível iniciar a conexão com o Mercado Livre.");
-      } finally {
-        setPendingIntegration(null);
+      } catch (error) {
+        console.error("Mercado Livre OAuth start failed", error);
+        setConnectError("Não foi possível iniciar conexão com Mercado Livre.");
       }
       return;
     }
@@ -1663,7 +1668,11 @@ export default function App() {
             disconnecting={disconnectingMl}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
-            onCancelConnect={() => setPendingIntegration(null)}
+            connectError={connectError}
+            onCancelConnect={() => {
+              setConnectError("");
+              setPendingIntegration(null);
+            }}
             onConfirmConnect={confirmConnect}
           />
         ) : isSettings ? (
