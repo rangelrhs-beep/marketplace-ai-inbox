@@ -463,69 +463,11 @@ def non_empty_token(value: Any) -> str | None:
     return token or None
 
 
-def get_ml_token_debug_snapshot(db: Session) -> dict[str, Any]:
-    integration = get_ml_integration(db)
-    refresh_available = bool(integration.refresh_token)
-    token_status = integration.token_status or "unknown"
-    if integration.access_token and not refresh_available:
-        token_status = "missing_refresh_token"
-    return {
-        "has_access_token": bool(integration.access_token),
-        "has_refresh_token": refresh_available,
-        "expires_at": integration.expires_at.isoformat() if integration.expires_at else None,
-        "token_status": token_status,
-        "seller_id": integration.seller_id or None,
-        "refresh_available": refresh_available,
-        "can_auto_refresh": refresh_available,
-    }
-
-
-def reload_ml_token_debug_snapshot() -> dict[str, Any]:
-    db = SessionLocal()
-    try:
-        return get_ml_token_debug_snapshot(db)
-    finally:
-        db.close()
-
-
-def validate_ml_oauth_persistence(*, require_seller_id: bool = False) -> dict[str, Any]:
-    snapshot = reload_ml_token_debug_snapshot()
-    missing_fields = []
-    if not snapshot["has_access_token"]:
-        missing_fields.append("access_token")
-    if not snapshot["has_refresh_token"]:
-        missing_fields.append("refresh_token")
-    if not snapshot["expires_at"]:
-        missing_fields.append("expires_at")
-    if require_seller_id and not snapshot["seller_id"]:
-        missing_fields.append("seller_id")
-    if missing_fields:
-        logger.critical(
-            "Mercado Livre OAuth persistence validation failed missing_fields=%s refresh_token_persisted=%s",
-            missing_fields,
-            snapshot["has_refresh_token"],
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": "Mercado Livre authorized, but token persistence validation failed.",
-                "missing_fields": missing_fields,
-            },
-        )
-    logger.info(
-        "Mercado Livre OAuth persistence validation succeeded refresh_token_persisted=%s can_auto_refresh=%s",
-        snapshot["has_refresh_token"],
-        snapshot["can_auto_refresh"],
-    )
-    return snapshot
-
-
 def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
     expires_in = int(token_data.get("expires_in") or 0)
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
     access_token = non_empty_token(token_data.get("access_token"))
     refresh_token = non_empty_token(token_data.get("refresh_token"))
-    refresh_token_received = bool(refresh_token)
     if not access_token:
         logger.critical("Mercado Livre OAuth token save failed: access_token missing in token response")
         raise HTTPException(status_code=502, detail="Mercado Livre token response missing access_token")
@@ -542,19 +484,8 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
         integration.token_status = "valid"
         integration.last_sync = datetime.utcnow()
         integration.updated_at = datetime.utcnow()
-        seller_id_present = bool(integration.seller_id)
-        refresh_token_present = bool(integration.refresh_token)
         db.commit()
-        logger.info(
-            "Mercado Livre OAuth token save succeeded seller_id_present=%s refresh_token_received=%s refresh_token_present=%s",
-            seller_id_present,
-            refresh_token_received,
-            refresh_token_present,
-        )
-        logger.info(
-            "Mercado Livre OAuth refresh token persisted=%s",
-            refresh_token_present,
-        )
+        logger.info("Mercado Livre OAuth connected successfully")
         token_data["expires_at"] = int(expires_at.timestamp())
         token_data["refresh_token"] = integration.refresh_token
         token_data["seller_id"] = integration.seller_id
@@ -598,12 +529,7 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
             "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
         }
         db.commit()
-        logger.info(
-            "Mercado Livre token metadata update succeeded fields=%s refresh_token_received=%s refresh_token_persisted=%s",
-            sorted(updates.keys()),
-            bool(refresh_token),
-            bool(integration.refresh_token),
-        )
+        logger.info("Mercado Livre token metadata updated fields=%s", sorted(updates.keys()))
         return tokens
     except Exception:
         db.rollback()
@@ -875,10 +801,8 @@ def get_valid_mercadolivre_token(db: Session | None = None, *, force_refresh: bo
         integration.updated_at = datetime.utcnow()
         session.commit()
         logger.info(
-            "Mercado Livre token refresh succeeded; expires_at=%s refresh_token_received=%s refresh_token_persisted=%s",
+            "Mercado Livre token refreshed successfully; expires_at=%s",
             integration.expires_at.isoformat(),
-            bool(refreshed_refresh_token),
-            bool(integration.refresh_token),
         )
         if not integration.access_token:
             raise HTTPException(status_code=401, detail="Mercado Livre token refresh did not return access_token")
@@ -1362,8 +1286,6 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             seller_id=seller_id,
             access_token=tokens["access_token"],
         )
-        logger.info("Mercado Livre questions raw response source=%s body=%s", source, raw_response)
-        print(f"Mercado Livre questions raw response source={source}: {raw_response}")
 
         fetched_external_ids: set[str] = set()
         saved_questions: list[QuestionRecord] = []
@@ -1374,7 +1296,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             normalized = normalize_ml_question(question_payload, tokens["access_token"])
             external_id = str(normalized.get("external_id") or "")
             if not external_id:
-                logger.warning("Mercado Livre sync ignored question without external_id source=%s payload=%s", source, question_payload)
+                logger.warning("Mercado Livre sync ignored question without external_id source=%s", source)
                 continue
             fetched_external_ids.add(external_id)
             existing_question = (
@@ -1466,7 +1388,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
 def run_mercadolivre_sync_background(source: str, payload: Any | None = None) -> None:
     db = SessionLocal()
     try:
-        logger.info("Mercado Livre background sync started source=%s payload=%s", source, safe_log_payload(payload))
+        logger.info("Mercado Livre background sync started source=%s", source)
         sync_mercadolivre_questions(db, source=source)
         logger.info("Mercado Livre background sync completed source=%s", source)
     except OperationalError:
@@ -1477,16 +1399,6 @@ def run_mercadolivre_sync_background(source: str, payload: Any | None = None) ->
         logger.exception("Mercado Livre background sync error source=%s", source)
     finally:
         db.close()
-
-
-def safe_log_payload(payload: Any, *, max_length: int = 2000) -> str:
-    try:
-        text = json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        text = repr(payload)
-    if len(text) > max_length:
-        return f"{text[:max_length]}... [truncated]"
-    return text
 
 
 def should_process_mercadolivre_question_notification(payload: Any) -> bool:
@@ -1935,7 +1847,6 @@ def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_
         return {"suggestion": suggestion}
     except Exception as error:
         logger.exception("OpenAI initial suggestion failed")
-        print(f"OpenAI initial suggestion failed: {error}")
         return {
             "error": True,
             "message": f"OpenAI initial suggestion failed: {error}",
@@ -1957,47 +1868,11 @@ def mercadolivre_auth_url():
         }
 
     auth_url = build_mercadolivre_auth_url(config)
-    logger.info(
-        "mercadolivre_auth_url_scope=offline_access mercadolivre_redirect_uri=%s mercadolivre_client_id_present=%s",
-        config["redirect_uri"],
-        bool(config["client_id"]),
-    )
     return {
         "auth_url": auth_url,
         "redirect_uri": config["redirect_uri"],
         "scope": "offline_access",
     }
-
-
-@app.get("/integrations/mercadolivre/oauth-config")
-@app.get("/integrations/mercadolivre/oauth-config/")
-def mercadolivre_oauth_config():
-    config = get_ml_config()
-    auth_url = build_mercadolivre_auth_url(config) if config["client_id"] and config["redirect_uri"] else None
-    return {
-        "client_id_present": bool(config["client_id"]),
-        "client_secret_present": bool(config["client_secret"]),
-        "redirect_uri": config["redirect_uri"],
-        "scope": "offline_access",
-        "auth_url_preview_without_secret": auth_url,
-    }
-
-
-@app.get("/integrations/mercadolivre/debug-token")
-def mercadolivre_debug_token(db: Session = Depends(get_db)):
-    try:
-        return get_ml_token_debug_snapshot(db)
-    except (OperationalError, SQLAlchemyError):
-        logger.exception("Mercado Livre debug-token database unavailable")
-        return {
-            "has_access_token": False,
-            "has_refresh_token": False,
-            "expires_at": None,
-            "token_status": "unknown",
-            "seller_id": None,
-            "refresh_available": False,
-            "can_auto_refresh": False,
-        }
 
 
 @app.post("/integrations/mercadolivre/disconnect")
@@ -2038,30 +1913,7 @@ def mercadolivre_callback(code: str = Query(...)):
             "redirect_uri": config["redirect_uri"],
         },
     )
-    logger.warning("ML_TOKEN_RESPONSE_KEYS=%s", list(token_data.keys()))
-    logger.warning("ML_REFRESH_TOKEN_RECEIVED=%s", bool(token_data.get("refresh_token")))
-    logger.warning("ML_EXPIRES_IN_PRESENT=%s", bool(token_data.get("expires_in")))
-    logger.warning("ML_USER_ID_PRESENT=%s", bool(token_data.get("user_id")))
-    logger.info(
-        "token_response_keys=%s refresh_token_received=%s expires_in_present=%s user_id_present=%s",
-        list(token_data.keys()),
-        bool(non_empty_token(token_data.get("refresh_token"))),
-        token_data.get("expires_in") is not None,
-        token_data.get("user_id") is not None or token_data.get("seller_id") is not None,
-    )
-    token_debug = {
-        "token_response_keys": list(token_data.keys()),
-        "refresh_token_received": bool(token_data.get("refresh_token")),
-    }
-    try:
-        tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
-        validate_ml_oauth_persistence(require_seller_id=False)
-    except HTTPException as error:
-        detail = error.detail if isinstance(error.detail, dict) else {"message": error.detail}
-        raise HTTPException(
-            status_code=error.status_code,
-            detail={**detail, **token_debug},
-        ) from error
+    tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
     try:
         seller_id = get_ml_seller_id(tokens)
     except HTTPException as error:
@@ -2085,7 +1937,6 @@ def mercadolivre_callback(code: str = Query(...)):
             status_code=503,
             detail="Mercado Livre authorized, but seller_id persistence failed.",
         ) from error
-    validate_ml_oauth_persistence(require_seller_id=True)
     frontend_url = os.getenv("FRONTEND_URL")
     if frontend_url:
         return RedirectResponse(f"{frontend_url.rstrip('/')}/?ml_connected=true")
@@ -2115,8 +1966,9 @@ def mercadolivre_notifications(
     payload: Any = Body(default=None),
 ):
     try:
-        logger.info("Mercado Livre notification received payload=%s", safe_log_payload(payload))
-        print(f"Mercado Livre notification received payload={safe_log_payload(payload)}")
+        topic = payload.get("topic") if isinstance(payload, dict) else None
+        resource = payload.get("resource") if isinstance(payload, dict) else None
+        logger.info("Mercado Livre webhook received topic=%s resource=%s", topic, resource)
         if not should_process_mercadolivre_question_notification(payload):
             return {"ok": True, "processed": False}
         if not DATABASE_READY:
@@ -2158,8 +2010,7 @@ def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str
         },
         access_token=access_token,
     )
-    logger.info("Mercado Livre answer response status=%s body=%s", response_status, response_body)
-    print(f"Mercado Livre answer response status={response_status} body={response_body}")
+    logger.info("Mercado Livre answer sent status=%s", response_status)
     return {"status": response_status, "body": response_body}
 
 
@@ -2553,7 +2404,6 @@ def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
         return {"rewritten_text": rewritten_text, "related_products": related_products}
     except Exception as error:
         logger.exception("OpenAI rewrite failed")
-        print(f"OpenAI rewrite failed: {error}")
         return {
             "error": True,
             "message": f"OpenAI rewrite failed: {error}",
