@@ -344,6 +344,12 @@ button:disabled {
   border-color: rgba(22, 116, 66, 0.18);
 }
 
+.answer-feedback.info {
+  background: #eef6ff;
+  color: #1d4f91;
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
 .answer-feedback.error {
   background: #ffebee;
   color: #b4232f;

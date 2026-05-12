@@ -1399,6 +1399,11 @@ export default function App() {
   const isMercadoLivreConnected = mercadoLivreIntegration?.status === "Conectado";
   const isPendingScreen = active === "Pendentes";
   const isReadOnlyAnsweredScreen = active === "Respondidas";
+  const answerFeedbackClass = answerError
+    ? "error"
+    : answerNotice.includes("outro usuário")
+      ? "info"
+      : "success";
 
   useEffect(() => {
     if (selectedId && !visibleQuestions.some((question) => question.id === selectedId)) {
@@ -1500,6 +1505,20 @@ export default function App() {
       targetQuestion?.is_real &&
       targetQuestion?.marketplace === "Mercado Livre" &&
       targetQuestion?.external_id;
+    const alreadyAnsweredMessage =
+      "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.";
+    async function handleAlreadyAnsweredExternally(payload = {}) {
+      setQuestions((current) =>
+        current
+          .filter((question) => question.id !== id)
+          .concat(payload.question ? [{ ...payload.question, status: "Respondida" }] : [])
+      );
+      setShowConversation(false);
+      setSelectedId(null);
+      setAnswerNotice(payload.message || alreadyAnsweredMessage);
+      setAnswerError("");
+      await loadQuestionsFromDatabase().catch(() => {});
+    }
 
     if (isRealMercadoLivreQuestion) {
       setSendingAnswerId(id);
@@ -1525,18 +1544,7 @@ export default function App() {
         }
 
         if (data.already_answered) {
-          const alreadyAnsweredMessage =
-            data.message || "Resposta já realizada por outro usuário no Mercado Livre.";
-          setQuestions((current) =>
-            current
-              .filter((question) => question.id !== id)
-              .concat(data.question ? [{ ...data.question, status: "Respondida" }] : [])
-          );
-          setShowConversation(false);
-          setSelectedId(null);
-          setAnswerNotice(alreadyAnsweredMessage);
-          setAnswerError("");
-          await loadQuestionsFromDatabase().catch(() => {});
+          await handleAlreadyAnsweredExternally(data);
           return;
         }
 
@@ -1568,6 +1576,13 @@ export default function App() {
         );
         setAnswerNotice("Resposta enviada ao Mercado Livre");
       } catch (error) {
+        if (
+          isRealMercadoLivreQuestion &&
+          String(error.message || "").toLowerCase().includes("pergunta não encontrada")
+        ) {
+          await handleAlreadyAnsweredExternally();
+          return;
+        }
         setAnswerError(error.message || "Não foi possível enviar a resposta ao Mercado Livre.");
       } finally {
         setSendingAnswerId(null);
@@ -1862,7 +1877,7 @@ export default function App() {
           </div>
 
           {answerNotice || answerError ? (
-            <div className={`answer-feedback ${answerError ? "error" : "success"}`}>
+            <div className={`answer-feedback ${answerFeedbackClass}`}>
               {answerError || answerNotice}
             </div>
           ) : null}
