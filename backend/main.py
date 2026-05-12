@@ -2366,7 +2366,7 @@ def answer_mercadolivre_question(
                 return {
                     "sent": False,
                     "already_answered": True,
-                    "message": "Resposta já realizada por outro usuário no Mercado Livre.",
+                    "message": "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.",
                     "raw_response": question_detail,
                     "question": live_question,
                 }
@@ -2390,7 +2390,7 @@ def answer_mercadolivre_question(
                     return {
                         "sent": False,
                         "already_answered": True,
-                        "message": "Resposta já realizada por outro usuário no Mercado Livre.",
+                        "message": "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.",
                         "raw_response": question_detail,
                         "question": live_question,
                     }
@@ -2416,7 +2416,7 @@ def answer_mercadolivre_question(
                 return {
                     "sent": False,
                     "already_answered": True,
-                    "message": "Resposta já realizada por outro usuário no Mercado Livre.",
+                    "message": "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.",
                     "raw_response": question_detail,
                     "question": live_question,
                 }
@@ -2440,7 +2440,7 @@ def answer_mercadolivre_question(
             return {
                 "sent": False,
                 "already_answered": True,
-                "message": "Resposta já realizada por outro usuário no Mercado Livre.",
+                "message": "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.",
                 "raw_response": question_detail,
                 "question": live_question,
             }
@@ -2747,6 +2747,26 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
             .first()
         )
     if not question:
+        if external_id:
+            try:
+                access_token = get_valid_mercadolivre_token(db)
+                question_detail = fetch_ml_question_detail(str(external_id), access_token)
+                if ml_question_is_answered(question_detail):
+                    live_question = handle_portal_answered_question(
+                        db,
+                        question_id=str(external_id),
+                        question_detail=question_detail,
+                        access_token=access_token,
+                    )
+                    return {
+                        "sent": False,
+                        "already_answered": True,
+                        "message": "Resposta já realizada por outro usuário. A pergunta saiu da fila de pendentes.",
+                        "raw_response": question_detail,
+                        "question": live_question,
+                    }
+            except HTTPException:
+                logger.warning("Could not verify missing local question before answering external_id=%s", external_id)
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
 
     if not force and question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
