@@ -36,6 +36,7 @@ ML_API_BASE_URL = "https://api.mercadolibre.com"
 ML_PRODUCTION_REDIRECT_URI = "https://marketplace-ai-backend-ky72.onrender.com/integrations/mercadolivre/callback"
 DATABASE_READY = False
 PROCESSED_ML_NOTIFICATION_IDS: dict[str, float] = {}
+DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS = 15
 
 
 def init_database() -> None:
@@ -1225,28 +1226,71 @@ def summarize_ml_answered_question(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def get_ml_portal_answered_lookback_days() -> int:
+    raw_value = os.getenv("ML_PORTAL_ANSWERED_LOOKBACK_DAYS")
+    if not raw_value:
+        return DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        logger.warning("Invalid ML_PORTAL_ANSWERED_LOOKBACK_DAYS=%s; using default", raw_value)
+        return DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS
+
+
 def fetch_ml_answered_questions_debug_data(
     seller_id: str,
     access_token: str,
     *,
-    days: int = 15,
+    days: int | None = None,
     limit: int = 50,
+    max_pages: int = 10,
+    min_recent_questions: int = 50,
 ) -> dict[str, Any]:
+    resolved_days = days or get_ml_portal_answered_lookback_days()
     status_used = "ANSWERED"
-    offset = 0
     pages_fetched = 0
     ml_total = 0
     received_questions: list[dict[str, Any]] = []
     sample: list[dict[str, Any]] = []
+    cutoff = datetime.utcnow() - timedelta(days=resolved_days)
 
-    while True:
-        request_url = build_ml_questions_search_url(seller_id, status_used, limit=limit, offset=offset)
-        logger.warning("ML answered questions request seller_id=%s url=%s", seller_id, request_url)
-        status_code, page = ml_request_json_with_status(request_url, access_token=access_token)
-        logger.warning("ML answered questions response status_code=%s", status_code)
-        pages_fetched += 1
+    first_url = build_ml_questions_search_url(seller_id, status_used, limit=limit, offset=0)
+    logger.warning("ML answered questions request seller_id=%s url=%s", seller_id, first_url)
+    status_code, first_page = ml_request_json_with_status(first_url, access_token=access_token)
+    logger.warning("ML answered questions response status_code=%s", status_code)
+    first_questions = extract_ml_questions(first_page)
+    first_paging = first_page.get("paging") if isinstance(first_page, dict) else {}
+    ml_total = int((first_paging or {}).get("total") or len(first_questions))
+    logger.warning(
+        "ML answered questions first page offset=0 limit=%s ml_total=%s received=%s",
+        limit,
+        ml_total,
+        len(first_questions),
+    )
+    if first_questions:
+        logger.warning("ML answered questions first page sample=%s", [summarize_ml_answered_question(item) for item in first_questions[:3]])
 
-        page_questions = extract_ml_questions(page)
+    if ml_total <= 0:
+        offsets: list[int] = []
+    else:
+        last_offset = max(0, ((ml_total - 1) // limit) * limit)
+        offsets = list(range(last_offset, -1, -limit))
+
+    recent_count = 0
+    for offset in offsets:
+        if offset == 0 and len(offsets) == 1:
+            page = first_page
+            page_questions = first_questions
+            pages_fetched += 1
+            logger.warning("ML answered questions reused first page as last page offset=0")
+        else:
+            request_url = build_ml_questions_search_url(seller_id, status_used, limit=limit, offset=offset)
+            logger.warning("ML answered questions request seller_id=%s url=%s", seller_id, request_url)
+            status_code, page = ml_request_json_with_status(request_url, access_token=access_token)
+            logger.warning("ML answered questions response status_code=%s", status_code)
+            pages_fetched += 1
+            page_questions = extract_ml_questions(page)
+
         paging = page.get("paging") if isinstance(page, dict) else {}
         page_total = int((paging or {}).get("total") or len(received_questions) + len(page_questions))
         ml_total = max(ml_total, page_total)
@@ -1263,11 +1307,36 @@ def fetch_ml_answered_questions_debug_data(
             logger.warning("ML answered questions sample=%s", [summarize_ml_answered_question(item) for item in page_questions[:3]])
         received_questions.extend(page_questions)
 
-        offset += len(page_questions)
-        if not page_questions or offset >= ml_total:
+        page_recent_count = sum(
+            1
+            for question in page_questions
+            if (extract_ml_answer_created_at(question) and extract_ml_answer_created_at(question) >= cutoff)
+        )
+        recent_count += page_recent_count
+        page_effective_dates = [
+            extract_ml_answer_created_at(question)
+            for question in page_questions
+            if extract_ml_answer_created_at(question)
+        ]
+        newest_page_date = max(page_effective_dates) if page_effective_dates else None
+        logger.warning(
+            "ML answered questions page date_check offset=%s recent_on_page=%s newest_effective_date=%s",
+            offset,
+            page_recent_count,
+            newest_page_date.isoformat() if newest_page_date else None,
+        )
+        if not page_questions:
+            break
+        if recent_count >= min_recent_questions:
+            logger.warning("ML answered questions pagination stopped reason=enough_recent count=%s", recent_count)
+            break
+        if newest_page_date and newest_page_date < cutoff:
+            logger.warning("ML answered questions pagination stopped reason=older_than_lookback offset=%s", offset)
+            break
+        if pages_fetched >= max_pages:
+            logger.warning("ML answered questions pagination stopped reason=max_pages pages=%s", pages_fetched)
             break
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
     recent_questions = [
         question
         for question in received_questions
@@ -1278,13 +1347,14 @@ def fetch_ml_answered_questions_debug_data(
         pages_fetched,
         ml_total,
         len(received_questions),
-        days,
+        resolved_days,
         len(recent_questions),
     )
     return {
         "seller_id": str(seller_id),
         "status_used": status_used,
         "api_version": 4,
+        "lookback_days": resolved_days,
         "pages_fetched": pages_fetched,
         "ml_total": ml_total,
         "received_count": len(received_questions),
@@ -2284,6 +2354,7 @@ def debug_mercadolivre_answered_questions(db: Session = Depends(get_db)):
         "seller_id": debug_data["seller_id"],
         "status_used": debug_data["status_used"],
         "api_version": debug_data["api_version"],
+        "lookback_days": debug_data["lookback_days"],
         "pages_fetched": debug_data["pages_fetched"],
         "ml_total": debug_data["ml_total"],
         "received_count": debug_data["received_count"],
@@ -2468,7 +2539,8 @@ def ml_question_is_answered(question_payload: dict[str, Any] | None) -> bool:
     return status == "responded" or bool(extract_ml_answer_text(question_payload))
 
 
-def get_live_portal_answered_questions(db: Session, *, days: int = 15) -> list[dict[str, Any]]:
+def get_live_portal_answered_questions(db: Session, *, days: int | None = None) -> list[dict[str, Any]]:
+    resolved_days = days or get_ml_portal_answered_lookback_days()
     try:
         access_token = get_valid_mercadolivre_token(db)
         integration = get_ml_integration(db)
@@ -2491,7 +2563,7 @@ def get_live_portal_answered_questions(db: Session, *, days: int = 15) -> list[d
         logger.exception("Could not fetch live portal answered Mercado Livre questions")
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.utcnow() - timedelta(days=resolved_days)
     local_questions = (
         db.query(QuestionRecord)
         .filter(
