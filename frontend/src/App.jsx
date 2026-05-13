@@ -168,6 +168,15 @@ function firstDisplayableSku(itemId, ...values) {
   return values.find((value) => isDisplayableSku(value, itemId)) || "";
 }
 
+function getBuyerDisplayName(buyer, fallback = "Cliente ML", { detail = false } = {}) {
+  if (!buyer) return fallback || "Cliente ML";
+  if (detail && buyer.detail_display_name) return buyer.detail_display_name;
+  if (buyer.compact_display_name) return buyer.compact_display_name;
+  if (buyer.first_name && buyer.nickname) return `${buyer.first_name} (${buyer.nickname})`;
+  if (buyer.first_name) return buyer.first_name;
+  return buyer.nickname || buyer.display_name || fallback || "Cliente ML";
+}
+
 function getQuestionTimestamp(question) {
   return new Date(question.answered_at || question.created_at || 0).getTime() || 0;
 }
@@ -214,7 +223,7 @@ function buildConversationGroups(questions) {
       created_at: latest.created_at,
       latest_at: latest.answered_at || latest.created_at,
       buyer: latest.buyer || sorted.find((question) => question.buyer)?.buyer || { display_name: "Cliente ML" },
-      customer_name: latest.buyer?.display_name || latest.customer_name || "Cliente ML",
+      customer_name: getBuyerDisplayName(latest.buyer, latest.customer_name),
     };
   }).sort((a, b) => getQuestionTimestamp(b) - getQuestionTimestamp(a));
 }
@@ -249,7 +258,7 @@ function mapMercadoLivreQuestionToUi(question, index) {
       id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || null,
       display_name: question.customer_name || "Cliente ML",
     },
-    customer_name: question.buyer?.display_name || question.customer_name || "Cliente ML",
+    customer_name: getBuyerDisplayName(question.buyer, question.customer_name),
     external_product_id: externalProductId,
     external_order_id: question.external_order_id || rawPayload.order_id || rawPayload.order?.id || "",
     external_customer_id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || "",
@@ -768,7 +777,7 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
           <span className="source-tag" style={{ "--source-color": sourceColor }}>
             {sourceLabel}
           </span>
-          <span className="buyer-name">{question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+          <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
           {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
         </div>
         <span className="time">
@@ -803,7 +812,7 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
           <span className="source-tag" style={{ "--source-color": sourceColor }}>
             {sourceLabel}
           </span>
-          <span className="buyer-name">{question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+          <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
           {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
         </div>
         <span className="time">
@@ -973,7 +982,7 @@ function ConversationMessages({ questions }) {
       {questions.map((item) => (
         <div className="thread-item" key={item.id}>
           <div className="message customer">
-            <span>{item.buyer?.display_name || item.customer_name || "Cliente ML"}</span>
+            <span>{getBuyerDisplayName(item.buyer, item.customer_name, { detail: true })}</span>
             <p>{item.question}</p>
             <small>{formatDate(item.created_at)}</small>
           </div>
@@ -1045,7 +1054,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
             <ChevronLeft size={22} />
           </button>
           <div>
-            <span>{question.marketplace} · {question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+            <span>{question.marketplace} · {getBuyerDisplayName(question.buyer, question.customer_name, { detail: true })}</span>
             <h2>{question.product}</h2>
             <p>
               Respondida em {question.answered_at ? formatDate(question.answered_at) : formatDate(question.created_at)}
@@ -1063,39 +1072,6 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <DetailMetadata question={question} />
 
           <ConversationMessages questions={conversationQuestions} />
-
-          <div className="read-only-answer">
-            <div className="ai-card-header">
-              <div>
-                <Send size={18} />
-                <strong>Resposta enviada</strong>
-              </div>
-              <span>{question.approved_by || "Sistema"}</span>
-            </div>
-            <p>{question.final_response || question.final_answer || question.ai_suggestion}</p>
-            <dl>
-              <div>
-                <dt>Marketplace</dt>
-                <dd>{question.marketplace}</dd>
-              </div>
-              <div>
-                <dt>Produto</dt>
-                <dd>{question.product}</dd>
-              </div>
-              <div>
-                <dt>Respondida em</dt>
-                <dd>{question.answered_at ? formatDate(question.answered_at) : "Não informado"}</dd>
-              </div>
-              <div>
-                <dt>Aprovada por</dt>
-                <dd>{question.approved_by || "Não informado"}</dd>
-              </div>
-              <div>
-                <dt>Origem</dt>
-                <dd>{getAnsweredSourceLabel(question.answered_source) || "Não informado"}</dd>
-              </div>
-            </dl>
-          </div>
         </div>
       </section>
     );
@@ -1218,7 +1194,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <ChevronLeft size={22} />
         </button>
         <div>
-          <span>{question.marketplace} · {question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+          <span>{question.marketplace} · {getBuyerDisplayName(question.buyer, question.customer_name, { detail: true })}</span>
           <h2>{question.product}</h2>
           <p>
             SKU {displayValue(firstDisplayableSku(question.external_product_id, question.product_sku, question.sku))} · {displayValue(question.price)}
