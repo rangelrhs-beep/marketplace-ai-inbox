@@ -39,6 +39,7 @@ DATABASE_READY = False
 PROCESSED_ML_NOTIFICATION_IDS: dict[str, float] = {}
 DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS = 15
 ML_ENABLE_ANSWERED_BACKFILL_DEFAULT = "false"
+ML_BUYER_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def init_database() -> None:
@@ -335,6 +336,101 @@ def extract_question_customer_name(raw_payload: dict[str, Any]) -> str | None:
     return None
 
 
+def build_buyer_info(
+    buyer_id: str | None = None,
+    *,
+    nickname: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> dict[str, Any]:
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+    if full_name and nickname:
+        display_name = f"{full_name} ({nickname})"
+    else:
+        display_name = nickname or full_name or "Cliente ML"
+    return {
+        "id": str(buyer_id) if buyer_id else None,
+        "nickname": nickname or None,
+        "first_name": first_name or None,
+        "last_name": last_name or None,
+        "full_name": full_name or None,
+        "display_name": display_name,
+    }
+
+
+def extract_buyer_info_from_payload(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    buyer = raw_payload.get("buyer") or raw_payload.get("from") or raw_payload.get("user") or {}
+    buyer_id = extract_question_customer_id(raw_payload)
+    if isinstance(buyer, dict):
+        return build_buyer_info(
+            buyer_id,
+            nickname=buyer.get("nickname") or buyer.get("name"),
+            first_name=buyer.get("first_name"),
+            last_name=buyer.get("last_name"),
+        )
+    return build_buyer_info(buyer_id)
+
+
+def buyer_info_from_ml_user(user_payload: dict[str, Any], buyer_id: str) -> dict[str, Any]:
+    return build_buyer_info(
+        buyer_id,
+        nickname=user_payload.get("nickname"),
+        first_name=user_payload.get("first_name"),
+        last_name=user_payload.get("last_name"),
+    )
+
+
+def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dict[str, Any]]:
+    missing_ids = [buyer_id for buyer_id in dict.fromkeys(buyer_ids) if buyer_id and buyer_id not in ML_BUYER_CACHE]
+    if missing_ids:
+        try:
+            ids_param = ",".join(quote(str(buyer_id), safe="") for buyer_id in missing_ids)
+            response = ml_request_json(f"{ML_API_BASE_URL}/users?ids={ids_param}", access_token=access_token)
+            if not isinstance(response, list):
+                raise ValueError("Unexpected Mercado Livre users multiget response")
+            for entry in response:
+                body = entry.get("body") if isinstance(entry, dict) and isinstance(entry.get("body"), dict) else entry
+                if not isinstance(body, dict):
+                    continue
+                buyer_id = str(body.get("id") or "")
+                if buyer_id:
+                    ML_BUYER_CACHE[buyer_id] = buyer_info_from_ml_user(body, buyer_id)
+        except Exception:
+            logger.warning("Mercado Livre users multiget failed; falling back to individual buyer fetch")
+        for buyer_id in missing_ids:
+            if buyer_id in ML_BUYER_CACHE:
+                continue
+            try:
+                body = ml_request_json(f"{ML_API_BASE_URL}/users/{quote(str(buyer_id), safe='')}", access_token=access_token)
+                ML_BUYER_CACHE[buyer_id] = buyer_info_from_ml_user(body, buyer_id) if isinstance(body, dict) else build_buyer_info(buyer_id)
+            except Exception:
+                logger.warning("Mercado Livre buyer enrichment failed buyer_id=%s", buyer_id)
+                ML_BUYER_CACHE[buyer_id] = build_buyer_info(buyer_id)
+    return {buyer_id: ML_BUYER_CACHE.get(buyer_id, build_buyer_info(buyer_id)) for buyer_id in buyer_ids if buyer_id}
+
+
+def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
+    buyer_ids = [str(question.get("external_customer_id") or "") for question in questions if question.get("external_customer_id")]
+    if not buyer_ids:
+        return questions
+    try:
+        access_token = get_valid_mercadolivre_token(db)
+        buyers = get_ml_buyers_info(buyer_ids, access_token)
+    except Exception:
+        logger.warning("Mercado Livre buyer enrichment unavailable; returning fallback buyer names")
+        buyers = {}
+    enriched = []
+    for question in questions:
+        buyer_id = str(question.get("external_customer_id") or "")
+        buyer = buyers.get(buyer_id) or question.get("buyer") or build_buyer_info(buyer_id or None)
+        enriched.append({
+            **question,
+            "buyer": buyer,
+            "customer_name": buyer.get("display_name") or question.get("customer_name") or "Cliente ML",
+        })
+    return enriched
+
+
 def get_cached_product_for_question(db: Session | None, raw_payload: dict[str, Any]) -> ProductCache | None:
     item_id = extract_question_item_id(raw_payload)
     if not db or not item_id:
@@ -507,6 +603,7 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
     external_product_id = extract_question_item_id(raw_payload)
     external_customer_id = extract_question_customer_id(raw_payload)
     extracted_customer_name = extract_question_customer_name(raw_payload)
+    buyer = extract_buyer_info_from_payload(raw_payload)
     external_order_id = first_present(
         raw_payload.get("order_id"),
         raw_payload.get("order", {}).get("id") if isinstance(raw_payload.get("order"), dict) else None,
@@ -537,6 +634,7 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         "product": product_title,
         "product_title": product_title,
         "customer_name": extracted_customer_name or "Cliente Mercado Livre",
+        "buyer": buyer,
         "external_product_id": external_product_id,
         "external_order_id": str(external_order_id) if external_order_id else None,
         "external_customer_id": external_customer_id,
@@ -2756,6 +2854,7 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
     )
     external_customer_id = extract_question_customer_id(payload)
     customer_name = extract_question_customer_name(payload)
+    buyer = extract_buyer_info_from_payload(payload)
     return {
         "id": f"ml-live-{external_id}",
         "company_id": DEFAULT_COMPANY_ID,
@@ -2765,6 +2864,7 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
         "product": product_title,
         "product_title": product_title,
         "customer_name": customer_name or "Cliente Mercado Livre",
+        "buyer": buyer,
         "external_product_id": external_product_id,
         "external_order_id": str(external_order_id) if external_order_id else None,
         "external_customer_id": external_customer_id,
@@ -3316,7 +3416,10 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         )
         if status:
             query = query.filter(QuestionRecord.status == normalize_db_status(status))
-        local_questions = [question_to_api(question, db=db) for question in query.all()]
+        local_questions = enrich_questions_with_buyers(
+            [question_to_api(question, db=db) for question in query.all()],
+            db,
+        )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
         return []
