@@ -346,12 +346,12 @@ def build_buyer_info(
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
     if first_name and nickname:
         display_name = f"{first_name} ({nickname})"
+    elif nickname:
+        display_name = nickname
     elif first_name:
         display_name = first_name
-    elif full_name and nickname:
-        display_name = f"{full_name} ({nickname})"
     else:
-        display_name = nickname or "Cliente ML"
+        display_name = "Cliente ML"
     return {
         "id": str(buyer_id) if buyer_id else None,
         "nickname": nickname or None,
@@ -379,21 +379,40 @@ def extract_buyer_info_from_payload(raw_payload: dict[str, Any]) -> dict[str, An
 
 def buyer_info_from_ml_user(user_payload: dict[str, Any], buyer_id: str) -> dict[str, Any]:
     if user_payload.get("nickname") and not user_payload.get("first_name"):
-        logger.info("buyer enrichment missing first_name for buyer_id=%s", buyer_id)
-    return build_buyer_info(
+        logger.info(
+            "buyer enrichment missing first_name buyer_id=%s nickname=%s",
+            buyer_id,
+            user_payload.get("nickname"),
+        )
+    buyer = build_buyer_info(
         buyer_id,
         nickname=user_payload.get("nickname"),
         first_name=user_payload.get("first_name"),
         last_name=user_payload.get("last_name"),
     )
+    logger.info(
+        "buyer enrichment returned fields id=%s nickname=%s first_name=%s last_name=%s display_name=%s",
+        buyer_id,
+        buyer.get("nickname"),
+        buyer.get("first_name"),
+        buyer.get("last_name"),
+        buyer.get("display_name"),
+    )
+    return buyer
 
 
 def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dict[str, Any]]:
     missing_ids = [buyer_id for buyer_id in dict.fromkeys(buyer_ids) if buyer_id and buyer_id not in ML_BUYER_CACHE]
+    buyer_sources: dict[str, str] = {
+        buyer_id: "cache" for buyer_id in dict.fromkeys(buyer_ids) if buyer_id in ML_BUYER_CACHE
+    }
     if missing_ids:
         try:
             ids_param = ",".join(quote(str(buyer_id), safe="") for buyer_id in missing_ids)
-            response = ml_request_json(f"{ML_API_BASE_URL}/users?ids={ids_param}", access_token=access_token)
+            multiget_url = f"{ML_API_BASE_URL}/users?ids={ids_param}"
+            logger.info("buyer enrichment multiget called=true ids_count=%s", len(missing_ids))
+            status_code, response = ml_request_json_get_with_status(multiget_url, access_token=access_token)
+            logger.info("buyer enrichment multiget status_code=%s", status_code)
             if not isinstance(response, list):
                 raise ValueError("Unexpected Mercado Livre users multiget response")
             for entry in response:
@@ -403,27 +422,46 @@ def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dic
                 buyer_id = str(body.get("id") or "")
                 if buyer_id:
                     ML_BUYER_CACHE[buyer_id] = buyer_info_from_ml_user(body, buyer_id)
+                    buyer_sources[buyer_id] = "multiget"
         except Exception:
             logger.warning("Mercado Livre users multiget failed; falling back to individual buyer fetch")
         for buyer_id in missing_ids:
             if buyer_id in ML_BUYER_CACHE:
                 continue
             try:
-                body = ml_request_json(f"{ML_API_BASE_URL}/users/{quote(str(buyer_id), safe='')}", access_token=access_token)
+                fallback_url = f"{ML_API_BASE_URL}/users/{quote(str(buyer_id), safe='')}"
+                logger.info("buyer enrichment fallback called=true buyer_id=%s", buyer_id)
+                status_code, body = ml_request_json_get_with_status(fallback_url, access_token=access_token)
+                logger.info("buyer enrichment fallback status_code=%s buyer_id=%s", status_code, buyer_id)
                 ML_BUYER_CACHE[buyer_id] = buyer_info_from_ml_user(body, buyer_id) if isinstance(body, dict) else build_buyer_info(buyer_id)
+                buyer_sources[buyer_id] = "fallback"
             except Exception:
                 logger.warning("Mercado Livre buyer enrichment failed buyer_id=%s", buyer_id)
                 ML_BUYER_CACHE[buyer_id] = build_buyer_info(buyer_id)
-    return {buyer_id: ML_BUYER_CACHE.get(buyer_id, build_buyer_info(buyer_id)) for buyer_id in buyer_ids if buyer_id}
+                buyer_sources[buyer_id] = "missing"
+    result = {}
+    for buyer_id in buyer_ids:
+        if not buyer_id:
+            continue
+        buyer = ML_BUYER_CACHE.get(buyer_id, build_buyer_info(buyer_id))
+        result[buyer_id] = {**buyer, "source": buyer_sources.get(buyer_id, "cache")}
+    return result
 
 
 def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
     buyer_ids = [str(question.get("external_customer_id") or "") for question in questions if question.get("external_customer_id")]
+    unique_buyer_ids = list(dict.fromkeys(buyer_ids))
+    logger.info(
+        "buyer enrichment start questions_count=%s unique_buyer_ids_count=%s buyer_ids_sample=%s",
+        len(questions),
+        len(unique_buyer_ids),
+        unique_buyer_ids[:10],
+    )
     if not buyer_ids:
         return questions
     try:
         access_token = get_valid_mercadolivre_token(db)
-        buyers = get_ml_buyers_info(buyer_ids, access_token)
+        buyers = get_ml_buyers_info(unique_buyer_ids, access_token)
     except Exception:
         logger.warning("Mercado Livre buyer enrichment unavailable; returning fallback buyer names")
         buyers = {}
@@ -436,6 +474,21 @@ def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -
             "buyer": buyer,
             "customer_name": buyer.get("display_name") or question.get("customer_name") or "Cliente ML",
         })
+    logger.info(
+        "buyer enrichment finished enriched_count=%s buyers_sample=%s",
+        len(enriched),
+        [
+            {
+                "id": buyers.get(buyer_id, {}).get("id"),
+                "nickname": buyers.get(buyer_id, {}).get("nickname"),
+                "first_name": buyers.get(buyer_id, {}).get("first_name"),
+                "last_name": buyers.get(buyer_id, {}).get("last_name"),
+                "display_name": buyers.get(buyer_id, {}).get("display_name"),
+                "source": buyers.get(buyer_id, {}).get("source"),
+            }
+            for buyer_id in unique_buyer_ids[:10]
+        ],
+    )
     return enriched
 
 
@@ -1005,6 +1058,24 @@ def ml_request_json_with_status(
         headers["Authorization"] = f"Bearer {access_token}"
 
     request = Request(url, data=body, method=method, headers=headers)
+    try:
+        with urlopen(request, timeout=20) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            response_body = json.loads(response_text) if response_text else {}
+            return response.status, response_body
+    except HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        logger.error("Mercado Livre API error %s: %s", error.code, details)
+        raise HTTPException(status_code=error.code, detail=f"Mercado Livre API error: {details}") from error
+    except URLError as error:
+        raise HTTPException(status_code=502, detail=f"Mercado Livre API unavailable: {error}") from error
+
+
+def ml_request_json_get_with_status(url: str, *, access_token: str | None = None) -> tuple[int, dict[str, Any] | list[Any]]:
+    headers = {"Accept": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    request = Request(url, method="GET", headers=headers)
     try:
         with urlopen(request, timeout=20) as response:
             response_text = response.read().decode("utf-8", errors="replace")
@@ -3451,6 +3522,48 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         logger.exception("Live portal answered questions unavailable; returning local questions only")
         live_portal_questions = []
     return local_questions + live_portal_questions
+
+
+@app.get("/debug/ml/buyers")
+def debug_ml_buyers(db: Session = Depends(get_db)):
+    questions = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+        )
+        .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
+        .limit(100)
+        .all()
+    )
+    question_payloads = [question_to_api(question, db=db) for question in questions]
+    buyer_ids = list(dict.fromkeys(
+        str(question.get("external_customer_id") or "")
+        for question in question_payloads
+        if question.get("external_customer_id")
+    ))
+    buyers: dict[str, dict[str, Any]] = {}
+    if buyer_ids:
+        try:
+            access_token = get_valid_mercadolivre_token(db)
+            buyers = get_ml_buyers_info(buyer_ids, access_token)
+        except Exception:
+            logger.exception("Debug buyer enrichment failed")
+    return {
+        "questions_count": len(question_payloads),
+        "unique_buyer_ids": buyer_ids,
+        "buyers": [
+            {
+                "id": buyer_id,
+                "nickname": buyers.get(buyer_id, {}).get("nickname"),
+                "first_name": buyers.get(buyer_id, {}).get("first_name"),
+                "last_name": buyers.get(buyer_id, {}).get("last_name"),
+                "display_name": buyers.get(buyer_id, build_buyer_info(buyer_id)).get("display_name"),
+                "source": buyers.get(buyer_id, {}).get("source") or ("cache" if buyer_id in ML_BUYER_CACHE else "missing"),
+            }
+            for buyer_id in buyer_ids
+        ],
+    }
 
 
 @app.get("/products")
