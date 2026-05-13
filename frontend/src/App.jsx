@@ -168,6 +168,57 @@ function firstDisplayableSku(itemId, ...values) {
   return values.find((value) => isDisplayableSku(value, itemId)) || "";
 }
 
+function getQuestionTimestamp(question) {
+  return new Date(question.answered_at || question.created_at || 0).getTime() || 0;
+}
+
+function getHighestPriority(questions) {
+  if (questions.some((question) => question.priority === "Alta")) return "Alta";
+  if (questions.some((question) => question.priority === "Media")) return "Media";
+  return questions[0]?.priority || "Baixa";
+}
+
+function getConversationGroupKey(question) {
+  const buyerId = question.buyer?.id || question.external_customer_id;
+  const itemId = question.external_product_id || question.raw_payload?.item_id || question.external_id;
+  if (!buyerId || !itemId) return `single:${question.external_id || question.id}`;
+  return `${question.channel || question.marketplace}:${itemId}:${buyerId}`;
+}
+
+function buildConversationGroups(questions) {
+  const groups = new Map();
+  questions.forEach((question) => {
+    const key = getConversationGroupKey(question);
+    const current = groups.get(key) || [];
+    current.push(question);
+    groups.set(key, current);
+  });
+
+  return Array.from(groups.entries()).map(([key, groupQuestions]) => {
+    const sorted = [...groupQuestions].sort((a, b) => getQuestionTimestamp(a) - getQuestionTimestamp(b));
+    const latest = sorted[sorted.length - 1];
+    const hasPending = sorted.some((question) => question.status === "Pendente");
+    const allAnswered = sorted.every((question) => question.status === "Respondida");
+    const answeredSources = [...new Set(sorted.map((question) => normalizeAnsweredSource(question.answered_source)).filter(Boolean))];
+    const priority = getHighestPriority(sorted);
+    return {
+      ...latest,
+      id: `group:${key}`,
+      group_key: key,
+      questions: sorted,
+      question_count: sorted.length,
+      status: hasPending ? "Pendente" : allAnswered ? "Respondida" : latest.status,
+      answered_source: hasPending ? "" : answeredSources.length === 1 ? answeredSources[0] : "",
+      priority,
+      question: latest.question,
+      created_at: latest.created_at,
+      latest_at: latest.answered_at || latest.created_at,
+      buyer: latest.buyer || sorted.find((question) => question.buyer)?.buyer || { display_name: "Cliente ML" },
+      customer_name: latest.buyer?.display_name || latest.customer_name || "Cliente ML",
+    };
+  }).sort((a, b) => getQuestionTimestamp(b) - getQuestionTimestamp(a));
+}
+
 function mapMercadoLivreQuestionToUi(question, index) {
   const rawPayload = question.raw_payload || {};
   const cachedProduct = question.cached_product || {};
@@ -194,7 +245,11 @@ function mapMercadoLivreQuestionToUi(question, index) {
     product_status: question.product_status || "",
     product_available_quantity: question.product_available_quantity ?? null,
     product_price: question.product_price || "",
-    customer_name: "Cliente Mercado Livre",
+    buyer: question.buyer || {
+      id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || null,
+      display_name: question.customer_name || "Cliente ML",
+    },
+    customer_name: question.buyer?.display_name || question.customer_name || "Cliente ML",
     external_product_id: externalProductId,
     external_order_id: question.external_order_id || rawPayload.order_id || rawPayload.order?.id || "",
     external_customer_id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || "",
@@ -713,6 +768,8 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
           <span className="source-tag" style={{ "--source-color": sourceColor }}>
             {sourceLabel}
           </span>
+          <span className="buyer-name">{question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+          {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
         </div>
         <span className="time">
           <Clock3 size={14} />
@@ -735,7 +792,8 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
 }
 
 function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit, onGenerate, isApproving, isGenerating }) {
-  const hasSuggestion = question.has_ai_suggestion !== false;
+  const editableQuestion = question.questions?.find((item) => item.status === "Pendente") || question;
+  const hasSuggestion = editableQuestion.has_ai_suggestion !== false;
 
   return (
     <article className="pending-card">
@@ -745,6 +803,8 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
           <span className="source-tag" style={{ "--source-color": sourceColor }}>
             {sourceLabel}
           </span>
+          <span className="buyer-name">{question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
+          {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
         </div>
         <span className="time">
           <Clock3 size={14} />
@@ -757,13 +817,13 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
 
       <div className="suggestion-preview">
         <span>Sugestão da IA</span>
-        <p>{question.ai_suggestion}</p>
+        <p>{editableQuestion.ai_suggestion}</p>
       </div>
 
       <RelatedProducts products={question.related_products} />
 
       <div className="pending-actions">
-        <button className="primary" onClick={() => onApprove(question.id, question.ai_suggestion)} disabled={isApproving}>
+        <button className="primary" onClick={() => onApprove(editableQuestion.id, editableQuestion.ai_suggestion)} disabled={isApproving}>
           {isApproving ? <RefreshCw size={18} className="spin" /> : <Check size={18} />}
           {isApproving ? "Enviando..." : "Aprovar e enviar"}
         </button>
@@ -772,7 +832,7 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
           Editar / melhorar
         </button>
         {!hasSuggestion ? (
-          <button className="secondary" onClick={() => onGenerate(question.id)} disabled={isGenerating}>
+          <button className="secondary" onClick={() => onGenerate(editableQuestion.id)} disabled={isGenerating}>
             <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
             {isGenerating ? "Gerando..." : "Gerar sugestão agora"}
           </button>
@@ -907,6 +967,29 @@ function DetailMetadata({ question }) {
   );
 }
 
+function ConversationMessages({ questions }) {
+  return (
+    <div className="conversation-thread">
+      {questions.map((item) => (
+        <div className="thread-item" key={item.id}>
+          <div className="message customer">
+            <span>{item.buyer?.display_name || item.customer_name || "Cliente ML"}</span>
+            <p>{item.question}</p>
+            <small>{formatDate(item.created_at)}</small>
+          </div>
+          {item.status === "Respondida" && (item.final_response || item.final_answer || item.ai_suggestion) ? (
+            <div className="message seller">
+              <span>{getAnsweredSourceLabel(item.answered_source)}</span>
+              <p>{item.final_response || item.final_answer || item.ai_suggestion}</p>
+              <small>{item.answered_at ? formatDate(item.answered_at) : "Resposta registrada"}</small>
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Conversation({ question, onBack, onApprove, onGenerate, onReject, readOnly, isApproving }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState("");
@@ -916,9 +999,12 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
   const [rewriteError, setRewriteError] = useState("");
+  const conversationQuestions = question?.questions || (question ? [question] : []);
+  const editableQuestion = conversationQuestions.find((item) => item.status === "Pendente") || question;
 
   useEffect(() => {
-    const originalText = question?.ai_suggestion || "";
+    const pendingQuestion = (question?.questions || [question]).find((item) => item?.status === "Pendente") || question;
+    const originalText = pendingQuestion?.ai_suggestion || "";
     setVersions([
       {
         id: "original",
@@ -937,7 +1023,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId) || versions[0];
   const currentText = selectedVersion?.text || "";
-  const hasSuggestion = question?.has_ai_suggestion !== false;
+  const hasSuggestion = editableQuestion?.has_ai_suggestion !== false;
 
   if (!question) {
     return (
@@ -959,7 +1045,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
             <ChevronLeft size={22} />
           </button>
           <div>
-            <span>{question.marketplace}</span>
+            <span>{question.marketplace} · {question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
             <h2>{question.product}</h2>
             <p>
               Respondida em {question.answered_at ? formatDate(question.answered_at) : formatDate(question.created_at)}
@@ -976,11 +1062,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
         <div className="chat-surface">
           <DetailMetadata question={question} />
 
-          <div className="message customer">
-            <span>{question.customer_name}</span>
-            <p>{question.question}</p>
-            <small>{formatDate(question.created_at)}</small>
-          </div>
+          <ConversationMessages questions={conversationQuestions} />
 
           <div className="read-only-answer">
             <div className="ai-card-header">
@@ -990,7 +1072,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               </div>
               <span>{question.approved_by || "Sistema"}</span>
             </div>
-            <p>{question.final_response || question.ai_suggestion}</p>
+            <p>{question.final_response || question.final_answer || question.ai_suggestion}</p>
             <dl>
               <div>
                 <dt>Marketplace</dt>
@@ -1057,7 +1139,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        question: question.question,
+        question: editableQuestion.question,
         original_response: originalResponse,
         instruction,
       }),
@@ -1107,7 +1189,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
   async function handleGenerate() {
     setIsGenerating(true);
-    const suggestion = await onGenerate(question.id);
+    const suggestion = await onGenerate(editableQuestion.id);
     const nextVersion = {
       id: `generated-${Date.now()}`,
       label: `Ajuste ${versions.length}: nova sugestão`,
@@ -1121,8 +1203,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   }
 
   function approveSelectedVersion() {
-    onApprove(question.id, {
-      ai_suggestion: question.ai_suggestion,
+    onApprove(editableQuestion.id, {
+      ai_suggestion: editableQuestion.ai_suggestion,
       final_response: currentText,
       was_edited: selectedVersion?.wasEdited || selectedVersionId !== "original",
       instruction_used: selectedVersion?.instruction || "",
@@ -1136,7 +1218,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <ChevronLeft size={22} />
         </button>
         <div>
-          <span>{question.marketplace}</span>
+          <span>{question.marketplace} · {question.buyer?.display_name || question.customer_name || "Cliente ML"}</span>
           <h2>{question.product}</h2>
           <p>
             SKU {displayValue(firstDisplayableSku(question.external_product_id, question.product_sku, question.sku))} · {displayValue(question.price)}
@@ -1148,11 +1230,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
       <div className="chat-surface">
         <DetailMetadata question={question} />
 
-        <div className="message customer">
-          <span>{question.customer_name}</span>
-          <p>{question.question}</p>
-          <small>{formatDate(question.created_at)}</small>
-        </div>
+        <ConversationMessages questions={conversationQuestions} />
 
         <div className="ai-card">
           <div className="ai-card-header">
@@ -1225,7 +1303,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
               <RefreshCw size={17} className={isGenerating ? "spin" : ""} />
               {hasSuggestion ? "Gerar nova sugestão" : "Gerar sugestão agora"}
             </button>
-            <button className="danger" onClick={() => onReject(question.id)}>
+            <button className="danger" onClick={() => onReject(editableQuestion.id)}>
               <ThumbsDown size={17} />
               Rejeitar
             </button>
@@ -1393,7 +1471,6 @@ export default function App() {
 
   const visibleQuestions = questions;
 
-  const selectedQuestion = visibleQuestions.find((question) => question.id === selectedId);
   const marketplaces = useMemo(
     () => ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))],
     [visibleQuestions]
@@ -1427,6 +1504,15 @@ export default function App() {
       return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
     });
   }, [active, visibleQuestions, marketplaceFilter, statusFilter, priorityFilter, answeredSourceFilter]);
+
+  const conversationGroups = useMemo(() => buildConversationGroups(filteredQuestions), [filteredQuestions]);
+  const selectedQuestion =
+    conversationGroups.find((question) => question.id === selectedId) ||
+    visibleQuestions.find((question) => question.id === selectedId) ||
+    conversationGroups[0] ||
+    null;
+  const selectedEditableQuestion =
+    selectedQuestion?.questions?.find((question) => question.status === "Pendente") || selectedQuestion;
 
   const metrics = {
     pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
@@ -1471,15 +1557,17 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (selectedId && !visibleQuestions.some((question) => question.id === selectedId)) {
-      setSelectedId(visibleQuestions[0]?.id || null);
+    if (selectedId && !conversationGroups.some((question) => question.id === selectedId)) {
+      setSelectedId(conversationGroups[0]?.id || null);
       setShowConversation(false);
+    } else if (!selectedId && conversationGroups.length > 0) {
+      setSelectedId(conversationGroups[0].id);
     }
 
     if (marketplaceFilter !== "Todos" && !marketplaces.includes(marketplaceFilter)) {
       setMarketplaceFilter("Todos");
     }
-  }, [marketplaceFilter, marketplaces, selectedId, visibleQuestions]);
+  }, [conversationGroups, marketplaceFilter, marketplaces, selectedId]);
 
   function selectQuestion(id) {
     if (!(showConversation && selectedId === id)) {
@@ -2009,7 +2097,7 @@ export default function App() {
                   Abrir integrações
                 </button>
               </div>
-            ) : filteredQuestions.length === 0 ? (
+            ) : conversationGroups.length === 0 ? (
               <div className="inbox-empty">
                 <div className="empty-icon">
                   <Inbox size={30} />
@@ -2018,7 +2106,7 @@ export default function App() {
                 <p>{questionNotice || "Sincronize o Mercado Livre ou ajuste os filtros atuais."}</p>
               </div>
             ) : isPendingScreen ? (
-              filteredQuestions.map((question) => (
+              conversationGroups.map((question) => (
                 <PendingQuestionCard
                   key={question.id}
                   question={question}
@@ -2027,12 +2115,12 @@ export default function App() {
                   onApprove={approveQuestion}
                   onEdit={openEditorForQuestion}
                   onGenerate={generateSuggestion}
-                  isApproving={sendingAnswerId === question.id}
-                  isGenerating={generatingQuestionId === question.id}
+                  isApproving={sendingAnswerId === (question.questions?.find((item) => item.status === "Pendente") || question).id}
+                  isGenerating={generatingQuestionId === (question.questions?.find((item) => item.status === "Pendente") || question).id}
                 />
               ))
             ) : (
-              filteredQuestions.map((question) => (
+              conversationGroups.map((question) => (
                 <QuestionRow
                   key={question.id}
                   question={question}
@@ -2054,7 +2142,7 @@ export default function App() {
                 onGenerate={generateSuggestion}
                 onReject={rejectQuestion}
                 readOnly={isReadOnlyAnsweredScreen || selectedQuestion?.status === "Respondida"}
-                isApproving={sendingAnswerId === selectedQuestion?.id}
+                isApproving={sendingAnswerId === selectedEditableQuestion?.id}
               />
             </div>
           </>

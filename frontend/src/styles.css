@@ -472,6 +472,29 @@ button:disabled {
   box-shadow: 0 8px 18px rgba(32, 43, 69, 0.1);
 }
 
+.buyer-name {
+  color: #293456;
+  font-size: 12px;
+  font-weight: 800;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-badge {
+  min-width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-size: 12px;
+  font-weight: 900;
+  border: 1px solid rgba(79, 70, 229, 0.18);
+}
+
 .time {
   color: #77839a;
   display: inline-flex;
@@ -817,6 +840,26 @@ button:disabled {
   padding: 14px 16px;
   background: white;
   box-shadow: 0 12px 30px rgba(32, 43, 69, 0.09);
+}
+
+.conversation-thread {
+  display: grid;
+  gap: 14px;
+}
+
+.thread-item {
+  display: grid;
+  gap: 8px;
+}
+
+.message.seller {
+  justify-self: end;
+  border-radius: 18px 18px 4px 18px;
+  background: #effaf3;
+}
+
+.message.seller span {
+  color: #2563eb;
 }
 
 .message span {
