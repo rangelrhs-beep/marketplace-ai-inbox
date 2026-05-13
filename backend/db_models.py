@@ -72,6 +72,7 @@ class QuestionRecord(Base):
     created_at = Column(DateTime, nullable=True)
     answered_at = Column(DateTime, nullable=True)
     answered_source = Column(String(80), nullable=True)
+    final_answer = Column(Text, nullable=True)
     raw_payload = Column(JsonType, nullable=False, default=dict)
     created_in_app_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
