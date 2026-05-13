@@ -2318,7 +2318,7 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
         "was_edited": False,
         "instruction_used": "",
         "answered_at": answered_at.isoformat() if answered_at else None,
-        "answered_source": "mercado_livre_portal",
+        "answered_source": "portal",
         "approved_by": "Mercado Livre",
         "approved_at": answered_at.isoformat() if answered_at else None,
         "sku": product_sku or "",
@@ -2372,14 +2372,16 @@ def get_live_portal_answered_questions(db: Session, *, days: int = 15) -> list[d
     )
     local_by_external_id = {question.external_id: question for question in local_questions}
     live_questions = []
+    seen_live_external_ids: set[str] = set()
     for payload in extract_ml_questions(raw_response):
         if not ml_question_is_answered(payload):
             continue
         external_id = str(payload.get("id") or payload.get("question_id") or "")
-        if not external_id:
+        if not external_id or external_id in seen_live_external_ids:
             continue
+        seen_live_external_ids.add(external_id)
         answered_at = extract_ml_answer_created_at(payload)
-        if answered_at and answered_at < cutoff:
+        if not answered_at or answered_at < cutoff:
             continue
         local_question = local_by_external_id.get(external_id)
         if local_question and local_question.answered_source == "app":
@@ -2428,7 +2430,7 @@ def save_answered_question_state(
     if question:
         question.status = "responded"
         question.answered_at = resolved_answered_at
-        if answered_source == "mercado_livre_portal" and question.answered_source == "app":
+        if answered_source in {"portal", "mercado_livre_portal"} and question.answered_source == "app":
             question.answered_source = "app"
         else:
             question.answered_source = answered_source
