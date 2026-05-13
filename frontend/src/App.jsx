@@ -153,7 +153,15 @@ function normalizeInstruction(instruction) {
 
 function mapMercadoLivreQuestionToUi(question, index) {
   const rawPayload = question.raw_payload || {};
+  const cachedProduct = question.cached_product || {};
   const externalId = question.external_id || rawPayload.id || index + 1;
+  const productSku =
+    question.product_sku ||
+    cachedProduct.seller_custom_field ||
+    cachedProduct.raw_payload?.seller_sku ||
+    rawPayload.seller_custom_field ||
+    rawPayload.seller_sku ||
+    "";
 
   return {
     id: question.id || `ml-${externalId}`,
@@ -161,7 +169,7 @@ function mapMercadoLivreQuestionToUi(question, index) {
     marketplace: "Mercado Livre",
     product: question.product || question.product_title || rawPayload.item_id || "Produto Mercado Livre",
     product_title: question.product_title || question.product || rawPayload.item_id || "Produto Mercado Livre",
-    product_sku: question.product_sku || rawPayload.seller_custom_field || rawPayload.item_id || "",
+    product_sku: productSku,
     product_image_url: question.product_image_url || rawPayload.thumbnail || "",
     product_permalink: question.product_permalink || rawPayload.permalink || "",
     product_status: question.product_status || "",
@@ -177,8 +185,12 @@ function mapMercadoLivreQuestionToUi(question, index) {
     priority: "Media",
     ai_suggestion: question.ai_suggestion || "Sugestão ainda não gerada. Clique em gerar nova sugestão.",
     has_ai_suggestion: question.has_ai_suggestion ?? Boolean(question.ai_suggestion),
-    sku: rawPayload.item_id || "ML",
-    price: "",
+    sku: productSku,
+    price: question.price || question.product_price || "",
+    final_answer: question.final_answer || question.final_response || "",
+    final_response: question.final_response || question.final_answer || "",
+    answered_at: question.answered_at || "",
+    answered_source: question.answered_source || "",
     raw_payload: rawPayload,
     external_id: String(externalId),
     is_real: true,
@@ -783,7 +795,11 @@ function RelatedProducts({ products }) {
 function DetailMetadata({ question }) {
   const productImage = question.product_image_url || question.cached_product?.thumbnail;
   const productTitle = question.product_title || question.product;
-  const productSku = question.product_sku || question.sku || question.cached_product?.seller_custom_field;
+  const productSku =
+    question.product_sku ||
+    question.cached_product?.seller_custom_field ||
+    question.cached_product?.raw_payload?.seller_sku ||
+    question.sku;
   const productPermalink = question.product_permalink || question.cached_product?.permalink;
   const listingStatus = question.product_status || question.cached_product?.status;
   const availableQuantity =
@@ -1102,7 +1118,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <span>{question.marketplace}</span>
           <h2>{question.product}</h2>
           <p>
-            SKU {question.sku} · {question.price}
+            SKU {displayValue(question.product_sku || question.sku)} · {displayValue(question.price)}
           </p>
         </div>
         <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
