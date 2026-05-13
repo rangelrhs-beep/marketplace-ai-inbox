@@ -38,6 +38,7 @@ ML_PRODUCTION_REDIRECT_URI = "https://marketplace-ai-backend-ky72.onrender.com/i
 DATABASE_READY = False
 PROCESSED_ML_NOTIFICATION_IDS: dict[str, float] = {}
 DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS = 15
+ML_ENABLE_ANSWERED_BACKFILL_DEFAULT = "false"
 
 
 def init_database() -> None:
@@ -1291,6 +1292,15 @@ def get_ml_portal_answered_lookback_days() -> int:
         return DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS
 
 
+def is_ml_answered_backfill_enabled() -> bool:
+    return os.getenv("ML_ENABLE_ANSWERED_BACKFILL", ML_ENABLE_ANSWERED_BACKFILL_DEFAULT).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def get_brazil_now() -> datetime:
     return datetime.now(timezone(timedelta(hours=-3)))
 
@@ -1515,23 +1525,6 @@ def fetch_ml_answered_questions_debug_data(
 
 
 def fetch_ml_answered_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
-    try:
-        date_range_debug = fetch_ml_answered_questions_by_date_range_debug_data(seller_id, access_token)
-        if date_range_debug["received_count"] > 0:
-            return {
-                "questions": date_range_debug["filtered_questions"],
-                "paging": {"total": date_range_debug["total"]},
-                "_debug": date_range_debug,
-                "_source": "date_range",
-            }
-        logger.warning("ML answered date range returned no questions; falling back to questions/search")
-    except HTTPException as error:
-        if error.status_code not in {403, 404}:
-            raise
-        logger.warning("ML answered date range unsupported status=%s; falling back to questions/search", error.status_code)
-    except Exception:
-        logger.exception("ML answered date range failed; falling back to questions/search")
-
     debug_data = fetch_ml_answered_questions_debug_data(seller_id, access_token)
     return {
         "questions": debug_data["questions"],
@@ -1965,14 +1958,31 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
 
     status = str(question_detail.get("status") or "").upper()
     has_answer = bool(extract_ml_answer_text(question_detail))
-    logger.info("ML question webhook fetched question_id=%s status=%s has_answer=%s", question_id, status, has_answer)
+    local_app_answer_exists = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+            QuestionRecord.answered_source == "app",
+        )
+        .first()
+        is not None
+    )
+    logger.info(
+        "ML question webhook fetched question_id=%s status=%s has_answer=%s local_app_answer_exists=%s",
+        question_id,
+        status,
+        has_answer,
+        local_app_answer_exists,
+    )
 
     if ml_question_is_answered(question_detail) and has_answer:
         question, action = upsert_portal_answered_ml_question(db, question_detail, access_token)
         source = question.answered_source if question else "portal"
         db.commit()
         logger.info(
-            "ML question webhook answered_source=%s db_action=%s question_id=%s",
+            "ML question webhook saved_as=%s db_action=%s question_id=%s",
             source,
             action,
             question_id,
@@ -1986,7 +1996,7 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
     db.flush()
     ensure_initial_suggestion(db, question)
     db.commit()
-    logger.info("ML question webhook pending DB action=updated question_id=%s", question_id)
+    logger.info("ML question webhook saved_as=pending db_action=updated question_id=%s", question_id)
     return True
 
 
@@ -3314,10 +3324,13 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
     if status and normalize_db_status(status) != "responded":
         return local_questions
 
+    if not is_ml_answered_backfill_enabled():
+        return local_questions
+
     try:
         integration = get_ml_integration(db)
         if not integration.access_token and not integration.refresh_token:
-            logger.info("Skipping live portal answered fetch: Mercado Livre disconnected")
+            logger.info("Skipping answered backfill: Mercado Livre disconnected")
             return local_questions
         live_portal_questions = get_live_portal_answered_questions(db)
     except (OperationalError, SQLAlchemyError):
