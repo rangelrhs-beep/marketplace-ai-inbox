@@ -1237,6 +1237,101 @@ def get_ml_portal_answered_lookback_days() -> int:
         return DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS
 
 
+def get_brazil_now() -> datetime:
+    return datetime.now(timezone(timedelta(hours=-3)))
+
+
+def format_ml_date_range(value: datetime) -> str:
+    return value.isoformat(timespec="milliseconds")
+
+
+def build_ml_answered_date_range_url(
+    seller_id: str,
+    *,
+    date_from: str,
+    date_to: str,
+    limit: int = 50,
+    offset: int = 0,
+    order: str = "desc",
+) -> str:
+    query = urlencode(
+        {
+            "date_from": date_from,
+            "date_to": date_to,
+            "limit": limit,
+            "offset": offset,
+            "order": order,
+        }
+    )
+    return f"{ML_API_BASE_URL}/users/{seller_id}/contacts/questions/search?{query}"
+
+
+def ml_answered_question_matches_portal_filter(payload: dict[str, Any], cutoff: datetime) -> bool:
+    raw_status = str(payload.get("status") or "").upper()
+    if raw_status != "ANSWERED":
+        return False
+    if not extract_ml_answer_text(payload):
+        return False
+    effective_date = extract_ml_answer_created_at(payload)
+    return bool(effective_date and effective_date >= cutoff)
+
+
+def fetch_ml_answered_questions_by_date_range_debug_data(
+    seller_id: str,
+    access_token: str,
+    *,
+    days: int | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    resolved_days = days or get_ml_portal_answered_lookback_days()
+    date_to_dt = get_brazil_now()
+    date_from_dt = date_to_dt - timedelta(days=resolved_days)
+    date_from = format_ml_date_range(date_from_dt)
+    date_to = format_ml_date_range(date_to_dt)
+    request_url = build_ml_answered_date_range_url(
+        seller_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=0,
+        order="desc",
+    )
+    logger.warning("ML answered date range request seller_id=%s url=%s", seller_id, request_url)
+    status_code, response = ml_request_json_with_status(request_url, access_token=access_token)
+    questions = extract_ml_questions(response)
+    paging = response.get("paging") if isinstance(response, dict) else {}
+    total = int((paging or {}).get("total") or len(questions))
+    sample = [summarize_ml_answered_question(question) for question in questions[:3]]
+    cutoff = datetime.utcnow() - timedelta(days=resolved_days)
+    filtered_questions = [
+        question
+        for question in questions
+        if ml_answered_question_matches_portal_filter(question, cutoff)
+    ]
+    logger.warning(
+        "ML answered date range response status_code=%s total=%s received=%s filtered=%s sample=%s",
+        status_code,
+        total,
+        len(questions),
+        len(filtered_questions),
+        sample,
+    )
+    return {
+        "seller_id": str(seller_id),
+        "status_code": status_code,
+        "request_url": request_url,
+        "date_from": date_from,
+        "date_to": date_to,
+        "lookback_days": resolved_days,
+        "total": total,
+        "received_count": len(questions),
+        "after_filter_count": len(filtered_questions),
+        "sample": sample,
+        "questions": questions,
+        "filtered_questions": filtered_questions,
+    }
+
+
 def fetch_ml_answered_questions_debug_data(
     seller_id: str,
     access_token: str,
@@ -1366,11 +1461,29 @@ def fetch_ml_answered_questions_debug_data(
 
 
 def fetch_ml_answered_questions_by_seller(seller_id: str, access_token: str) -> dict[str, Any]:
+    try:
+        date_range_debug = fetch_ml_answered_questions_by_date_range_debug_data(seller_id, access_token)
+        if date_range_debug["received_count"] > 0:
+            return {
+                "questions": date_range_debug["filtered_questions"],
+                "paging": {"total": date_range_debug["total"]},
+                "_debug": date_range_debug,
+                "_source": "date_range",
+            }
+        logger.warning("ML answered date range returned no questions; falling back to questions/search")
+    except HTTPException as error:
+        if error.status_code not in {403, 404}:
+            raise
+        logger.warning("ML answered date range unsupported status=%s; falling back to questions/search", error.status_code)
+    except Exception:
+        logger.exception("ML answered date range failed; falling back to questions/search")
+
     debug_data = fetch_ml_answered_questions_debug_data(seller_id, access_token)
     return {
         "questions": debug_data["questions"],
         "paging": {"total": debug_data["ml_total"]},
         "_debug": debug_data,
+        "_source": "questions_search",
     }
 
 
@@ -2363,6 +2476,34 @@ def debug_mercadolivre_answered_questions(db: Session = Depends(get_db)):
     }
 
 
+@app.get("/debug/ml/questions/answered-date-range")
+def debug_mercadolivre_answered_questions_date_range(db: Session = Depends(get_db)):
+    try:
+        access_token = get_valid_mercadolivre_token(db)
+        integration = get_ml_integration(db)
+        seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+        debug_data = fetch_ml_answered_questions_by_date_range_debug_data(seller_id, access_token)
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
+        access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+        integration = get_ml_integration(db)
+        seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+        debug_data = fetch_ml_answered_questions_by_date_range_debug_data(seller_id, access_token)
+    return {
+        "seller_id": debug_data["seller_id"],
+        "status_code": debug_data["status_code"],
+        "request_url": debug_data["request_url"],
+        "date_from": debug_data["date_from"],
+        "date_to": debug_data["date_to"],
+        "lookback_days": debug_data["lookback_days"],
+        "total": debug_data["total"],
+        "received_count": debug_data["received_count"],
+        "after_filter_count": debug_data["after_filter_count"],
+        "sample": debug_data["sample"],
+    }
+
+
 @app.post("/integrations/mercadolivre/notifications")
 def mercadolivre_notifications(
     background_tasks: BackgroundTasks,
@@ -2520,6 +2661,7 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
         "instruction_used": "",
         "answered_at": answered_at.isoformat() if answered_at else None,
         "answered_source": "portal",
+        "source": "portal",
         "approved_by": "Mercado Livre",
         "approved_at": answered_at.isoformat() if answered_at else None,
         "sku": product_sku or "",
