@@ -131,9 +131,15 @@ function getMarketplaceColor(marketplace, integrations) {
 }
 
 function getAnsweredSourceLabel(source) {
-  if (source === "app") return "Respondida pelo app";
-  if (source === "mercado_livre_portal") return "Respondida no Mercado Livre";
+  const normalizedSource = normalizeAnsweredSource(source);
+  if (normalizedSource === "app") return "Respondida pelo app";
+  if (normalizedSource === "portal") return "Respondida pelo portal";
   return "Ainda não respondida";
+}
+
+function normalizeAnsweredSource(source) {
+  if (source === "mercado_livre_portal") return "portal";
+  return source || "";
 }
 
 function displayValue(value) {
@@ -203,7 +209,7 @@ function mapMercadoLivreQuestionToUi(question, index) {
     final_answer: question.final_answer || question.final_response || "",
     final_response: question.final_response || question.final_answer || "",
     answered_at: question.answered_at || "",
-    answered_source: question.answered_source || "",
+    answered_source: normalizeAnsweredSource(question.answered_source),
     raw_payload: rawPayload,
     external_id: String(externalId),
     is_real: true,
@@ -1414,7 +1420,7 @@ export default function App() {
         active !== "Respondidas" ||
         answeredSourceFilter === "Todas" ||
         (answeredSourceFilter === "unknown" && !question.answered_source) ||
-        question.answered_source === answeredSourceFilter;
+        normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
       return marketplaceMatches && statusMatches && answeredSourceMatches;
     });
   }, [active, visibleQuestions, marketplaceFilter, statusFilter, answeredSourceFilter]);
@@ -1598,7 +1604,7 @@ export default function App() {
                   was_edited: Boolean(updatedQuestion.was_edited ?? approvalData.was_edited),
                   instruction_used: updatedQuestion.instruction_used || approvalData.instruction_used || "",
                   answered_at: updatedQuestion.answered_at || new Date().toISOString(),
-                  answered_source: updatedQuestion.answered_source || (data.already_answered ? "mercado_livre_portal" : "app"),
+                  answered_source: normalizeAnsweredSource(updatedQuestion.answered_source) || (data.already_answered ? "portal" : "app"),
                   approved_by: updatedQuestion.approved_by || currentUser?.name || "Usuário",
                   ml_answer_response: data.raw_response,
                 }
@@ -1942,7 +1948,7 @@ export default function App() {
                 >
                   <option value="Todas">Todas</option>
                   <option value="app">Respondidas pelo app</option>
-                  <option value="mercado_livre_portal">Respondidas no Mercado Livre</option>
+                  <option value="portal">Respondidas pelo portal</option>
                   <option value="unknown">Origem não identificada</option>
                 </select>
               </label>
