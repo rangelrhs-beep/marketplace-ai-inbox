@@ -151,17 +151,30 @@ function normalizeInstruction(instruction) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
+function isDisplayableSku(value, itemId) {
+  if (value === undefined || value === null || value === "") return false;
+  const sku = String(value).trim();
+  if (!sku) return false;
+  return !itemId || sku !== String(itemId);
+}
+
+function firstDisplayableSku(itemId, ...values) {
+  return values.find((value) => isDisplayableSku(value, itemId)) || "";
+}
+
 function mapMercadoLivreQuestionToUi(question, index) {
   const rawPayload = question.raw_payload || {};
   const cachedProduct = question.cached_product || {};
   const externalId = question.external_id || rawPayload.id || index + 1;
-  const productSku =
-    question.product_sku ||
-    cachedProduct.seller_custom_field ||
-    cachedProduct.raw_payload?.seller_sku ||
-    rawPayload.seller_custom_field ||
-    rawPayload.seller_sku ||
-    "";
+  const externalProductId = question.external_product_id || rawPayload.item_id || rawPayload.item?.id || "";
+  const productSku = firstDisplayableSku(
+    externalProductId,
+    question.product_sku,
+    cachedProduct.seller_custom_field,
+    cachedProduct.raw_payload?.seller_sku,
+    rawPayload.seller_custom_field,
+    rawPayload.seller_sku
+  );
 
   return {
     id: question.id || `ml-${externalId}`,
@@ -176,7 +189,7 @@ function mapMercadoLivreQuestionToUi(question, index) {
     product_available_quantity: question.product_available_quantity ?? null,
     product_price: question.product_price || "",
     customer_name: "Cliente Mercado Livre",
-    external_product_id: question.external_product_id || rawPayload.item_id || rawPayload.item?.id || "",
+    external_product_id: externalProductId,
     external_order_id: question.external_order_id || rawPayload.order_id || rawPayload.order?.id || "",
     external_customer_id: question.external_customer_id || rawPayload.buyer_id || rawPayload.from?.id || "",
     question: question.question || question.question_text || rawPayload.text || "",
@@ -795,11 +808,13 @@ function RelatedProducts({ products }) {
 function DetailMetadata({ question }) {
   const productImage = question.product_image_url || question.cached_product?.thumbnail;
   const productTitle = question.product_title || question.product;
-  const productSku =
-    question.product_sku ||
-    question.cached_product?.seller_custom_field ||
-    question.cached_product?.raw_payload?.seller_sku ||
-    question.sku;
+  const productSku = firstDisplayableSku(
+    question.external_product_id,
+    question.product_sku,
+    question.cached_product?.seller_custom_field,
+    question.cached_product?.raw_payload?.seller_sku,
+    question.sku
+  );
   const productPermalink = question.product_permalink || question.cached_product?.permalink;
   const listingStatus = question.product_status || question.cached_product?.status;
   const availableQuantity =
@@ -1118,7 +1133,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
           <span>{question.marketplace}</span>
           <h2>{question.product}</h2>
           <p>
-            SKU {displayValue(question.product_sku || question.sku)} · {displayValue(question.price)}
+            SKU {displayValue(firstDisplayableSku(question.external_product_id, question.product_sku, question.sku))} · {displayValue(question.price)}
           </p>
         </div>
         <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
