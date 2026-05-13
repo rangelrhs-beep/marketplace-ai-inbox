@@ -298,12 +298,42 @@ button:disabled {
   margin: 22px 0;
 }
 
-.metrics article {
+.metrics article,
+.metric-card {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(126, 139, 168, 0.16);
   border-radius: 18px;
   padding: 16px;
   box-shadow: 0 14px 34px rgba(32, 43, 69, 0.07);
+}
+
+.metric-card {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(75, 105, 255, 0.32);
+  box-shadow: 0 18px 42px rgba(32, 43, 69, 0.11);
+}
+
+.metric-card:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, 0.24);
+  outline-offset: 3px;
+}
+
+.metric-card.active {
+  background: linear-gradient(180deg, #ffffff 0%, #f3f6ff 100%);
+  border-color: rgba(79, 70, 229, 0.42);
+  box-shadow: 0 18px 42px rgba(79, 70, 229, 0.14);
 }
 
 .metrics strong {

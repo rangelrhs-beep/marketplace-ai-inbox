@@ -1256,6 +1256,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [statusFilter, setStatusFilter] = useState("Todos");
+  const [priorityFilter, setPriorityFilter] = useState("Todos");
   const [answeredSourceFilter, setAnsweredSourceFilter] = useState("Todas");
   const [showConversation, setShowConversation] = useState(false);
 
@@ -1416,14 +1417,16 @@ export default function App() {
       const statusMatches = forcedStatus
         ? question.status === forcedStatus
         : statusFilter === "Todos" || question.status === statusFilter;
+      const priorityMatches =
+        priorityFilter === "Todos" || question.priority === priorityFilter;
       const answeredSourceMatches =
         active !== "Respondidas" ||
         answeredSourceFilter === "Todas" ||
         (answeredSourceFilter === "unknown" && !question.answered_source) ||
         normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
-      return marketplaceMatches && statusMatches && answeredSourceMatches;
+      return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
     });
-  }, [active, visibleQuestions, marketplaceFilter, statusFilter, answeredSourceFilter]);
+  }, [active, visibleQuestions, marketplaceFilter, statusFilter, priorityFilter, answeredSourceFilter]);
 
   const metrics = {
     pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
@@ -1441,6 +1444,31 @@ export default function App() {
     : answerNotice.includes("outro usuário")
       ? "info"
       : "success";
+
+  function applyMetricFilter(type) {
+    setMarketplaceFilter("Todos");
+    setStatusFilter("Todos");
+    setAnsweredSourceFilter("Todas");
+    setShowConversation(false);
+
+    if (type === "pending") {
+      setActive("Pendentes");
+      setPriorityFilter("Todos");
+      setSelectedId(visibleQuestions.find((question) => question.status === "Pendente")?.id || null);
+      return;
+    }
+
+    if (type === "answered") {
+      setActive("Respondidas");
+      setPriorityFilter("Todos");
+      setSelectedId(visibleQuestions.find((question) => question.status === "Respondida")?.id || null);
+      return;
+    }
+
+    setActive("Inbox");
+    setPriorityFilter("Alta");
+    setSelectedId(visibleQuestions.find((question) => question.priority === "Alta")?.id || null);
+  }
 
   useEffect(() => {
     if (selectedId && !visibleQuestions.some((question) => question.id === selectedId)) {
@@ -1480,6 +1508,7 @@ export default function App() {
 
   function changeSection(section) {
     setActive(section);
+    setPriorityFilter("Todos");
     setShowConversation(false);
   }
 
@@ -1891,18 +1920,30 @@ export default function App() {
           </header>
 
           <div className="metrics">
-            <article>
+            <button
+              type="button"
+              className={`metric-card ${active === "Pendentes" ? "active" : ""}`}
+              onClick={() => applyMetricFilter("pending")}
+            >
               <span>Pendentes</span>
               <strong>{metrics.pending}</strong>
-            </article>
-            <article>
+            </button>
+            <button
+              type="button"
+              className={`metric-card ${active === "Respondidas" ? "active" : ""}`}
+              onClick={() => applyMetricFilter("answered")}
+            >
               <span>Respondidas</span>
               <strong>{metrics.answered}</strong>
-            </article>
-            <article>
+            </button>
+            <button
+              type="button"
+              className={`metric-card ${priorityFilter === "Alta" ? "active" : ""}`}
+              onClick={() => applyMetricFilter("high")}
+            >
               <span>Prioridade alta</span>
               <strong>{metrics.high}</strong>
-            </article>
+            </button>
           </div>
 
           <div className="tenant-strip">
