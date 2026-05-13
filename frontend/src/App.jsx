@@ -780,33 +780,35 @@ function ProductThumb({ question }) {
 function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor }) {
   return (
     <button className={`question-row ${selected ? "selected" : ""}`} onClick={onSelect}>
-      <ProductThumb question={question} />
-      <div className="card-content">
-        <div className="row-top">
-          <div className="source-line">
+      <div className="card-header">
+        <ProductThumb question={question} />
+        <div className="header-lines">
+          <div className="header-line">
             <span className="marketplace">{question.marketplace}</span>
             <span className="source-tag" style={{ "--source-color": sourceColor }}>
               {sourceLabel}
             </span>
+          </div>
+          <div className="header-line buyer-line">
             <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
             {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
           </div>
-          <span className="time">
-            <Clock3 size={14} />
-            {formatDate(question.created_at)}
-          </span>
         </div>
-        <div className="row-title">{question.product}</div>
-        <p>{question.question}</p>
-        <div className="row-meta">
-          <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
-          {question.status === "Respondida" && question.answered_source ? (
-            <span className="pill answer-source">{getAnsweredSourceLabel(question.answered_source)}</span>
-          ) : null}
-          <span className={`pill priority ${priorityClass[question.priority]}`}>
-            {question.priority}
-          </span>
-        </div>
+        <span className="time">
+          <Clock3 size={14} />
+          {formatDate(question.created_at)}
+        </span>
+      </div>
+      <div className="row-title">{question.product}</div>
+      <p>{question.question}</p>
+      <div className="row-meta">
+        <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
+        {question.status === "Respondida" && question.answered_source ? (
+          <span className="pill answer-source">{getAnsweredSourceLabel(question.answered_source)}</span>
+        ) : null}
+        <span className={`pill priority ${priorityClass[question.priority]}`}>
+          {question.priority}
+        </span>
       </div>
     </button>
   );
@@ -818,26 +820,28 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
 
   return (
     <article className="pending-card">
-      <ProductThumb question={question} />
-      <div className="card-content">
-        <div className="row-top">
-          <div className="source-line">
+      <div className="card-header">
+        <ProductThumb question={question} />
+        <div className="header-lines">
+          <div className="header-line">
             <span className="marketplace">{question.marketplace}</span>
             <span className="source-tag" style={{ "--source-color": sourceColor }}>
               {sourceLabel}
             </span>
+          </div>
+          <div className="header-line buyer-line">
             <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
             {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
           </div>
-          <span className="time">
-            <Clock3 size={14} />
-            {formatDate(question.created_at)}
-          </span>
         </div>
-
-        <h3>{question.product}</h3>
-        <p className="pending-question">{question.question}</p>
+        <span className="time">
+          <Clock3 size={14} />
+          {formatDate(question.created_at)}
+        </span>
       </div>
+
+      <h3>{question.product}</h3>
+      <p className="pending-question">{question.question}</p>
 
       <div className="suggestion-preview">
         <span>Sugestão da IA</span>
