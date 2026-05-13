@@ -339,6 +339,31 @@ def get_cached_product_for_question(db: Session | None, raw_payload: dict[str, A
         return None
 
 
+def get_cached_product_sku(product: ProductCache | None) -> str | None:
+    if not product:
+        return None
+    direct_sku = first_present(
+        product.seller_custom_field,
+        (product.raw_payload or {}).get("seller_sku"),
+        (product.raw_payload or {}).get("seller_custom_field"),
+    )
+    if direct_sku:
+        return str(direct_sku)
+    variations = product.variations_json or []
+    if isinstance(variations, list):
+        for variation in variations:
+            if not isinstance(variation, dict):
+                continue
+            variation_sku = first_present(
+                variation.get("seller_custom_field"),
+                variation.get("seller_sku"),
+                variation.get("sku"),
+            )
+            if variation_sku:
+                return str(variation_sku)
+    return None
+
+
 def parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
@@ -416,10 +441,9 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         raw_payload.get("external_order_id"),
     )
     product_sku = first_present(
-        cached_product.seller_custom_field if cached_product else None,
+        get_cached_product_sku(cached_product),
         raw_payload.get("seller_custom_field"),
         raw_payload.get("seller_sku"),
-        external_product_id,
     )
     product_title = first_present(cached_product.title if cached_product else None, question.product_title)
     product_image_url = first_present(cached_product.thumbnail if cached_product else None, raw_payload.get("thumbnail"))
@@ -470,7 +494,7 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         "answered_source": question.answered_source,
         "approved_by": suggestion.approved_by if suggestion else None,
         "approved_at": suggestion.approved_at.isoformat() if suggestion and suggestion.approved_at else None,
-        "sku": product_sku or "ML",
+        "sku": product_sku or "",
         "price": product_price or "",
         "raw_payload": raw_payload,
         "related_products": related_products,
@@ -2138,21 +2162,63 @@ def extract_ml_answer_created_at(question_payload: dict[str, Any] | None) -> dat
     return parse_datetime(question_payload.get("date_created") or question_payload.get("created_at"))
 
 
-def ml_portal_question_to_api(payload: dict[str, Any], access_token: str) -> dict[str, Any]:
-    normalized = normalize_ml_question(payload, access_token)
+def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Session | None = None) -> dict[str, Any]:
+    external_id = str(payload.get("id") or payload.get("question_id") or "")
+    question_text = payload.get("text") or payload.get("question") or payload.get("body") or ""
     answered_at = extract_ml_answer_created_at(payload)
+    cached_product = get_cached_product_for_question(db, payload)
+    cached_product_api = product_to_api(cached_product) if cached_product else None
+    external_product_id = extract_question_item_id(payload)
+    product_sku = first_present(
+        get_cached_product_sku(cached_product),
+        payload.get("seller_custom_field"),
+        payload.get("seller_sku"),
+    )
+    payload_item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+    payload_product_title = first_present(
+        payload.get("product_title"),
+        payload.get("item_title"),
+        payload_item.get("title"),
+    )
+    product_title = first_present(cached_product.title if cached_product else None, payload_product_title)
+    product_image_url = first_present(cached_product.thumbnail if cached_product else None, payload.get("thumbnail"))
+    product_permalink = first_present(cached_product.permalink if cached_product else None, payload.get("permalink"))
+    product_status = first_present(cached_product.status if cached_product else None, payload.get("status_item"))
+    product_available_quantity = first_present(
+        cached_product.available_quantity if cached_product else None,
+        payload.get("available_quantity"),
+    )
+    product_price = first_present(cached_product.price if cached_product else None, payload.get("price"))
+    product_title = first_present(product_title, external_product_id, "Produto Mercado Livre")
+    external_order_id = first_present(
+        payload.get("order_id"),
+        payload.get("order", {}).get("id") if isinstance(payload.get("order"), dict) else None,
+        payload.get("external_order_id"),
+    )
+    external_customer_id = extract_question_customer_id(payload)
+    customer_name = extract_question_customer_name(payload)
     return {
-        "id": f"ml-live-{normalized['external_id']}",
+        "id": f"ml-live-{external_id}",
         "company_id": DEFAULT_COMPANY_ID,
         "marketplace": "Mercado Livre",
         "provider": DEFAULT_PROVIDER,
-        "external_id": normalized["external_id"],
-        "product": normalized["product_title"],
-        "product_title": normalized["product_title"],
-        "customer_name": "Cliente Mercado Livre",
-        "question": normalized["question_text"],
-        "question_text": normalized["question_text"],
-        "created_at": payload.get("date_created") or payload.get("created_at") or normalized["created_at"],
+        "external_id": external_id,
+        "product": product_title,
+        "product_title": product_title,
+        "customer_name": customer_name or "Cliente Mercado Livre",
+        "external_product_id": external_product_id,
+        "external_order_id": str(external_order_id) if external_order_id else None,
+        "external_customer_id": external_customer_id,
+        "product_sku": product_sku,
+        "product_image_url": product_image_url,
+        "product_permalink": product_permalink,
+        "product_status": product_status,
+        "product_available_quantity": product_available_quantity,
+        "product_price": product_price,
+        "cached_product": cached_product_api,
+        "question": question_text,
+        "question_text": question_text,
+        "created_at": payload.get("date_created") or payload.get("created_at") or datetime.utcnow().isoformat(),
         "status": "Respondida",
         "db_status": "responded",
         "priority": "Media",
@@ -2168,8 +2234,8 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str) -> dic
         "answered_source": "mercado_livre_portal",
         "approved_by": "Mercado Livre",
         "approved_at": answered_at.isoformat() if answered_at else None,
-        "sku": (payload or {}).get("item_id") or "ML",
-        "price": "",
+        "sku": product_sku or "",
+        "price": product_price or "",
         "raw_payload": payload,
         "related_products": [],
         "is_real": True,
@@ -2235,7 +2301,7 @@ def get_live_portal_answered_questions(db: Session, *, days: int = 15) -> list[d
             logger.info("Deleting local pending question answered in ML portal external_id=%s", external_id)
             delete_local_question(db, local_question)
             db.commit()
-        live_questions.append(ml_portal_question_to_api(payload, access_token))
+        live_questions.append(ml_portal_question_to_api(payload, access_token, db=db))
     return live_questions
 
 
@@ -2338,7 +2404,7 @@ def handle_portal_answered_question(
         delete_local_question(db, question)
         db.commit()
     if question_detail:
-        return ml_portal_question_to_api(question_detail, access_token)
+        return ml_portal_question_to_api(question_detail, access_token, db=db)
     return None
 
 
