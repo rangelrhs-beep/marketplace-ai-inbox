@@ -344,10 +344,14 @@ def build_buyer_info(
     last_name: str | None = None,
 ) -> dict[str, Any]:
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
-    if full_name and nickname:
+    if first_name and nickname:
+        display_name = f"{first_name} ({nickname})"
+    elif first_name:
+        display_name = first_name
+    elif full_name and nickname:
         display_name = f"{full_name} ({nickname})"
     else:
-        display_name = nickname or full_name or "Cliente ML"
+        display_name = nickname or "Cliente ML"
     return {
         "id": str(buyer_id) if buyer_id else None,
         "nickname": nickname or None,
@@ -355,6 +359,8 @@ def build_buyer_info(
         "last_name": last_name or None,
         "full_name": full_name or None,
         "display_name": display_name,
+        "compact_display_name": display_name,
+        "detail_display_name": f"{full_name} ({nickname})" if full_name and nickname else display_name,
     }
 
 
@@ -372,6 +378,8 @@ def extract_buyer_info_from_payload(raw_payload: dict[str, Any]) -> dict[str, An
 
 
 def buyer_info_from_ml_user(user_payload: dict[str, Any], buyer_id: str) -> dict[str, Any]:
+    if user_payload.get("nickname") and not user_payload.get("first_name"):
+        logger.info("buyer enrichment missing first_name for buyer_id=%s", buyer_id)
     return build_buyer_info(
         buyer_id,
         nickname=user_payload.get("nickname"),
