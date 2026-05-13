@@ -783,10 +783,16 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
       <div className="card-header">
         <ProductThumb question={question} />
         <div className="header-lines">
-          <div className="header-line">
-            <span className="marketplace">{question.marketplace}</span>
-            <span className="source-tag" style={{ "--source-color": sourceColor }}>
-              {sourceLabel}
+          <div className="header-line header-primary">
+            <div className="source-pair">
+              <span className="marketplace">{question.marketplace}</span>
+              <span className="source-tag" style={{ "--source-color": sourceColor }}>
+                {sourceLabel}
+              </span>
+            </div>
+            <span className="time">
+              <Clock3 size={14} />
+              {formatDate(question.created_at)}
             </span>
           </div>
           <div className="header-line buyer-line">
@@ -794,10 +800,6 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
             {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
           </div>
         </div>
-        <span className="time">
-          <Clock3 size={14} />
-          {formatDate(question.created_at)}
-        </span>
       </div>
       <div className="row-title">{question.product}</div>
       <p>{question.question}</p>
@@ -823,10 +825,16 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
       <div className="card-header">
         <ProductThumb question={question} />
         <div className="header-lines">
-          <div className="header-line">
-            <span className="marketplace">{question.marketplace}</span>
-            <span className="source-tag" style={{ "--source-color": sourceColor }}>
-              {sourceLabel}
+          <div className="header-line header-primary">
+            <div className="source-pair">
+              <span className="marketplace">{question.marketplace}</span>
+              <span className="source-tag" style={{ "--source-color": sourceColor }}>
+                {sourceLabel}
+              </span>
+            </div>
+            <span className="time">
+              <Clock3 size={14} />
+              {formatDate(question.created_at)}
             </span>
           </div>
           <div className="header-line buyer-line">
@@ -834,10 +842,6 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
             {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
           </div>
         </div>
-        <span className="time">
-          <Clock3 size={14} />
-          {formatDate(question.created_at)}
-        </span>
       </div>
 
       <h3>{question.product}</h3>
