@@ -300,6 +300,17 @@ def extract_question_item_id(raw_payload: dict[str, Any]) -> str | None:
     ) or "") or None
 
 
+def extract_question_variation_id(raw_payload: dict[str, Any]) -> str | None:
+    item = raw_payload.get("item") if isinstance(raw_payload.get("item"), dict) else {}
+    variation = raw_payload.get("variation") if isinstance(raw_payload.get("variation"), dict) else {}
+    return str(first_present(
+        raw_payload.get("variation_id"),
+        raw_payload.get("external_variation_id"),
+        item.get("variation_id"),
+        variation.get("id"),
+    ) or "") or None
+
+
 def extract_question_customer_id(raw_payload: dict[str, Any]) -> str | None:
     buyer = raw_payload.get("buyer") or raw_payload.get("from") or raw_payload.get("user") or {}
     return str(first_present(
@@ -339,29 +350,86 @@ def get_cached_product_for_question(db: Session | None, raw_payload: dict[str, A
         return None
 
 
-def get_cached_product_sku(product: ProductCache | None) -> str | None:
+def is_valid_ml_sku(value: Any, item_id: str | None = None) -> bool:
+    if value in (None, ""):
+        return False
+    sku = str(value).strip()
+    if not sku:
+        return False
+    return not item_id or sku != str(item_id)
+
+
+def get_ml_attribute_value(attributes: Any, attribute_id: str) -> str | None:
+    if not isinstance(attributes, list):
+        return None
+    for attribute in attributes:
+        if not isinstance(attribute, dict):
+            continue
+        if str(attribute.get("id") or "").upper() != attribute_id.upper():
+            continue
+        value = first_present(attribute.get("value_name"), attribute.get("value_id"), attribute.get("value"))
+        if value:
+            return str(value)
+    return None
+
+
+def get_ml_variation_sku(variation: dict[str, Any], item_id: str | None = None) -> str | None:
+    seller_sku = first_present(
+        get_ml_attribute_value(variation.get("attributes"), "SELLER_SKU"),
+        get_ml_attribute_value(variation.get("attribute_combinations"), "SELLER_SKU"),
+    )
+    if is_valid_ml_sku(seller_sku, item_id):
+        return str(seller_sku).strip()
+    seller_custom_field = variation.get("seller_custom_field")
+    if is_valid_ml_sku(seller_custom_field, item_id):
+        return str(seller_custom_field).strip()
+    return None
+
+
+def extract_sku_from_ml_item_payload(item_payload: dict[str, Any] | None, variation_id: str | None = None) -> str | None:
+    if not isinstance(item_payload, dict):
+        return None
+    item_id = str(item_payload.get("id") or "") or None
+    variations = item_payload.get("variations") or []
+    if isinstance(variations, list):
+        if variation_id:
+            for variation in variations:
+                if not isinstance(variation, dict):
+                    continue
+                if str(variation.get("id") or "") != str(variation_id):
+                    continue
+                variation_sku = get_ml_variation_sku(variation, item_id)
+                if variation_sku:
+                    return variation_sku
+        for variation in variations:
+            if isinstance(variation, dict):
+                variation_sku = get_ml_variation_sku(variation, item_id)
+                if variation_sku:
+                    return variation_sku
+    item_seller_sku = get_ml_attribute_value(item_payload.get("attributes"), "SELLER_SKU")
+    if is_valid_ml_sku(item_seller_sku, item_id):
+        return str(item_seller_sku).strip()
+    item_seller_custom_field = item_payload.get("seller_custom_field")
+    if is_valid_ml_sku(item_seller_custom_field, item_id):
+        return str(item_seller_custom_field).strip()
+    return None
+
+
+def get_cached_product_sku(product: ProductCache | None, raw_payload: dict[str, Any] | None = None) -> str | None:
     if not product:
         return None
-    direct_sku = first_present(
-        product.seller_custom_field,
-        (product.raw_payload or {}).get("seller_sku"),
-        (product.raw_payload or {}).get("seller_custom_field"),
-    )
-    if direct_sku:
-        return str(direct_sku)
-    variations = product.variations_json or []
-    if isinstance(variations, list):
-        for variation in variations:
-            if not isinstance(variation, dict):
-                continue
-            variation_sku = first_present(
-                variation.get("seller_custom_field"),
-                variation.get("seller_sku"),
-                variation.get("sku"),
-            )
-            if variation_sku:
-                return str(variation_sku)
-    return None
+    variation_id = extract_question_variation_id(raw_payload or {})
+    item_payload = product.raw_payload or {}
+    product_sku = extract_sku_from_ml_item_payload(item_payload, variation_id)
+    if product_sku:
+        return product_sku
+    fallback_payload = {
+        "id": product.external_id,
+        "seller_custom_field": product.seller_custom_field,
+        "attributes": product.attributes_json or [],
+        "variations": product.variations_json or [],
+    }
+    return extract_sku_from_ml_item_payload(fallback_payload, variation_id)
 
 
 def parse_datetime(value: Any) -> datetime | None:
@@ -441,9 +509,8 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         raw_payload.get("external_order_id"),
     )
     product_sku = first_present(
-        get_cached_product_sku(cached_product),
-        raw_payload.get("seller_custom_field"),
-        raw_payload.get("seller_sku"),
+        get_cached_product_sku(cached_product, raw_payload),
+        extract_sku_from_ml_item_payload(raw_payload, extract_question_variation_id(raw_payload)),
     )
     product_title = first_present(cached_product.title if cached_product else None, question.product_title)
     product_image_url = first_present(cached_product.thumbnail if cached_product else None, raw_payload.get("thumbnail"))
@@ -947,28 +1014,47 @@ def normalize_ml_question_status(raw_status: str | None) -> str:
     return "Pendente"
 
 
-def get_ml_product_title(item_id: str | None, access_token: str) -> str:
+def fetch_ml_item_detail(item_id: str, access_token: str) -> dict[str, Any]:
+    encoded_item_id = quote(str(item_id), safe="")
+    return ml_request_json(
+        f"{ML_API_BASE_URL}/items/{encoded_item_id}?include_attributes=all",
+        access_token=access_token,
+    )
+
+
+def get_ml_product_payload(item_id: str | None, access_token: str) -> dict[str, Any] | None:
+    if not item_id:
+        return None
+    try:
+        return fetch_ml_item_detail(item_id, access_token)
+    except HTTPException as error:
+        logger.warning("Could not fetch Mercado Livre item detail item_id=%s detail=%s", item_id, error.detail)
+        return None
+
+
+def get_ml_product_title(item_id: str | None, access_token: str, item_payload: dict[str, Any] | None = None) -> str:
     if not item_id:
         return "Produto Mercado Livre"
-    try:
-        item = ml_request_json(f"{ML_API_BASE_URL}/items/{item_id}", access_token=access_token)
+    item = item_payload or get_ml_product_payload(item_id, access_token)
+    if item:
         return item.get("title") or item_id
-    except HTTPException:
-        return item_id
+    return item_id
 
 
 def normalize_ml_question(payload: dict[str, Any], access_token: str) -> dict[str, Any]:
     item_id = payload.get("item_id") or payload.get("item", {}).get("id")
+    item_payload = get_ml_product_payload(item_id, access_token)
     text = payload.get("text") or payload.get("question") or payload.get("body") or ""
     created_at = payload.get("date_created") or payload.get("created_at") or datetime.utcnow().isoformat()
     return {
         "channel": "mercado_livre",
         "external_id": str(payload.get("id") or payload.get("question_id") or ""),
-        "product_title": get_ml_product_title(item_id, access_token),
+        "product_title": get_ml_product_title(item_id, access_token, item_payload),
         "question_text": text,
         "status": normalize_ml_question_status(payload.get("status")),
         "created_at": created_at,
         "raw_payload": payload,
+        "item_payload": item_payload,
     }
 
 
@@ -1349,12 +1435,12 @@ def sync_mercadolivre_products(db: Session) -> dict[str, Any]:
     for item_id in item_ids:
         try:
             try:
-                item_payload = ml_request_json(f"{ML_API_BASE_URL}/items/{quote(str(item_id), safe='')}", access_token=access_token)
+                item_payload = fetch_ml_item_detail(str(item_id), access_token)
             except HTTPException as error:
                 if error.status_code != 401:
                     raise
                 access_token = get_valid_mercadolivre_token(db, force_refresh=True)
-                item_payload = ml_request_json(f"{ML_API_BASE_URL}/items/{quote(str(item_id), safe='')}", access_token=access_token)
+                item_payload = fetch_ml_item_detail(str(item_id), access_token)
             product, created = upsert_ml_product(db, item_payload)
             stats["created" if created else "updated"] += 1
             if product.status == "active":
@@ -1408,6 +1494,8 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
 
         for question_payload in questions_payload:
             normalized = normalize_ml_question(question_payload, tokens["access_token"])
+            if isinstance(normalized.get("item_payload"), dict):
+                upsert_ml_product(db, normalized["item_payload"])
             external_id = str(normalized.get("external_id") or "")
             if not external_id:
                 logger.warning("Mercado Livre sync ignored question without external_id source=%s", source)
@@ -2170,9 +2258,8 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
     cached_product_api = product_to_api(cached_product) if cached_product else None
     external_product_id = extract_question_item_id(payload)
     product_sku = first_present(
-        get_cached_product_sku(cached_product),
-        payload.get("seller_custom_field"),
-        payload.get("seller_sku"),
+        get_cached_product_sku(cached_product, payload),
+        extract_sku_from_ml_item_payload(payload, extract_question_variation_id(payload)),
     )
     payload_item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
     payload_product_title = first_present(
