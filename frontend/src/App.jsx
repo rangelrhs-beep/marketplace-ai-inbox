@@ -171,10 +171,10 @@ function firstDisplayableSku(itemId, ...values) {
 function getBuyerDisplayName(buyer, fallback = "Cliente ML", { detail = false } = {}) {
   if (!buyer) return fallback || "Cliente ML";
   if (detail && buyer.detail_display_name) return buyer.detail_display_name;
-  if (buyer.compact_display_name) return buyer.compact_display_name;
   if (buyer.first_name && buyer.nickname) return `${buyer.first_name} (${buyer.nickname})`;
+  if (buyer.nickname) return buyer.nickname;
   if (buyer.first_name) return buyer.first_name;
-  return buyer.nickname || buyer.display_name || fallback || "Cliente ML";
+  return buyer.display_name || fallback || "Cliente ML";
 }
 
 function getQuestionTimestamp(question) {
