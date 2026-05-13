@@ -411,8 +411,12 @@ def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dic
             ids_param = ",".join(quote(str(buyer_id), safe="") for buyer_id in missing_ids)
             multiget_url = f"{ML_API_BASE_URL}/users?ids={ids_param}"
             logger.info("buyer enrichment multiget called=true ids_count=%s", len(missing_ids))
+            print(f"BUYER_ENRICHMENT multiget_url=/users?ids={','.join(missing_ids[:20])}", flush=True)
             status_code, response = ml_request_json_get_with_status(multiget_url, access_token=access_token)
             logger.info("buyer enrichment multiget status_code=%s", status_code)
+            safe_sample = response[:3] if isinstance(response, list) else response
+            print(f"BUYER_ENRICHMENT multiget_status={status_code}", flush=True)
+            print(f"BUYER_ENRICHMENT raw_sample={safe_sample}", flush=True)
             if not isinstance(response, list):
                 raise ValueError("Unexpected Mercado Livre users multiget response")
             for entry in response:
@@ -433,6 +437,7 @@ def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dic
                 logger.info("buyer enrichment fallback called=true buyer_id=%s", buyer_id)
                 status_code, body = ml_request_json_get_with_status(fallback_url, access_token=access_token)
                 logger.info("buyer enrichment fallback status_code=%s buyer_id=%s", status_code, buyer_id)
+                print(f"BUYER_ENRICHMENT fallback_user_id={buyer_id} status={status_code}", flush=True)
                 ML_BUYER_CACHE[buyer_id] = buyer_info_from_ml_user(body, buyer_id) if isinstance(body, dict) else build_buyer_info(buyer_id)
                 buyer_sources[buyer_id] = "fallback"
             except Exception:
@@ -444,6 +449,12 @@ def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dic
         if not buyer_id:
             continue
         buyer = ML_BUYER_CACHE.get(buyer_id, build_buyer_info(buyer_id))
+        print(
+            "BUYER_ENRICHMENT_RESULT "
+            f"id={buyer_id} nickname={buyer.get('nickname')} first_name={buyer.get('first_name')} "
+            f"last_name={buyer.get('last_name')} display_name={buyer.get('display_name')}",
+            flush=True,
+        )
         result[buyer_id] = {**buyer, "source": buyer_sources.get(buyer_id, "cache")}
     return result
 
@@ -457,7 +468,11 @@ def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -
         len(unique_buyer_ids),
         unique_buyer_ids[:10],
     )
+    print("BUYER_ENRICHMENT_START", flush=True)
+    print(f"BUYER_ENRICHMENT questions_count={len(questions)}", flush=True)
+    print(f"BUYER_ENRICHMENT unique_buyer_ids={unique_buyer_ids[:10]} total={len(unique_buyer_ids)}", flush=True)
     if not buyer_ids:
+        print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
         return questions
     try:
         access_token = get_valid_mercadolivre_token(db)
@@ -3481,6 +3496,7 @@ def list_integration_questions(integration_id: str):
 @app.get("/questions")
 def list_questions(status: str | None = None, db: Session = Depends(get_db)):
     try:
+        print("BUYER_ENRICHMENT_START", flush=True)
         query = (
             db.query(QuestionRecord)
             .filter(
@@ -3495,10 +3511,17 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         )
         if status:
             query = query.filter(QuestionRecord.status == normalize_db_status(status))
-        local_questions = enrich_questions_with_buyers(
-            [question_to_api(question, db=db) for question in query.all()],
-            db,
-        )
+        question_payloads = [question_to_api(question, db=db) for question in query.all()]
+        buyer_ids = list(dict.fromkeys(
+            str(question.get("external_customer_id") or "")
+            for question in question_payloads
+            if question.get("external_customer_id")
+        ))
+        print(f"BUYER_ENRICHMENT questions_count={len(question_payloads)}", flush=True)
+        print(f"BUYER_ENRICHMENT unique_buyer_ids={buyer_ids[:10]} total={len(buyer_ids)}", flush=True)
+        if not buyer_ids:
+            print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
+        local_questions = enrich_questions_with_buyers(question_payloads, db)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
         return []
@@ -3526,6 +3549,7 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
 
 @app.get("/debug/ml/buyers")
 def debug_ml_buyers(db: Session = Depends(get_db)):
+    print("BUYER_ENRICHMENT_START", flush=True)
     questions = (
         db.query(QuestionRecord)
         .filter(
@@ -3542,6 +3566,10 @@ def debug_ml_buyers(db: Session = Depends(get_db)):
         for question in question_payloads
         if question.get("external_customer_id")
     ))
+    print(f"BUYER_ENRICHMENT questions_count={len(question_payloads)}", flush=True)
+    print(f"BUYER_ENRICHMENT unique_buyer_ids={buyer_ids[:10]} total={len(buyer_ids)}", flush=True)
+    if not buyer_ids:
+        print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
     buyers: dict[str, dict[str, Any]] = {}
     if buyer_ids:
         try:
