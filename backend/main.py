@@ -11,7 +11,7 @@ import time
 from typing import Any, List
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
@@ -25,7 +25,7 @@ from integrations.models import ConnectionTestResult, IntegrationHealth, Normali
 from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, Company, CompanySettings, Integration, ProductCache, QuestionRecord
-from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
+from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, MOCK_COMPANIES, seed_defaults
 from sqlalchemy import Text, cast, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -50,11 +50,6 @@ PRODUCT_SYNC_SCHEDULE_LOCK = threading.Lock()
 # TODO auth: replace mocked tenant context with real session
 # TODO admin: allow platform admin company selector
 # TODO OAuth: include company_id in Mercado Livre state
-# TODO webhook: route by seller_id to integration/company
-def get_current_company_id(request: Request | None = None) -> str:
-    return DEFAULT_COMPANY_ID
-
-
 def get_current_user_id(request: Request | None = None) -> str | None:
     return "admin"
 
@@ -63,15 +58,95 @@ def get_current_user_role(request: Request | None = None) -> str:
     return "platform_admin"
 
 
+def company_exists(company_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        return db.get(Company, company_id) is not None
+    except SQLAlchemyError:
+        logger.exception("Tenant company validation failed company_id=%s", company_id)
+        return False
+    finally:
+        db.close()
+
+
+def get_current_company_id(request: Request | None = None) -> str:
+    role = get_current_user_role(request)
+    header_company_id = request.headers.get("X-Company-ID") if request is not None else None
+    if role == "platform_admin" and header_company_id:
+        requested_company_id = header_company_id.strip()
+        if company_exists(requested_company_id):
+            if request is not None:
+                request.state.tenant_company_source = "header"
+            return requested_company_id
+        logger.warning("Tenant company override ignored; company not found company_id=%s", requested_company_id)
+    if request is not None:
+        request.state.tenant_company_source = "default"
+    return DEFAULT_COMPANY_ID
+
+
 def log_tenant_context(request: Request | None = None) -> tuple[str, str | None, str]:
     company_id = get_current_company_id(request)
     user_id = get_current_user_id(request)
     role = get_current_user_role(request)
+    source = getattr(request.state, "tenant_company_source", "default") if request is not None else "default"
     if request is None or not getattr(request.state, "tenant_context_logged", False):
-        logger.info("TENANT_CONTEXT company_id=%s user_id=%s role=%s", company_id, user_id, role)
+        logger.info("TENANT_CONTEXT company_id=%s user_id=%s role=%s source=%s", company_id, user_id, role, source)
         if request is not None:
             request.state.tenant_context_logged = True
     return company_id, user_id, role
+
+
+def ensure_mock_multitenant_companies(db: Session) -> None:
+    logger.info("MULTITENANT_BACKFILL_START")
+    for company_id, company_name in MOCK_COMPANIES:
+        company = db.get(Company, company_id)
+        if company:
+            logger.info("MULTITENANT_COMPANY_EXISTS id=%s", company_id)
+        else:
+            db.add(Company(id=company_id, name=company_name))
+            db.flush()
+            logger.info("MULTITENANT_COMPANY_CREATED id=%s", company_id)
+
+        settings = (
+            db.query(CompanySettings)
+            .filter(CompanySettings.company_id == company_id)
+            .first()
+        )
+        if not settings:
+            db.add(
+                CompanySettings(
+                    company_id=company_id,
+                    greeting="",
+                    closing="",
+                    tone="",
+                    custom_prompt="",
+                    ai_general_rules="",
+                    ai_product_knowledge="",
+                    ai_allow_web_search=False,
+                    ai_absolute_restrictions="",
+                )
+            )
+            logger.info("MULTITENANT_SETTINGS_CREATED id=%s", company_id)
+
+        integration = (
+            db.query(Integration)
+            .filter(
+                Integration.company_id == company_id,
+                Integration.provider == DEFAULT_PROVIDER,
+            )
+            .first()
+        )
+        if not integration:
+            db.add(
+                Integration(
+                    company_id=company_id,
+                    provider=DEFAULT_PROVIDER,
+                    token_status="missing",
+                )
+            )
+            logger.info("MULTITENANT_INTEGRATION_CREATED id=%s", company_id)
+    db.commit()
+    logger.info("MULTITENANT_BACKFILL_END")
 
 
 def init_database() -> None:
@@ -84,6 +159,7 @@ def init_database() -> None:
         db = SessionLocal()
         try:
             seed_defaults(db)
+            ensure_mock_multitenant_companies(db)
             backfill_answered_source_rules(db)
             integration = get_ml_integration(db)
             if not integration.access_token and ML_TOKEN_PATH.exists():
@@ -687,6 +763,9 @@ def parse_datetime(value: Any) -> datetime | None:
 
 def get_default_settings(db: Session, company_id: str | None = None) -> CompanySettings:
     resolved_company_id = company_id or get_current_company_id()
+    company = db.get(Company, resolved_company_id)
+    if not company:
+        resolved_company_id = DEFAULT_COMPANY_ID
     settings = (
         db.query(CompanySettings)
         .filter(CompanySettings.company_id == resolved_company_id)
@@ -694,16 +773,28 @@ def get_default_settings(db: Session, company_id: str | None = None) -> CompanyS
     )
     if settings:
         return settings
-    seed_defaults(db)
-    return (
-        db.query(CompanySettings)
-        .filter(CompanySettings.company_id == resolved_company_id)
-        .one()
+    settings = CompanySettings(
+        company_id=resolved_company_id,
+        greeting="",
+        closing="",
+        tone="",
+        custom_prompt="",
+        ai_general_rules="",
+        ai_product_knowledge="",
+        ai_allow_web_search=False,
+        ai_absolute_restrictions="",
     )
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+    return settings
 
 
 def get_ml_integration(db: Session, company_id: str | None = None) -> Integration:
     resolved_company_id = company_id or get_current_company_id()
+    company = db.get(Company, resolved_company_id)
+    if not company:
+        resolved_company_id = DEFAULT_COMPANY_ID
     integration = (
         db.query(Integration)
         .filter(
@@ -714,15 +805,15 @@ def get_ml_integration(db: Session, company_id: str | None = None) -> Integratio
     )
     if integration:
         return integration
-    seed_defaults(db)
-    return (
-        db.query(Integration)
-        .filter(
-            Integration.company_id == resolved_company_id,
-            Integration.provider == DEFAULT_PROVIDER,
-        )
-        .one()
+    integration = Integration(
+        company_id=resolved_company_id,
+        provider=DEFAULT_PROVIDER,
+        token_status="missing",
     )
+    db.add(integration)
+    db.commit()
+    db.refresh(integration)
+    return integration
 
 
 def question_to_api(
@@ -1115,7 +1206,7 @@ def ml_request_json(url: str, *, method: str = "GET", data: dict[str, Any] | Non
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
 
-    request = Request(url, data=body, method=method, headers=headers)
+    request = UrlRequest(url, data=body, method=method, headers=headers)
     try:
         with urlopen(request, timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -1141,7 +1232,7 @@ def ml_request_json_with_status(
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
 
-    request = Request(url, data=body, method=method, headers=headers)
+    request = UrlRequest(url, data=body, method=method, headers=headers)
     try:
         with urlopen(request, timeout=20) as response:
             response_text = response.read().decode("utf-8", errors="replace")
@@ -1159,7 +1250,7 @@ def ml_request_json_get_with_status(url: str, *, access_token: str | None = None
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
-    request = Request(url, method="GET", headers=headers)
+    request = UrlRequest(url, method="GET", headers=headers)
     try:
         with urlopen(request, timeout=20) as response:
             response_text = response.read().decode("utf-8", errors="replace")
@@ -2619,9 +2710,19 @@ def get_me(request: Request, db: Session = Depends(get_db)):
         },
         "permissions": {
             "is_platform_admin": role == "platform_admin",
-            "can_switch_company": False,
+            "can_switch_company": role == "platform_admin",
         },
     }
+
+
+@app.get("/companies")
+def list_companies(request: Request, db: Session = Depends(get_db)):
+    company_id, user_id, role = log_tenant_context(request)
+    if role != "platform_admin":
+        raise HTTPException(status_code=403, detail="Acesso restrito ao administrador da plataforma.")
+    companies = db.query(Company).order_by(Company.name.asc()).all()
+    logger.info("TENANT_COMPANIES company_id=%s user_id=%s role=%s count=%s", company_id, user_id, role, len(companies))
+    return [{"id": company.id, "name": company.name} for company in companies]
 
 
 @app.on_event("startup")
