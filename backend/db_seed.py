@@ -5,13 +5,18 @@ from db_models import Company, CompanySettings, Integration, User
 
 DEFAULT_COMPANY_ID = "cpap_express"
 DEFAULT_PROVIDER = "mercado_livre"
+MOCK_COMPANIES = [
+    (DEFAULT_COMPANY_ID, "CPAP Express"),
+    ("atlas_commerce", "Atlas Commerce"),
+    ("nova_casa_imports", "Nova Casa Imports"),
+]
 
 
 def seed_defaults(db: Session) -> None:
-    company = db.get(Company, DEFAULT_COMPANY_ID)
-    if not company:
-        company = Company(id=DEFAULT_COMPANY_ID, name="CPAP Express")
-        db.add(company)
+    for company_id, company_name in MOCK_COMPANIES:
+        company = db.get(Company, company_id)
+        if not company:
+            db.add(Company(id=company_id, name=company_name))
 
     admin = db.get(User, "admin")
     if not admin:
