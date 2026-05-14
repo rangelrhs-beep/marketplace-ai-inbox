@@ -434,7 +434,7 @@ button:disabled {
 
 .card-header {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) auto;
+  grid-template-columns: 58px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -489,11 +489,24 @@ button:disabled {
 
 .header-line {
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.header-primary {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.source-pair {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .buyer-line {
   align-items: center;
+  flex-wrap: nowrap;
 }
 
 .row-top {
@@ -534,7 +547,7 @@ button:disabled {
   color: #293456;
   font-size: 12px;
   font-weight: 800;
-  max-width: min(260px, 45vw);
+  max-width: min(300px, 58vw);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1146,6 +1159,72 @@ button:disabled {
   resize: vertical;
 }
 
+.ai-config-layout {
+  grid-template-columns: 1fr;
+}
+
+.ai-config-card {
+  max-width: 980px;
+}
+
+.settings-form textarea.large-textarea {
+  min-height: 180px;
+}
+
+.settings-form textarea.xl-textarea {
+  min-height: 280px;
+}
+
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.toggle-row strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #172033;
+}
+
+.toggle-switch {
+  width: 52px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  padding: 3px;
+  background: #dce3f1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle-switch span {
+  width: 24px;
+  height: 24px;
+  display: block;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 5px 14px rgba(32, 43, 69, 0.18);
+  transition: transform 0.18s ease;
+}
+
+.toggle-switch.active {
+  background: #16a34a;
+}
+
+.toggle-switch.active span {
+  transform: translateX(22px);
+}
+
+.settings-warning {
+  padding: 12px;
+  border-radius: 14px;
+  color: #7c2d12;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+
 .settings-message {
   font-weight: 800;
   color: #15803d;
@@ -1685,6 +1764,10 @@ button:disabled {
     display: grid;
   }
 
+  .toggle-row {
+    align-items: flex-start;
+  }
+
   .related-product {
     grid-template-columns: 42px minmax(0, 1fr);
   }
@@ -1706,9 +1789,12 @@ button:disabled {
     grid-template-columns: 52px minmax(0, 1fr);
   }
 
-  .card-header .time {
-    grid-column: 2;
-    justify-self: start;
+  .header-primary {
+    align-items: flex-start;
+  }
+
+  .source-pair {
+    flex-wrap: wrap;
   }
 
   .buyer-name {

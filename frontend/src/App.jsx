@@ -29,13 +29,6 @@ const navItems = [
   { label: "Configurações", icon: Settings },
 ];
 
-const toneOptions = [
-  "Técnico, claro e confiável",
-  "Curto e objetivo",
-  "Comercial e persuasivo",
-  "Humanizado e cordial",
-];
-
 const initialIntegrations = [
   {
     id: "mercado-livre",
@@ -83,12 +76,10 @@ const initialAppData = {
   integrations: integrationState(),
   questions: [],
   aiSettings: {
-    greeting: "Olá! Obrigado pela pergunta.",
-    closing: "Ficamos à disposição.",
-    tone: "Técnico, claro e confiável",
-    autoApprove: false,
-    maxRewriteAttempts: 3,
-    customPrompt: "",
+    ai_general_rules: "",
+    ai_product_knowledge: "",
+    ai_allow_web_search: false,
+    ai_absolute_restrictions: "",
   },
   usageLogs: [],
 };
@@ -594,31 +585,31 @@ function IntegrationsPage({
 
 function SettingsPage({ appData, onSettingsSaved }) {
   const [settingsDraft, setSettingsDraft] = useState({
-    greeting: appData.aiSettings.greeting || "Olá! Obrigado pela pergunta.",
-    closing: appData.aiSettings.closing || "Ficamos à disposição.",
-    tone: appData.aiSettings.tone || "Técnico, claro e confiável",
-    custom_prompt: appData.aiSettings.customPrompt || "",
+    ai_general_rules: appData.aiSettings.ai_general_rules || "",
+    ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
+    ai_allow_web_search: Boolean(appData.aiSettings.ai_allow_web_search),
+    ai_absolute_restrictions: appData.aiSettings.ai_absolute_restrictions || "",
   });
   const [settingsMessage, setSettingsMessage] = useState("");
-  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [savingSection, setSavingSection] = useState("");
 
   useEffect(() => {
     setSettingsDraft({
-      greeting: appData.aiSettings.greeting || "Olá! Obrigado pela pergunta.",
-      closing: appData.aiSettings.closing || "Ficamos à disposição.",
-      tone: appData.aiSettings.tone || "Técnico, claro e confiável",
-      custom_prompt: appData.aiSettings.customPrompt || "",
+      ai_general_rules: appData.aiSettings.ai_general_rules || "",
+      ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
+      ai_allow_web_search: Boolean(appData.aiSettings.ai_allow_web_search),
+      ai_absolute_restrictions: appData.aiSettings.ai_absolute_restrictions || "",
     });
   }, [
-    appData.aiSettings.greeting,
-    appData.aiSettings.closing,
-    appData.aiSettings.tone,
-    appData.aiSettings.customPrompt,
+    appData.aiSettings.ai_general_rules,
+    appData.aiSettings.ai_product_knowledge,
+    appData.aiSettings.ai_allow_web_search,
+    appData.aiSettings.ai_absolute_restrictions,
   ]);
 
-  async function saveSettings() {
+  async function saveSettings(section) {
     setSettingsMessage("");
-    setIsSavingSettings(true);
+    setSavingSection(section);
     try {
       const response = await fetch(`${API_URL}/company/settings`, {
         method: "PUT",
@@ -632,7 +623,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
     } catch (error) {
       setSettingsMessage(error.message || "Não foi possível salvar as configurações.");
     } finally {
-      setIsSavingSettings(false);
+      setSavingSection("");
     }
   }
 
@@ -648,78 +639,76 @@ function SettingsPage({ appData, onSettingsSaved }) {
         </div>
       </header>
 
-      <section className="settings-layout">
-        <div className="settings-card settings-form">
-          <span>Regras de resposta da IA</span>
-          <h2>Como responder perguntas do Mercado Livre</h2>
-          <p>
-            Essas regras são usadas para novas sugestões e reescritas. Respostas já salvas não são
-            alteradas automaticamente.
-          </p>
+      <section className="settings-layout ai-config-layout">
+        <div className="settings-card settings-form ai-config-card">
+          <span>Regras Gerais da IA</span>
+          <h2>Configurações IA</h2>
           <label>
-            Saudação padrão
-            <input
-              value={settingsDraft.greeting}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, greeting: event.target.value }))}
-            />
-          </label>
-          <label>
-            Despedida padrão
-            <input
-              value={settingsDraft.closing}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, closing: event.target.value }))}
-            />
-          </label>
-          <label>
-            Tom de resposta
-            <select
-              value={settingsDraft.tone}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, tone: event.target.value }))}
-            >
-              {toneOptions.map((tone) => (
-                <option key={tone} value={tone}>
-                  {tone}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Prompt personalizado
             <textarea
-              placeholder="Ex: Sempre mencione que não podemos confirmar prazo sem CEP. Não prometer compatibilidade sem dados do anúncio."
-              value={settingsDraft.custom_prompt}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, custom_prompt: event.target.value }))}
+              className="large-textarea"
+              value={settingsDraft.ai_general_rules}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_general_rules: event.target.value }))}
             />
           </label>
-          <button className="primary" onClick={saveSettings} disabled={isSavingSettings}>
-            {isSavingSettings ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            {isSavingSettings ? "Salvando..." : "Salvar configurações"}
+          <button className="primary" onClick={() => saveSettings("general")} disabled={savingSection === "general"}>
+            {savingSection === "general" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+            Salvar
           </button>
-          {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
         </div>
 
-        <aside className="settings-card settings-preview">
-          <span>Prévia operacional</span>
-          <h2>CPAP Express</h2>
-          <dl>
+        <div className="settings-card settings-form ai-config-card">
+          <span>Conhecimento Técnico por Produto</span>
+          <label>
+            <textarea
+              className="xl-textarea"
+              value={settingsDraft.ai_product_knowledge}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_product_knowledge: event.target.value }))}
+            />
+          </label>
+          <button className="primary" onClick={() => saveSettings("knowledge")} disabled={savingSection === "knowledge"}>
+            {savingSection === "knowledge" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+            Salvar
+          </button>
+        </div>
+
+        <div className="settings-card settings-form ai-config-card">
+          <span>Busca complementar na internet</span>
+          <div className="toggle-row">
             <div>
-              <dt>Saudação</dt>
-              <dd>{settingsDraft.greeting}</dd>
+              <strong>{settingsDraft.ai_allow_web_search ? "Ativada" : "Desativada"}</strong>
+              <p>A IA poderá consultar especificações públicas e fabricantes apenas quando não encontrar informações suficientes na base interna ou nos produtos relacionados.</p>
             </div>
-            <div>
-              <dt>Tom</dt>
-              <dd>{settingsDraft.tone}</dd>
-            </div>
-            <div>
-              <dt>Despedida</dt>
-              <dd>{settingsDraft.closing}</dd>
-            </div>
-          </dl>
-          <p>
-            A IA continuará sem envio automático. Toda resposta precisa ser revisada e aprovada por
-            Admin antes de ir para o Mercado Livre.
-          </p>
-        </aside>
+            <button
+              type="button"
+              className={`toggle-switch ${settingsDraft.ai_allow_web_search ? "active" : ""}`}
+              onClick={() => setSettingsDraft((current) => ({ ...current, ai_allow_web_search: !current.ai_allow_web_search }))}
+              aria-pressed={settingsDraft.ai_allow_web_search}
+            >
+              <span />
+            </button>
+          </div>
+          <p className="settings-warning">Mesmo utilizando fontes externas, a IA nunca deve afirmar informações não confirmadas oficialmente.</p>
+          <button className="primary" onClick={() => saveSettings("web")} disabled={savingSection === "web"}>
+            {savingSection === "web" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+            Salvar
+          </button>
+        </div>
+
+        <div className="settings-card settings-form ai-config-card">
+          <span>Restrições Absolutas</span>
+          <label>
+            <textarea
+              className="large-textarea"
+              value={settingsDraft.ai_absolute_restrictions}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_absolute_restrictions: event.target.value }))}
+            />
+          </label>
+          <button className="primary" onClick={() => saveSettings("restrictions")} disabled={savingSection === "restrictions"}>
+            {savingSection === "restrictions" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+            Salvar
+          </button>
+        </div>
+        {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
       </section>
     </section>
   );
@@ -1430,10 +1419,10 @@ export default function App() {
             ...current,
             aiSettings: {
               ...current.aiSettings,
-              greeting: settings.greeting,
-              closing: settings.closing,
-              tone: settings.tone || current.aiSettings.tone,
-              customPrompt: settings.custom_prompt || "",
+              ai_general_rules: settings.ai_general_rules || "",
+              ai_product_knowledge: settings.ai_product_knowledge || "",
+              ai_allow_web_search: Boolean(settings.ai_allow_web_search),
+              ai_absolute_restrictions: settings.ai_absolute_restrictions || "",
             },
           }));
         }
@@ -1983,10 +1972,10 @@ export default function App() {
                 ...current,
                 aiSettings: {
                   ...current.aiSettings,
-                  greeting: settings.greeting,
-                  closing: settings.closing,
-                  tone: settings.tone || current.aiSettings.tone,
-                  customPrompt: settings.custom_prompt || "",
+                  ai_general_rules: settings.ai_general_rules || "",
+                  ai_product_knowledge: settings.ai_product_knowledge || "",
+                  ai_allow_web_search: Boolean(settings.ai_allow_web_search),
+                  ai_absolute_restrictions: settings.ai_absolute_restrictions || "",
                 },
               }))
             }
@@ -2035,7 +2024,7 @@ export default function App() {
 
           <div className="tenant-strip">
             <span>1 usuário</span>
-            <span>IA: {appData.aiSettings.tone}</span>
+            <span>IA: regras configuráveis</span>
             <span>
               Uso: {appData.usageLogs.reduce((total, log) => total + log.count, 0)} eventos
             </span>
