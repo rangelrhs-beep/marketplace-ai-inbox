@@ -389,6 +389,17 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.tenant-debug {
+  margin: -2px 0 14px;
+  border: 1px dashed #cfd8ea;
+  border-radius: 12px;
+  padding: 8px 10px;
+  color: #647189;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .filters label {
   color: #647189;
   font-size: 13px;

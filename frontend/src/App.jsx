@@ -32,6 +32,23 @@ function apiFetch(url, options = {}) {
   return fetch(url, { ...options, headers });
 }
 
+function clearTenantQuestionStorage() {
+  const keys = [
+    "questions",
+    "groupedQuestions",
+    "selectedQuestion",
+    "demoQuestions",
+    "answeredQuestions",
+    "pendingQuestions",
+  ];
+  keys.forEach((key) => {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+    localStorage.removeItem(`marketplace_ai_${key}`);
+    sessionStorage.removeItem(`marketplace_ai_${key}`);
+  });
+}
+
 const navItems = [
   { label: "Inbox", icon: Inbox },
   { label: "Pendentes", icon: Clock3 },
@@ -242,6 +259,18 @@ function buildConversationGroups(questions) {
       customer_name: getBuyerDisplayName(latest.buyer, latest.customer_name),
     };
   }).sort((a, b) => getQuestionTimestamp(b) - getQuestionTimestamp(a));
+}
+
+function getCardCompanyId(card) {
+  return card.company_id || card.questions?.[0]?.company_id || "";
+}
+
+function cardBelongsToCompany(card, companyId) {
+  if (!companyId) return false;
+  if (card.questions?.length) {
+    return card.questions.every((question) => question.company_id === companyId);
+  }
+  return getCardCompanyId(card) === companyId;
 }
 
 function mapMercadoLivreQuestionToUi(question, index) {
@@ -1686,6 +1715,7 @@ export default function App() {
 
   function resetTenantScopedUi() {
     setIsQuestionsLoading(true);
+    clearTenantQuestionStorage();
     setQuestions([]);
     setAppData((current) => ({
       ...current,
@@ -2016,22 +2046,43 @@ export default function App() {
     () => buildConversationGroups(filteredQuestions),
     [filteredQuestions, selectedCompanyId, currentCompany?.id]
   );
+  const finalCards = useMemo(() => {
+    const companyId = selectedCompanyId || currentCompany?.id || getStoredCompanyId();
+    const cards = conversationGroups.filter((card) => {
+      const belongs = cardBelongsToCompany(card, companyId);
+      if (!belongs) {
+        console.log(
+          `FRONTEND_DROPPED_WRONG_TENANT expected=${companyId} found=${getCardCompanyId(card) || "missing"} external_id=${card.external_id}`
+        );
+      }
+      return belongs;
+    });
+    console.log("RENDER_COMPANY", companyId);
+    console.log(
+      "RENDER_VISIBLE_CARDS",
+      cards.slice(0, 5).map((card) => ({
+        external_id: card.external_id,
+        company_id: getCardCompanyId(card),
+        title: card.product_title || card.product,
+      }))
+    );
+    return cards;
+  }, [conversationGroups, selectedCompanyId, currentCompany?.id]);
   const selectedQuestion = isQuestionsLoading
     ? null
-    : conversationGroups.find((question) => question.id === selectedId) ||
-      visibleQuestions.find((question) => question.id === selectedId) ||
-      conversationGroups[0] ||
+    : finalCards.find((question) => question.id === selectedId) ||
+      finalCards[0] ||
       null;
   const selectedEditableQuestion =
     selectedQuestion?.questions?.find((question) => question.status === "Pendente") || selectedQuestion;
 
   const metrics = {
-    pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
-    answered: visibleQuestions.filter((question) => question.status === "Respondida").length,
-    high: visibleQuestions.filter((question) => question.priority === "Alta").length,
+    pending: finalCards.filter((question) => question.status === "Pendente").length,
+    answered: finalCards.filter((question) => question.status === "Respondida").length,
+    high: finalCards.filter((question) => question.priority === "Alta").length,
   };
 
-  const hasVisibleQuestions = visibleQuestions.length > 0;
+  const hasVisibleQuestions = finalCards.length > 0;
   const mercadoLivreIntegration = integrations.find((integration) => integration.id === "mercado-livre");
   const isMercadoLivreConnected = mercadoLivreIntegration?.status === "Conectado";
   const isPendingScreen = active === "Pendentes";
@@ -2072,7 +2123,7 @@ export default function App() {
       });
       setActive("Pendentes");
       setPriorityFilter("Todos");
-      setSelectedId(visibleQuestions.find((question) => question.status === "Pendente")?.id || null);
+      setSelectedId(finalCards.find((question) => question.status === "Pendente")?.id || null);
       return;
     }
 
@@ -2085,7 +2136,7 @@ export default function App() {
       });
       setActive("Respondidas");
       setPriorityFilter("Todos");
-      setSelectedId(visibleQuestions.find((question) => question.status === "Respondida")?.id || null);
+      setSelectedId(finalCards.find((question) => question.status === "Respondida")?.id || null);
       return;
     }
 
@@ -2097,21 +2148,21 @@ export default function App() {
     });
     setActive("Inbox");
     setPriorityFilter("Alta");
-    setSelectedId(visibleQuestions.find((question) => question.priority === "Alta")?.id || null);
+    setSelectedId(finalCards.find((question) => question.priority === "Alta")?.id || null);
   }
 
   useEffect(() => {
-    if (selectedId && !conversationGroups.some((question) => question.id === selectedId)) {
-      setSelectedId(conversationGroups[0]?.id || null);
+    if (selectedId && !finalCards.some((question) => question.id === selectedId)) {
+      setSelectedId(finalCards[0]?.id || null);
       setShowConversation(false);
-    } else if (!selectedId && conversationGroups.length > 0) {
-      setSelectedId(conversationGroups[0].id);
+    } else if (!selectedId && finalCards.length > 0) {
+      setSelectedId(finalCards[0].id);
     }
 
     if (marketplaceFilter !== "Todos" && !marketplaces.includes(marketplaceFilter)) {
       setMarketplaceFilter("Todos");
     }
-  }, [conversationGroups, marketplaceFilter, marketplaces, selectedId]);
+  }, [finalCards, marketplaceFilter, marketplaces, selectedId]);
 
   function selectQuestion(id) {
     if (!(showConversation && selectedId === id)) {
@@ -2586,7 +2637,10 @@ export default function App() {
           />
         ) : (
           <>
-            <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
+            <section
+              key={selectedCompanyId}
+              className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}
+            >
               <ScreenHeader
                 title={active}
                 companies={companies}
@@ -2656,6 +2710,14 @@ export default function App() {
             ) : null}
           </div>
 
+          <div className="tenant-debug">
+            Empresa atual: {selectedCompanyId}
+            <br />
+            Perguntas carregadas: {questions.length}
+            <br />
+            Perguntas visíveis: {visibleQuestions.length}
+          </div>
+
           <div className="question-list">
             {isQuestionsLoading ? (
               <div className="inbox-empty">
@@ -2677,7 +2739,7 @@ export default function App() {
                   Abrir integrações
                 </button>
               </div>
-            ) : conversationGroups.length === 0 ? (
+            ) : finalCards.length === 0 ? (
               <div className="inbox-empty">
                 <div className="empty-icon">
                   <Inbox size={30} />
@@ -2686,7 +2748,7 @@ export default function App() {
                 <p>{questionNotice || "Sincronize o Mercado Livre ou ajuste os filtros atuais."}</p>
               </div>
             ) : isPendingScreen ? (
-              conversationGroups.map((question) => (
+              finalCards.map((question) => (
                 <PendingQuestionCard
                   key={question.id}
                   question={question}
@@ -2700,7 +2762,7 @@ export default function App() {
                 />
               ))
             ) : (
-              conversationGroups.map((question) => (
+              finalCards.map((question) => (
                 <QuestionRow
                   key={question.id}
                   question={question}
