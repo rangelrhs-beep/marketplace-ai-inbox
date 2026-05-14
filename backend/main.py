@@ -936,6 +936,25 @@ def question_to_api(
     }
 
 
+def protect_tenant_question_payloads(
+    questions: list[dict[str, Any]],
+    company_id: str,
+) -> list[dict[str, Any]]:
+    protected_questions = []
+    for question in questions:
+        question_company_id = str(question.get("company_id") or "")
+        if question_company_id and question_company_id != company_id:
+            logger.error(
+                "TENANT_LEAK_DETECTED expected=%s found=%s question_id=%s",
+                company_id,
+                question_company_id,
+                question.get("external_id") or question.get("id"),
+            )
+            continue
+        protected_questions.append(question)
+    return protected_questions
+
+
 def get_cors_origins() -> list[str]:
     raw_origins = os.getenv(
         "CORS_ORIGINS",
@@ -3909,10 +3928,11 @@ def blocked_answer_response(
 def answer_mercadolivre_question(
     question_id: str,
     payload: MercadoLivreAnswerPayload,
+    request: Request | None = None,
     db: Session = Depends(get_db),
     company_id: str | None = None,
 ):
-    resolved_company_id = company_id or get_current_company_id()
+    resolved_company_id = company_id or get_current_company_id(request)
     answer = payload.answer.strip()
     if not answer:
         raise HTTPException(status_code=400, detail="Missing required field: answer")
@@ -4216,6 +4236,8 @@ def read_company_settings(request: Request, db: Session = Depends(get_db)):
 def debug_ai_prompt(question_id: str, request: Request, db: Session = Depends(get_db)):
     company_id, _, _ = log_tenant_context(request)
     question = db.get(QuestionRecord, int(question_id)) if question_id.isdigit() else None
+    if question and question.company_id != company_id:
+        question = None
     if not question:
         question = (
             db.query(QuestionRecord)
@@ -4330,6 +4352,7 @@ def list_integration_questions(integration_id: str):
 def list_questions(request: Request, status: str | None = None, db: Session = Depends(get_db)):
     company_id, _, _ = log_tenant_context(request)
     try:
+        logger.info("TENANT_QUESTIONS_QUERY company_id=%s", company_id)
         print("BUYER_ENRICHMENT_START", flush=True)
         query = (
             db.query(QuestionRecord)
@@ -4356,7 +4379,16 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         print(f"BUYER_ENRICHMENT unique_buyer_ids={buyer_ids[:10]} total={len(buyer_ids)}", flush=True)
         if not buyer_ids:
             print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
-        local_questions = enrich_questions_with_buyers(question_payloads, db)
+        local_questions = protect_tenant_question_payloads(
+            enrich_questions_with_buyers(question_payloads, db),
+            company_id,
+        )
+        logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(local_questions))
+        logger.info(
+            "TENANT_QUESTIONS_SAMPLE company_id=%s external_ids=%s",
+            company_id,
+            [question.get("external_id") for question in local_questions[:10]],
+        )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
         return []
@@ -4379,7 +4411,14 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
     except Exception:
         logger.exception("Live portal answered questions unavailable; returning local questions only")
         live_portal_questions = []
-    return local_questions + live_portal_questions
+    combined_questions = protect_tenant_question_payloads(local_questions + live_portal_questions, company_id)
+    logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
+    logger.info(
+        "TENANT_QUESTIONS_SAMPLE company_id=%s external_ids=%s",
+        company_id,
+        [question.get("external_id") for question in combined_questions[:10]],
+    )
+    return combined_questions
 
 
 @app.get("/debug/ml/buyers")
@@ -4592,7 +4631,8 @@ def answer_question(payload: dict[str, Any], request: Request, db: Session = Dep
             was_edited=bool(payload.get("was_edited")),
             instruction_used=payload.get("instruction_used") or "",
         ),
-        db,
+        request=request,
+        db=db,
         company_id=company_id,
     )
     return result
@@ -4614,10 +4654,7 @@ def suggest_answer(question_id: int, request: Request, db: Session = Depends(get
     if question and question.company_id != company_id:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     if not question:
-        question_mock = find_question(question_id)
-        variant = suggestion_variants[question_id % len(suggestion_variants)]
-        question_mock.ai_suggestion = f"{variant}{question_mock.ai_suggestion}"
-        return SuggestionResponse(suggestion=question_mock.ai_suggestion)
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     try:
         suggestion_text = generate_openai_initial_suggestion(
             product_title=question.product_title,
@@ -4664,10 +4701,7 @@ def approve_question(question_id: int, payload: ApprovePayload, request: Request
     if question and question.company_id != company_id:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     if not question:
-        question_mock = find_question(question_id)
-        question_mock.ai_suggestion = payload.answer
-        question_mock.status = Status.answered
-        return question_mock
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     now = datetime.utcnow()
     question.status = "responded"
     question.answered_at = now
