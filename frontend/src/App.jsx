@@ -376,7 +376,7 @@ function Sidebar({ active, companies, currentCompany, permissions, onCompanyChan
 }
 
 function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
-  if (!permissions?.can_switch_company) return null;
+  if (!permissions?.can_switch_company || companies.length <= 1) return null;
   return (
     <div className="company-switcher">
       <label>
@@ -1693,6 +1693,7 @@ export default function App() {
       try {
         const response = await apiFetch(`${API_URL}/me`);
         const tenant = await response.json();
+        console.log("/me response", tenant);
         if (!response.ok) throw new Error("Tenant context unavailable");
         setTenantContext({
           user: {
@@ -1717,6 +1718,7 @@ export default function App() {
       try {
         const response = await apiFetch(`${API_URL}/companies`);
         const data = await response.json();
+        console.log("/companies response", data);
         if (response.ok && Array.isArray(data)) {
           setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
         }
