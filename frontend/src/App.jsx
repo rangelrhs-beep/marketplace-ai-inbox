@@ -1708,9 +1708,16 @@ export default function App() {
     setQuestionNotice("");
     setAnswerNotice("");
     setAnswerError("");
+    setSendingAnswerId(null);
+    setGeneratingQuestionId(null);
+    setPendingIntegration(null);
+    setConnectError("");
+    setTestingIntegrationId(null);
   }
 
   function switchCompany(companyId) {
+    const previousCompanyId = getStoredCompanyId();
+    console.log(`FRONTEND_TENANT_SWITCH from=${previousCompanyId} to=${companyId}`);
     localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, companyId);
     resetTenantScopedUi();
     setSelectedCompanyId(companyId);
@@ -1729,10 +1736,7 @@ export default function App() {
       question.company_id,
       question.product_title || question.product,
     ]);
-    console.log(
-      `QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} count=${data.length}`,
-      responseSample
-    );
+    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} count=${data.length}`, responseSample);
     if (requestCompanyId !== getStoredCompanyId()) {
       console.log("QUESTIONS_RESPONSE ignored stale company response", {
         requested: requestCompanyId,
@@ -1740,7 +1744,16 @@ export default function App() {
       });
       return [];
     }
-    const tenantQuestions = data.filter((question) => question.company_id && question.company_id === requestCompanyId);
+    const tenantQuestions = data.filter((question) => {
+      if (!question.company_id || question.company_id !== requestCompanyId) {
+        console.log(
+          `FRONTEND_DROPPED_WRONG_TENANT expected=${requestCompanyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
+        );
+        return false;
+      }
+      return true;
+    });
+    console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
     setQuestions(tenantQuestions);
     setSelectedId((current) =>
       current && tenantQuestions.some((question) => question.id === current)
@@ -1789,8 +1802,9 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (isQuestionsLoading) return;
     setSelectedId((current) => current || questions[0]?.id || null);
-  }, [questions]);
+  }, [questions, isQuestionsLoading, selectedCompanyId, currentCompany?.id]);
 
   useEffect(() => {
     resetTenantScopedUi();
@@ -1956,11 +1970,24 @@ export default function App() {
     return () => window.removeEventListener("popstate", handleBrowserBack);
   }, []);
 
-  const visibleQuestions = questions;
+  const visibleQuestions = useMemo(() => {
+    const companyId = selectedCompanyId || currentCompany?.id || getStoredCompanyId();
+    const filtered = questions.filter((question) => {
+      if (!question.company_id || question.company_id !== companyId) {
+        console.log(
+          `FRONTEND_DROPPED_WRONG_TENANT expected=${companyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
+        );
+        return false;
+      }
+      return true;
+    });
+    console.log(`FRONTEND_VISIBLE_QUESTIONS company=${companyId} count=${filtered.length}`);
+    return filtered;
+  }, [questions, selectedCompanyId, currentCompany?.id]);
 
   const marketplaces = useMemo(
     () => ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))],
-    [visibleQuestions]
+    [visibleQuestions, selectedCompanyId, currentCompany?.id]
   );
 
   const filteredQuestions = useMemo(() => {
@@ -1983,14 +2010,18 @@ export default function App() {
         normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
       return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
     });
-  }, [active, visibleQuestions, marketplaceFilter, priorityFilter, answeredSourceFilter]);
+  }, [active, visibleQuestions, marketplaceFilter, priorityFilter, answeredSourceFilter, selectedCompanyId, currentCompany?.id]);
 
-  const conversationGroups = useMemo(() => buildConversationGroups(filteredQuestions), [filteredQuestions]);
-  const selectedQuestion =
-    conversationGroups.find((question) => question.id === selectedId) ||
-    visibleQuestions.find((question) => question.id === selectedId) ||
-    conversationGroups[0] ||
-    null;
+  const conversationGroups = useMemo(
+    () => buildConversationGroups(filteredQuestions),
+    [filteredQuestions, selectedCompanyId, currentCompany?.id]
+  );
+  const selectedQuestion = isQuestionsLoading
+    ? null
+    : conversationGroups.find((question) => question.id === selectedId) ||
+      visibleQuestions.find((question) => question.id === selectedId) ||
+      conversationGroups[0] ||
+      null;
   const selectedEditableQuestion =
     selectedQuestion?.questions?.find((question) => question.status === "Pendente") || selectedQuestion;
 
