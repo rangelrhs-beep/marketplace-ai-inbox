@@ -342,23 +342,6 @@ button:disabled {
   margin-top: 6px;
 }
 
-.tenant-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -8px 0 16px;
-}
-
-.tenant-strip span {
-  border: 1px solid #dce3f1;
-  border-radius: 999px;
-  padding: 7px 10px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #566176;
-  font-size: 12px;
-  font-weight: 800;
-}
-
 .answer-feedback {
   border-radius: 14px;
   padding: 12px 14px;

@@ -1521,7 +1521,6 @@ export default function App() {
   const [testingIntegrationId, setTestingIntegrationId] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
-  const [statusFilter, setStatusFilter] = useState("Todos");
   const [priorityFilter, setPriorityFilter] = useState("Todos");
   const [answeredSourceFilter, setAnsweredSourceFilter] = useState("Todas");
   const [showConversation, setShowConversation] = useState(false);
@@ -1663,10 +1662,6 @@ export default function App() {
     () => ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))],
     [visibleQuestions]
   );
-  const statuses = useMemo(
-    () => ["Todos", ...new Set(visibleQuestions.map((question) => question.status))],
-    [visibleQuestions]
-  );
 
   const filteredQuestions = useMemo(() => {
     const forcedStatus =
@@ -1679,9 +1674,7 @@ export default function App() {
     return visibleQuestions.filter((question) => {
       const marketplaceMatches =
         marketplaceFilter === "Todos" || question.marketplace === marketplaceFilter;
-      const statusMatches = forcedStatus
-        ? question.status === forcedStatus
-        : statusFilter === "Todos" || question.status === statusFilter;
+      const statusMatches = forcedStatus ? question.status === forcedStatus : true;
       const priorityMatches =
         priorityFilter === "Todos" || question.priority === priorityFilter;
       const answeredSourceMatches =
@@ -1691,7 +1684,7 @@ export default function App() {
         normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
       return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
     });
-  }, [active, visibleQuestions, marketplaceFilter, statusFilter, priorityFilter, answeredSourceFilter]);
+  }, [active, visibleQuestions, marketplaceFilter, priorityFilter, answeredSourceFilter]);
 
   const conversationGroups = useMemo(() => buildConversationGroups(filteredQuestions), [filteredQuestions]);
   const selectedQuestion =
@@ -1721,7 +1714,6 @@ export default function App() {
 
   function applyMetricFilter(type) {
     setMarketplaceFilter("Todos");
-    setStatusFilter("Todos");
     setAnsweredSourceFilter("Todas");
     setShowConversation(false);
 
@@ -2036,7 +2028,6 @@ export default function App() {
       const databaseQuestions = await loadQuestionsFromDatabase();
       setShowConversation(false);
       setMarketplaceFilter("Todos");
-      setStatusFilter("Todos");
       setIntegrations((current) =>
         current.map((integration) =>
           integration.id === "mercado-livre"
@@ -2222,14 +2213,6 @@ export default function App() {
             </button>
           </div>
 
-          <div className="tenant-strip">
-            <span>1 usuário</span>
-            <span>IA: regras configuráveis</span>
-            <span>
-              Uso: {appData.usageLogs.reduce((total, log) => total + log.count, 0)} eventos
-            </span>
-          </div>
-
           {answerNotice || answerError ? (
             <div className={`answer-feedback ${answerFeedbackClass}`}>
               {answerError || answerNotice}
@@ -2245,14 +2228,6 @@ export default function App() {
               >
                 {marketplaces.map((marketplace) => (
                   <option key={marketplace}>{marketplace}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Status
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-                {statuses.map((status) => (
-                  <option key={status}>{status}</option>
                 ))}
               </select>
             </label>
