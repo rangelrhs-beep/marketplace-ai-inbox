@@ -1663,6 +1663,7 @@ export default function App() {
   const [priorityFilter, setPriorityFilter] = useState("Todos");
   const [answeredSourceFilter, setAnsweredSourceFilter] = useState("Todas");
   const [showConversation, setShowConversation] = useState(false);
+  const [isQuestionsLoading, setIsQuestionsLoading] = useState(false);
 
   const questions = appData.questions;
   const integrations = appData.integrations;
@@ -1684,6 +1685,7 @@ export default function App() {
   }
 
   function resetTenantScopedUi() {
+    setIsQuestionsLoading(true);
     setQuestions([]);
     setAppData((current) => ({
       ...current,
@@ -1716,6 +1718,7 @@ export default function App() {
 
   async function loadQuestionsFromDatabase() {
     const requestCompanyId = getStoredCompanyId();
+    setIsQuestionsLoading(true);
     const response = await apiFetch(`${API_URL}/questions`);
     const data = await response.json();
     if (!response.ok || !Array.isArray(data)) {
@@ -1730,7 +1733,6 @@ export default function App() {
           question.external_id,
           question.company_id,
           question.product_title || question.product,
-          question.buyer,
         ]),
       }
     );
@@ -1748,6 +1750,7 @@ export default function App() {
         ? current
         : tenantQuestions[0]?.id || null
     );
+    setIsQuestionsLoading(false);
     return tenantQuestions;
   }
 
@@ -1839,6 +1842,7 @@ export default function App() {
         await loadQuestionsFromDatabase();
       } catch (error) {
         setQuestionNotice(error.message || "Não foi possível carregar perguntas do banco.");
+        setIsQuestionsLoading(false);
       }
     }
 
@@ -2625,7 +2629,15 @@ export default function App() {
           </div>
 
           <div className="question-list">
-            {!isMercadoLivreConnected && !hasVisibleQuestions ? (
+            {isQuestionsLoading ? (
+              <div className="inbox-empty">
+                <div className="empty-icon">
+                  <RefreshCw size={30} className="spin" />
+                </div>
+                <h2>Carregando perguntas...</h2>
+                <p>Buscando dados da empresa selecionada.</p>
+              </div>
+            ) : !isMercadoLivreConnected && !hasVisibleQuestions ? (
               <div className="inbox-empty">
                 <div className="empty-icon">
                   <PlugZap size={30} />
