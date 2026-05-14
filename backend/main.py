@@ -943,9 +943,16 @@ def protect_tenant_question_payloads(
     protected_questions = []
     for question in questions:
         question_company_id = str(question.get("company_id") or "")
-        if question_company_id and question_company_id != company_id:
+        if not question_company_id:
             logger.error(
-                "TENANT_LEAK_DETECTED expected=%s found=%s question_id=%s",
+                "TENANT_LEAK_MISSING_COMPANY_ID expected=%s external_id=%s",
+                company_id,
+                question.get("external_id") or question.get("id"),
+            )
+            continue
+        if question_company_id != company_id:
+            logger.error(
+                "TENANT_LEAK_EXCLUDED expected=%s found=%s external_id=%s",
                 company_id,
                 question_company_id,
                 question.get("external_id") or question.get("id"),
@@ -953,6 +960,21 @@ def protect_tenant_question_payloads(
             continue
         protected_questions.append(question)
     return protected_questions
+
+
+def final_filter_tenant_questions(
+    questions: list[dict[str, Any]],
+    company_id: str,
+) -> list[dict[str, Any]]:
+    before_count = len(questions)
+    filtered_questions = protect_tenant_question_payloads(questions, company_id)
+    logger.info(
+        "TENANT_QUESTIONS_FINAL_FILTER company_id=%s before=%s after=%s",
+        company_id,
+        before_count,
+        len(filtered_questions),
+    )
+    return filtered_questions
 
 
 def get_cors_origins() -> list[str]:
@@ -4394,16 +4416,16 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         return []
 
     if status and normalize_db_status(status) != "responded":
-        return local_questions
+        return final_filter_tenant_questions(local_questions, company_id)
 
     if not is_ml_answered_backfill_enabled():
-        return local_questions
+        return final_filter_tenant_questions(local_questions, company_id)
 
     try:
         integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
             logger.info("Skipping answered backfill: Mercado Livre disconnected")
-            return local_questions
+            return final_filter_tenant_questions(local_questions, company_id)
         live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
@@ -4411,7 +4433,7 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
     except Exception:
         logger.exception("Live portal answered questions unavailable; returning local questions only")
         live_portal_questions = []
-    combined_questions = protect_tenant_question_payloads(local_questions + live_portal_questions, company_id)
+    combined_questions = final_filter_tenant_questions(local_questions + live_portal_questions, company_id)
     logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
     logger.info(
         "TENANT_QUESTIONS_SAMPLE company_id=%s external_ids=%s",
