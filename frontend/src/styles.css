@@ -1117,6 +1117,90 @@ button:disabled {
   font-weight: 800;
 }
 
+.settings-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+  position: relative;
+}
+
+.help-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.help-icon-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #dce3f1;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #647189;
+  background: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition: border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.help-icon-button:hover,
+.help-icon-button:focus-visible {
+  color: #2457c5;
+  border-color: #b9c5da;
+  box-shadow: 0 8px 22px rgba(32, 43, 69, 0.1);
+  outline: none;
+}
+
+.help-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(320px, calc(100vw - 48px));
+  border: 1px solid rgba(126, 139, 168, 0.2);
+  border-radius: 16px;
+  padding: 14px;
+  background: white;
+  box-shadow: 0 20px 44px rgba(32, 43, 69, 0.16);
+  color: #293456;
+}
+
+.help-tooltip strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #172033;
+  font-size: 13px;
+}
+
+.help-tooltip p {
+  margin: 0 0 10px;
+  color: #566176;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.help-tooltip span {
+  display: block;
+  margin-bottom: 6px;
+  color: #647189;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.help-tooltip ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #293456;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .settings-card h2 {
   margin: 8px 0;
   font-size: 22px;

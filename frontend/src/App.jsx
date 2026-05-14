@@ -599,6 +599,48 @@ function SettingsPage({ appData, onSettingsSaved }) {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [savingSection, setSavingSection] = useState("");
   const [editingSections, setEditingSections] = useState({});
+  const [activeHelp, setActiveHelp] = useState("");
+  const helpContent = {
+    general: {
+      title: "Regras Gerais da IA",
+      body: "Defina como a IA deve se comportar nas respostas.",
+      examples: [
+        "Tom profissional e objetivo",
+        "Priorizar venda consultiva",
+        "Evitar respostas longas",
+        "Sugerir acessórios relacionados",
+        "Confirmar compatibilidade apenas quando validada",
+      ],
+    },
+    knowledge: {
+      title: "Conhecimento Técnico por Produto",
+      body: "Adicione informações técnicas importantes sobre seus produtos.",
+      examples: [
+        "Compatibilidades",
+        "Medidas",
+        "Material",
+        "Voltagem",
+        "Conteúdo da embalagem",
+        "Instalação",
+        "Produtos relacionados",
+      ],
+    },
+    web: {
+      title: "Busca complementar na internet",
+      body: "Permite que a IA consulte informações públicas quando não houver contexto suficiente na base interna.",
+      note: "A IA continuará priorizando as informações da sua empresa.",
+    },
+    restrictions: {
+      title: "Restrições Absolutas",
+      body: "Defina informações que a IA nunca poderá afirmar.",
+      examples: [
+        "Compatibilidade sem validação",
+        "Prazo exato de entrega",
+        "Garantias não oficiais",
+        "Informações não confirmadas",
+      ],
+    },
+  };
 
   useEffect(() => {
     setSettingsDraft({
@@ -613,6 +655,17 @@ function SettingsPage({ appData, onSettingsSaved }) {
     appData.aiSettings.ai_allow_web_search,
     appData.aiSettings.ai_absolute_restrictions,
   ]);
+
+  useEffect(() => {
+    function closeHelpOnOutsideClick(event) {
+      if (!activeHelp) return;
+      if (event.target.closest(".help-tooltip-wrap")) return;
+      setActiveHelp("");
+    }
+
+    document.addEventListener("pointerdown", closeHelpOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeHelpOnOutsideClick);
+  }, [activeHelp]);
 
   async function saveSettings(section) {
     setSettingsMessage("");
@@ -709,6 +762,55 @@ function SettingsPage({ appData, onSettingsSaved }) {
     );
   }
 
+  function renderHelpTooltip(section) {
+    const content = helpContent[section];
+    const tooltipId = `ai-settings-help-${section}`;
+    const isOpen = activeHelp === section;
+
+    return (
+      <div
+        className="help-tooltip-wrap"
+        onMouseEnter={() => setActiveHelp(section)}
+        onMouseLeave={() => setActiveHelp((current) => (current === section ? "" : current))}
+      >
+        <button
+          type="button"
+          className="help-icon-button"
+          aria-label={`Ajuda sobre ${content.title}`}
+          aria-describedby={isOpen ? tooltipId : undefined}
+          aria-expanded={isOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            setActiveHelp((current) => (current === section ? "" : section));
+          }}
+          onFocus={() => setActiveHelp(section)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setActiveHelp("");
+          }}
+        >
+          ⓘ
+        </button>
+        {isOpen ? (
+          <div className="help-tooltip" id={tooltipId} role="tooltip">
+            <strong>{content.title}</strong>
+            <p>{content.body}</p>
+            {content.note ? <p>{content.note}</p> : null}
+            {content.examples ? (
+              <>
+                <span>Exemplos:</span>
+                <ul>
+                  {content.examples.map((example) => (
+                    <li key={example}>{example}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <section className="settings-page">
       <header className="topbar">
@@ -723,7 +825,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
 
       <section className="settings-layout ai-config-layout">
         <div className="settings-card settings-form ai-config-card">
-          <span>Regras Gerais da IA</span>
+          <div className="settings-card-header">
+            <span>Regras Gerais da IA</span>
+            {renderHelpTooltip("general")}
+          </div>
           <label>
             <textarea
               className="large-textarea"
@@ -736,7 +841,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
         </div>
 
         <div className="settings-card settings-form ai-config-card">
-          <span>Conhecimento Técnico por Produto</span>
+          <div className="settings-card-header">
+            <span>Conhecimento Técnico por Produto</span>
+            {renderHelpTooltip("knowledge")}
+          </div>
           <label>
             <textarea
               className="xl-textarea"
@@ -749,7 +857,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
         </div>
 
         <div className="settings-card settings-form ai-config-card">
-          <span>Busca complementar na internet</span>
+          <div className="settings-card-header">
+            <span>Busca complementar na internet</span>
+            {renderHelpTooltip("web")}
+          </div>
           <div className="toggle-row">
             <div>
               <strong>{settingsDraft.ai_allow_web_search ? "Ativada" : "Desativada"}</strong>
@@ -770,7 +881,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
         </div>
 
         <div className="settings-card settings-form ai-config-card">
-          <span>Restrições Absolutas</span>
+          <div className="settings-card-header">
+            <span>Restrições Absolutas</span>
+            {renderHelpTooltip("restrictions")}
+          </div>
           <label>
             <textarea
               className="large-textarea"
