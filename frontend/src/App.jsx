@@ -1685,9 +1685,19 @@ export default function App() {
 
   function resetTenantScopedUi() {
     setQuestions([]);
+    setAppData((current) => ({
+      ...current,
+      questions: [],
+      integrations: integrationState(),
+      aiSettings: {
+        ai_general_rules: "",
+        ai_product_knowledge: "",
+        ai_allow_web_search: false,
+        ai_absolute_restrictions: "",
+      },
+    }));
     setProductsSummary({ total: 0, active: 0, inactive: 0 });
     setIntegrationHealth(initialIntegrationHealth);
-    setIntegrations(integrationState());
     setSelectedId(null);
     setMarketplaceFilter("Todos");
     setPriorityFilter("Todos");
@@ -1696,15 +1706,6 @@ export default function App() {
     setQuestionNotice("");
     setAnswerNotice("");
     setAnswerError("");
-    setAppData((current) => ({
-      ...current,
-      aiSettings: {
-        ai_general_rules: "",
-        ai_product_knowledge: "",
-        ai_allow_web_search: false,
-        ai_absolute_restrictions: "",
-      },
-    }));
   }
 
   function switchCompany(companyId) {
@@ -1714,18 +1715,40 @@ export default function App() {
   }
 
   async function loadQuestionsFromDatabase() {
+    const requestCompanyId = getStoredCompanyId();
     const response = await apiFetch(`${API_URL}/questions`);
     const data = await response.json();
     if (!response.ok || !Array.isArray(data)) {
       throw new Error("Não foi possível carregar perguntas do banco.");
     }
-    setQuestions(data);
-    setSelectedId((current) =>
-      current && data.some((question) => question.id === current)
-        ? current
-        : data[0]?.id || null
+    console.log(
+      "QUESTIONS_RESPONSE",
+      {
+        company_id: requestCompanyId,
+        count: data.length,
+        sample: data.slice(0, 5).map((question) => [
+          question.external_id,
+          question.company_id,
+          question.product_title || question.product,
+          question.buyer,
+        ]),
+      }
     );
-    return data;
+    if (requestCompanyId !== getStoredCompanyId()) {
+      console.log("QUESTIONS_RESPONSE ignored stale company response", {
+        requested: requestCompanyId,
+        current: getStoredCompanyId(),
+      });
+      return [];
+    }
+    const tenantQuestions = data.filter((question) => question.company_id === requestCompanyId);
+    setQuestions(tenantQuestions);
+    setSelectedId((current) =>
+      current && tenantQuestions.some((question) => question.id === current)
+        ? current
+        : tenantQuestions[0]?.id || null
+    );
+    return tenantQuestions;
   }
 
   async function loadProductsSummary() {
@@ -1770,6 +1793,7 @@ export default function App() {
   }, [questions]);
 
   useEffect(() => {
+    resetTenantScopedUi();
     async function loadTenantContext() {
       try {
         const response = await apiFetch(`${API_URL}/me`);
