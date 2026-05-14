@@ -105,6 +105,9 @@ def ensure_mock_multitenant_companies(db: Session) -> None:
         company = db.get(Company, company_id)
         if company:
             logger.info("MULTITENANT_COMPANY_EXISTS id=%s", company_id)
+            if company.name != company_name:
+                company.name = company_name
+                logger.info("MULTITENANT_COMPANY_RENAMED id=%s", company_id)
         else:
             db.add(Company(id=company_id, name=company_name))
             db.flush()

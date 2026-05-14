@@ -7,7 +7,7 @@ DEFAULT_COMPANY_ID = "cpap_express"
 DEFAULT_PROVIDER = "mercado_livre"
 MOCK_COMPANIES = [
     (DEFAULT_COMPANY_ID, "CPAP Express"),
-    ("atlas_commerce", "Atlas Commerce"),
+    ("atlas_commerce", "Indusat"),
     ("nova_casa_imports", "Nova Casa Imports"),
 ]
 
