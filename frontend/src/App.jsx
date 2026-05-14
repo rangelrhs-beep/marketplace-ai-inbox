@@ -59,17 +59,19 @@ function getMockTenantContext() {
   return {
     company: { id: "cpap_express", name: "CPAP Express", plan: "Business" },
     user: {
-      id: "u-admin",
+      id: "admin",
       name: "Admin",
-      email: "admin@cpapexpress.com.br",
+      email: null,
       role: "platform_admin",
+    },
+    permissions: {
+      is_platform_admin: true,
+      can_switch_company: false,
     },
   };
 }
 
-const MOCK_TENANT_CONTEXT = getMockTenantContext();
-const CURRENT_COMPANY = MOCK_TENANT_CONTEXT.company;
-const CURRENT_USER = MOCK_TENANT_CONTEXT.user;
+const FALLBACK_TENANT_CONTEXT = getMockTenantContext();
 
 function integrationState(overrides = {}) {
   return initialIntegrations.map((integration) => ({
@@ -288,12 +290,11 @@ function isBackendIntegrationConnected(health) {
   return health.token_status === "valid" || health.token_status === "expired";
 }
 
-function applyBackendHealthToIntegrations(integrations, healthItems, companyId) {
+function applyBackendHealthToIntegrations(integrations, healthItems, companyId, companyName = "CPAP Express") {
   const healthById = new Map((healthItems || []).map((health) => [health.id, health]));
   const mercadoLivreHealth = healthById.get("mercado-livre");
-  const isCpapExpress = companyId === CURRENT_COMPANY.id;
   const isMercadoLivreConnected =
-    isCpapExpress && isBackendIntegrationConnected(mercadoLivreHealth);
+    Boolean(companyId) && isBackendIntegrationConnected(mercadoLivreHealth);
   const isTemporaryConnection =
     isMercadoLivreConnected && mercadoLivreHealth?.token_status === "missing_refresh_token";
 
@@ -309,7 +310,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId) 
         : isMercadoLivreConnected
           ? "Conectado"
           : "Não conectado",
-      store: isMercadoLivreConnected ? "CPAP Express Mercado Livre" : "",
+      store: isMercadoLivreConnected ? `${companyName} Mercado Livre` : "",
       lastSync: isMercadoLivreConnected ? mercadoLivreHealth?.last_sync || new Date().toISOString() : "",
       token_status: mercadoLivreHealth?.token_status || "missing",
       last_error: mercadoLivreHealth?.last_error || "",
@@ -476,6 +477,8 @@ function ConnectModal({ integration, onCancel, onConfirm, error }) {
 }
 
 function IntegrationsPage({
+  currentCompany,
+  currentUser,
   integrations,
   integrationHealth,
   onConnect,
@@ -499,11 +502,11 @@ function IntegrationsPage({
     <section className="integrations-page">
       <header className="topbar">
         <div>
-          <span>CPAP Express · Marketplaces e operação</span>
+          <span>{currentCompany?.name || "CPAP Express"} · Marketplaces e operação</span>
           <h1>Integrações</h1>
         </div>
         <div className="topbar-actions">
-          <span className="user-badge">Admin</span>
+          <span className="user-badge">{currentUser?.name || "Admin"}</span>
         </div>
       </header>
 
@@ -593,7 +596,7 @@ function IntegrationsPage({
   );
 }
 
-function SettingsPage({ appData, onSettingsSaved }) {
+function SettingsPage({ appData, currentCompany, currentUser, onSettingsSaved }) {
   const savedSettings = {
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
     ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
@@ -838,11 +841,11 @@ function SettingsPage({ appData, onSettingsSaved }) {
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>CPAP Express · Empresa e IA</span>
+          <span>{currentCompany?.name || "CPAP Express"} · Empresa e IA</span>
           <h1>Configurações IA</h1>
         </div>
         <div className="topbar-actions">
-          <span className="user-badge">Admin</span>
+          <span className="user-badge">{currentUser?.name || "Admin"}</span>
         </div>
       </header>
 
@@ -924,7 +927,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
   );
 }
 
-function AnalyticsPage({ questions, appData, productsSummary }) {
+function AnalyticsPage({ questions, appData, productsSummary, currentCompany, currentUser }) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
   const highPriority = questions.filter((question) => question.priority === "Alta").length;
@@ -933,11 +936,11 @@ function AnalyticsPage({ questions, appData, productsSummary }) {
     <section className="settings-page">
       <header className="topbar">
         <div>
-          <span>CPAP Express · Operação</span>
+          <span>{currentCompany?.name || "CPAP Express"} · Operação</span>
           <h1>Analytics</h1>
         </div>
         <div className="topbar-actions">
-          <span className="user-badge">Admin</span>
+          <span className="user-badge">{currentUser?.name || "Admin"}</span>
         </div>
       </header>
 
@@ -1513,7 +1516,9 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 }
 
 export default function App() {
-  const currentUser = CURRENT_USER;
+  const [tenantContext, setTenantContext] = useState(FALLBACK_TENANT_CONTEXT);
+  const currentUser = tenantContext.user;
+  const currentCompany = tenantContext.company;
   const [appData, setAppData] = useState(initialAppData);
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
@@ -1594,13 +1599,13 @@ export default function App() {
       const mercadoLivreHealth = data.filter((health) => health.id === "mercado-livre");
       setIntegrationHealth(mercadoLivreHealth);
       setIntegrations((current) =>
-        applyBackendHealthToIntegrations(current, mercadoLivreHealth, CURRENT_COMPANY.id)
+        applyBackendHealthToIntegrations(current, mercadoLivreHealth, currentCompany.id, currentCompany.name)
       );
       return mercadoLivreHealth;
     } catch {
       setIntegrationHealth(initialIntegrationHealth);
       setIntegrations((current) =>
-        applyBackendHealthToIntegrations(current, initialIntegrationHealth, CURRENT_COMPANY.id)
+        applyBackendHealthToIntegrations(current, initialIntegrationHealth, currentCompany.id, currentCompany.name)
       );
       return initialIntegrationHealth;
     }
@@ -1611,6 +1616,30 @@ export default function App() {
   }, [questions]);
 
   useEffect(() => {
+    async function loadTenantContext() {
+      try {
+        const response = await fetch(`${API_URL}/me`);
+        const tenant = await response.json();
+        if (!response.ok) throw new Error("Tenant context unavailable");
+        setTenantContext({
+          user: {
+            ...FALLBACK_TENANT_CONTEXT.user,
+            ...(tenant.user || {}),
+          },
+          company: {
+            ...FALLBACK_TENANT_CONTEXT.company,
+            ...(tenant.company || {}),
+          },
+          permissions: {
+            ...FALLBACK_TENANT_CONTEXT.permissions,
+            ...(tenant.permissions || {}),
+          },
+        });
+      } catch {
+        setTenantContext(FALLBACK_TENANT_CONTEXT);
+      }
+    }
+
     async function loadPersistedQuestions() {
       try {
         await loadQuestionsFromDatabase();
@@ -1640,6 +1669,7 @@ export default function App() {
       }
     }
 
+    loadTenantContext();
     loadPersistedQuestions();
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
@@ -1647,7 +1677,7 @@ export default function App() {
 
   useEffect(() => {
     refreshIntegrationHealth();
-  }, []);
+  }, [currentCompany.id]);
 
   useEffect(() => {
     const rootState = {
@@ -2148,7 +2178,7 @@ export default function App() {
             ? {
                 ...integration,
                 status: "Conectado",
-                store: integration.store || "CPAP Express Mercado Livre",
+                store: integration.store || `${currentCompany?.name || "CPAP Express"} Mercado Livre`,
                 lastSync: new Date().toISOString(),
                 token_status: "valid",
               }
@@ -2250,6 +2280,8 @@ export default function App() {
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
         {isIntegrations ? (
           <IntegrationsPage
+            currentCompany={currentCompany}
+            currentUser={currentUser}
             integrations={integrations}
             integrationHealth={integrationHealth}
             onConnect={openConnectModal}
@@ -2272,6 +2304,8 @@ export default function App() {
         ) : isSettings ? (
           <SettingsPage
             appData={appData}
+            currentCompany={currentCompany}
+            currentUser={currentUser}
             onSettingsSaved={(settings) =>
               setAppData((current) => ({
                 ...current,
@@ -2286,17 +2320,23 @@ export default function App() {
             }
           />
         ) : isAnalytics ? (
-          <AnalyticsPage questions={visibleQuestions} appData={appData} productsSummary={productsSummary} />
+          <AnalyticsPage
+            questions={visibleQuestions}
+            appData={appData}
+            productsSummary={productsSummary}
+            currentCompany={currentCompany}
+            currentUser={currentUser}
+          />
         ) : (
           <>
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
           <header className="topbar">
             <div>
-              <span>CPAP Express</span>
+              <span>{currentCompany?.name || "CPAP Express"}</span>
               <h1>{active}</h1>
             </div>
             <div className="topbar-actions">
-              <span className="user-badge">Admin</span>
+              <span className="user-badge">{currentUser?.name || "Admin"}</span>
             </div>
           </header>
 
@@ -2367,7 +2407,7 @@ export default function App() {
                   <PlugZap size={30} />
                 </div>
                 <h2>{emptyQuestionTitle}</h2>
-                <p>Conecte o Mercado Livre da CPAP Express para buscar perguntas reais.</p>
+                <p>Conecte o Mercado Livre da {currentCompany?.name || "CPAP Express"} para buscar perguntas reais.</p>
                 <button className="primary" onClick={() => changeSection("Integrações")}>
                   <PlugZap size={17} />
                   Abrir integrações
