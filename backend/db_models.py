@@ -139,6 +139,10 @@ class CompanySettings(Base):
     closing = Column(Text, nullable=False, default="Ficamos à disposição.")
     tone = Column(String(255), nullable=False, default="Técnico, claro e confiável")
     custom_prompt = Column(Text, nullable=True)
+    ai_general_rules = Column(Text, nullable=True)
+    ai_product_knowledge = Column(Text, nullable=True)
+    ai_allow_web_search = Column(Boolean, nullable=False, default=False)
+    ai_absolute_restrictions = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

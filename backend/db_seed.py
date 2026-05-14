@@ -55,6 +55,10 @@ def seed_defaults(db: Session) -> None:
                 closing="Ficamos à disposição.",
                 tone="Técnico, claro e confiável",
                 custom_prompt="",
+                ai_general_rules="",
+                ai_product_knowledge="",
+                ai_allow_web_search=False,
+                ai_absolute_restrictions="",
             )
         )
 
