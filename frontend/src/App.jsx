@@ -359,13 +359,6 @@ function Sidebar({ active, companies, currentCompany, permissions, onCompanyChan
         })}
       </nav>
 
-      <CompanySwitcher
-        companies={companies}
-        currentCompany={currentCompany}
-        permissions={permissions}
-        onChange={onCompanyChange}
-      />
-
       <div className="sidebar-card">
         <span>Operação real</span>
         <strong>ML</strong>
@@ -376,14 +369,23 @@ function Sidebar({ active, companies, currentCompany, permissions, onCompanyChan
 }
 
 function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
-  if (!permissions?.can_switch_company || companies.length <= 1) return null;
+  const canSwitch = permissions?.can_switch_company;
+  if (!canSwitch || companies.length <= 1) {
+    if (canSwitch) console.log("Company selector fallback", { companiesCount: companies.length, companies });
+    return (
+      <div className="company-title-fallback">
+        <span>{currentCompany?.name || "CPAP Express"}</span>
+        <small>Empresas carregadas: {companies.length}</small>
+      </div>
+    );
+  }
   return (
     <div className="company-switcher">
       <label>
-        Empresa
         <select
           value={currentCompany?.id || "cpap_express"}
           onChange={(event) => onChange(event.target.value)}
+          aria-label="Selecionar empresa"
         >
           {companies.map((company) => (
             <option key={company.id} value={company.id}>
@@ -391,6 +393,7 @@ function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
             </option>
           ))}
         </select>
+        <small>Empresas carregadas: {companies.length}</small>
       </label>
     </div>
   );
@@ -1720,9 +1723,11 @@ export default function App() {
         const data = await response.json();
         console.log("/companies response", data);
         if (response.ok && Array.isArray(data)) {
+          if (data.length <= 1) console.log("/companies returned one or zero companies", data);
           setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
         }
       } catch {
+        console.log("/companies request failed; using fallback company");
         setCompanies([FALLBACK_TENANT_CONTEXT.company]);
       }
     }
@@ -1756,8 +1761,7 @@ export default function App() {
       }
     }
 
-    loadTenantContext();
-    loadCompanies();
+    loadTenantContext().then(loadCompanies);
     loadPersistedQuestions();
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
@@ -2415,7 +2419,12 @@ export default function App() {
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
           <header className="topbar">
             <div>
-              <span>{currentCompany?.name || "CPAP Express"}</span>
+              <CompanySwitcher
+                companies={companies}
+                currentCompany={currentCompany}
+                permissions={currentPermissions}
+                onChange={switchCompany}
+              />
               <h1>{active}</h1>
             </div>
             <div className="topbar-actions">

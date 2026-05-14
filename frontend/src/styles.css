@@ -238,15 +238,35 @@ button:disabled {
   font-weight: 800;
 }
 
+.company-switcher label,
+.company-title-fallback {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+}
+
 .company-switcher select {
-  min-width: 190px;
+  min-width: 230px;
   height: 44px;
-  margin-left: 8px;
   border: 1px solid #dce3f1;
   border-radius: 14px;
   padding: 0 12px;
   background: white;
   color: #172033;
+  font-weight: 800;
+}
+
+.company-switcher small,
+.company-title-fallback small {
+  color: #8a94a8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.company-title-fallback span {
+  color: #647189;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .user-badge {
