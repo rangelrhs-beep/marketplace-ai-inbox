@@ -3950,7 +3950,7 @@ def blocked_answer_response(
 def answer_mercadolivre_question(
     question_id: str,
     payload: MercadoLivreAnswerPayload,
-    request: Request | None = None,
+    request: Request,
     db: Session = Depends(get_db),
     company_id: str | None = None,
 ):
