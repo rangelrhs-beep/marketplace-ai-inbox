@@ -307,7 +307,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId) 
   });
 }
 
-function Sidebar({ active, setActive }) {
+function Sidebar({ active, onNavigate }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -327,7 +327,7 @@ function Sidebar({ active, setActive }) {
             <button
               className={`nav-item ${active === item.label ? "active" : ""}`}
               key={item.label}
-              onClick={() => setActive(item.label)}
+              onClick={() => onNavigate(item.label)}
             >
               <Icon size={19} />
               <span>{item.label}</span>
@@ -1640,21 +1640,86 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("ml_connected") !== "true") return;
-    window.history.replaceState({}, "", window.location.pathname);
+    const rootState = {
+      marketplaceAiApp: true,
+      view: "screen",
+      active: "Inbox",
+      marketplaceFilter: "Todos",
+      priorityFilter: "Todos",
+      answeredSourceFilter: "Todas",
+    };
+    if (!window.history.state?.marketplaceAiApp) {
+      window.history.replaceState(rootState, "", window.location.pathname + window.location.search);
+      window.history.pushState(rootState, "", window.location.pathname + window.location.search);
+    }
   }, []);
 
   useEffect(() => {
-    function handleBrowserBack() {
-      if (showConversation) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("ml_connected") !== "true") return;
+    window.history.replaceState(
+      window.history.state?.marketplaceAiApp
+        ? { ...window.history.state }
+        : {
+            marketplaceAiApp: true,
+            view: "screen",
+            active: "Inbox",
+            marketplaceFilter: "Todos",
+            priorityFilter: "Todos",
+            answeredSourceFilter: "Todas",
+          },
+      "",
+      window.location.pathname
+    );
+  }, []);
+
+  useEffect(() => {
+    function handleBrowserBack(event) {
+      const state = event.state;
+      if (!state?.marketplaceAiApp) {
+        const fallbackState = {
+          marketplaceAiApp: true,
+          view: "screen",
+          active: "Inbox",
+          marketplaceFilter: "Todos",
+          priorityFilter: "Todos",
+          answeredSourceFilter: "Todas",
+        };
+        setActive("Inbox");
+        setMarketplaceFilter("Todos");
+        setPriorityFilter("Todos");
+        setAnsweredSourceFilter("Todas");
         setShowConversation(false);
+        window.history.pushState(fallbackState, "", window.location.pathname);
+        return;
+      }
+
+      setActive(state.active || "Inbox");
+      setMarketplaceFilter(state.marketplaceFilter || "Todos");
+      setPriorityFilter(state.priorityFilter || "Todos");
+      setAnsweredSourceFilter(state.answeredSourceFilter || "Todas");
+      setShowConversation(state.view === "question");
+      if (state.questionId) setSelectedId(state.questionId);
+
+      if ((state.active || "Inbox") === "Inbox" && state.view !== "question") {
+        window.history.pushState(
+          {
+            marketplaceAiApp: true,
+            view: "screen",
+            active: "Inbox",
+            marketplaceFilter: state.marketplaceFilter || "Todos",
+            priorityFilter: state.priorityFilter || "Todos",
+            answeredSourceFilter: state.answeredSourceFilter || "Todas",
+          },
+          "",
+          window.location.pathname
+        );
       }
     }
 
     window.addEventListener("popstate", handleBrowserBack);
     return () => window.removeEventListener("popstate", handleBrowserBack);
-  }, [showConversation]);
+  }, []);
 
   const visibleQuestions = questions;
 
@@ -1680,7 +1745,6 @@ export default function App() {
       const answeredSourceMatches =
         active !== "Respondidas" ||
         answeredSourceFilter === "Todas" ||
-        (answeredSourceFilter === "unknown" && !question.answered_source) ||
         normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
       return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
     });
@@ -1712,12 +1776,34 @@ export default function App() {
       ? "info"
       : "success";
 
+  function pushAppHistory(state) {
+    window.history.pushState(
+      {
+        marketplaceAiApp: true,
+        view: "screen",
+        active,
+        marketplaceFilter,
+        priorityFilter,
+        answeredSourceFilter,
+        ...state,
+      },
+      "",
+      window.location.pathname
+    );
+  }
+
   function applyMetricFilter(type) {
     setMarketplaceFilter("Todos");
     setAnsweredSourceFilter("Todas");
     setShowConversation(false);
 
     if (type === "pending") {
+      pushAppHistory({
+        active: "Pendentes",
+        marketplaceFilter: "Todos",
+        priorityFilter: "Todos",
+        answeredSourceFilter: "Todas",
+      });
       setActive("Pendentes");
       setPriorityFilter("Todos");
       setSelectedId(visibleQuestions.find((question) => question.status === "Pendente")?.id || null);
@@ -1725,12 +1811,24 @@ export default function App() {
     }
 
     if (type === "answered") {
+      pushAppHistory({
+        active: "Respondidas",
+        marketplaceFilter: "Todos",
+        priorityFilter: "Todos",
+        answeredSourceFilter: "Todas",
+      });
       setActive("Respondidas");
       setPriorityFilter("Todos");
       setSelectedId(visibleQuestions.find((question) => question.status === "Respondida")?.id || null);
       return;
     }
 
+    pushAppHistory({
+      active: "Inbox",
+      marketplaceFilter: "Todos",
+      priorityFilter: "Alta",
+      answeredSourceFilter: "Todas",
+    });
     setActive("Inbox");
     setPriorityFilter("Alta");
     setSelectedId(visibleQuestions.find((question) => question.priority === "Alta")?.id || null);
@@ -1751,7 +1849,7 @@ export default function App() {
 
   function selectQuestion(id) {
     if (!(showConversation && selectedId === id)) {
-      window.history.pushState({ marketplaceAiView: "question", questionId: id }, "");
+      pushAppHistory({ view: "question", questionId: id });
     }
     setQuestionNotice("");
     setSelectedId(id);
@@ -1760,14 +1858,14 @@ export default function App() {
 
   function openEditorForQuestion(id) {
     if (!(showConversation && selectedId === id)) {
-      window.history.pushState({ marketplaceAiView: "question", questionId: id }, "");
+      pushAppHistory({ view: "question", questionId: id });
     }
     setSelectedId(id);
     setShowConversation(true);
   }
 
   function closeConversation() {
-    if (window.history.state?.marketplaceAiView === "question") {
+    if (window.history.state?.marketplaceAiApp && window.history.state?.view === "question") {
       window.history.back();
       return;
     }
@@ -1775,6 +1873,12 @@ export default function App() {
   }
 
   function changeSection(section) {
+    pushAppHistory({
+      view: "screen",
+      active: section,
+      priorityFilter: "Todos",
+      answeredSourceFilter: section === "Respondidas" ? answeredSourceFilter : "Todas",
+    });
     setActive(section);
     setPriorityFilter("Todos");
     setShowConversation(false);
@@ -2131,7 +2235,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar active={active} setActive={changeSection} />
+      <Sidebar active={active} onNavigate={changeSection} />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
         {isIntegrations ? (
@@ -2241,7 +2345,6 @@ export default function App() {
                   <option value="Todas">Todas</option>
                   <option value="app">Respondidas pelo app</option>
                   <option value="portal">Respondidas pelo portal</option>
-                  <option value="unknown">Origem não identificada</option>
                 </select>
               </label>
             ) : null}
