@@ -584,6 +584,12 @@ function IntegrationsPage({
 }
 
 function SettingsPage({ appData, onSettingsSaved }) {
+  const savedSettings = {
+    ai_general_rules: appData.aiSettings.ai_general_rules || "",
+    ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
+    ai_allow_web_search: Boolean(appData.aiSettings.ai_allow_web_search),
+    ai_absolute_restrictions: appData.aiSettings.ai_absolute_restrictions || "",
+  };
   const [settingsDraft, setSettingsDraft] = useState({
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
     ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
@@ -592,6 +598,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
   });
   const [settingsMessage, setSettingsMessage] = useState("");
   const [savingSection, setSavingSection] = useState("");
+  const [failedSection, setFailedSection] = useState("");
 
   useEffect(() => {
     setSettingsDraft({
@@ -609,6 +616,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
 
   async function saveSettings(section) {
     setSettingsMessage("");
+    setFailedSection("");
     setSavingSection(section);
     try {
       const response = await fetch(`${API_URL}/company/settings`, {
@@ -621,10 +629,43 @@ function SettingsPage({ appData, onSettingsSaved }) {
       onSettingsSaved(saved);
       setSettingsMessage("Configurações salvas.");
     } catch (error) {
+      setFailedSection(section);
       setSettingsMessage(error.message || "Não foi possível salvar as configurações.");
     } finally {
       setSavingSection("");
     }
+  }
+
+  function updateSettingsDraft(patch) {
+    setFailedSection("");
+    setSettingsDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function isSectionDirty(section) {
+    const sectionFields = {
+      general: ["ai_general_rules"],
+      knowledge: ["ai_product_knowledge"],
+      web: ["ai_allow_web_search"],
+      restrictions: ["ai_absolute_restrictions"],
+    };
+    return sectionFields[section].some((field) => settingsDraft[field] !== savedSettings[field]);
+  }
+
+  function hasSavedSectionContent(section) {
+    const savedContent = {
+      general: savedSettings.ai_general_rules.trim().length > 0,
+      knowledge: savedSettings.ai_product_knowledge.trim().length > 0,
+      web: savedSettings.ai_allow_web_search,
+      restrictions: savedSettings.ai_absolute_restrictions.trim().length > 0,
+    };
+    return savedContent[section];
+  }
+
+  function getSaveButtonLabel(section) {
+    if (savingSection === section) return "Salvando...";
+    if (failedSection === section) return "Salvar";
+    if (!isSectionDirty(section) && hasSavedSectionContent(section)) return "Editar";
+    return "Salvar";
   }
 
   return (
@@ -632,7 +673,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
       <header className="topbar">
         <div>
           <span>CPAP Express · Empresa e IA</span>
-          <h1>Configurações</h1>
+          <h1>Configurações IA</h1>
         </div>
         <div className="topbar-actions">
           <span className="user-badge">Admin</span>
@@ -642,17 +683,16 @@ function SettingsPage({ appData, onSettingsSaved }) {
       <section className="settings-layout ai-config-layout">
         <div className="settings-card settings-form ai-config-card">
           <span>Regras Gerais da IA</span>
-          <h2>Configurações IA</h2>
           <label>
             <textarea
               className="large-textarea"
               value={settingsDraft.ai_general_rules}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_general_rules: event.target.value }))}
+              onChange={(event) => updateSettingsDraft({ ai_general_rules: event.target.value })}
             />
           </label>
           <button className="primary" onClick={() => saveSettings("general")} disabled={savingSection === "general"}>
             {savingSection === "general" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            Salvar
+            {getSaveButtonLabel("general")}
           </button>
         </div>
 
@@ -662,12 +702,12 @@ function SettingsPage({ appData, onSettingsSaved }) {
             <textarea
               className="xl-textarea"
               value={settingsDraft.ai_product_knowledge}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_product_knowledge: event.target.value }))}
+              onChange={(event) => updateSettingsDraft({ ai_product_knowledge: event.target.value })}
             />
           </label>
           <button className="primary" onClick={() => saveSettings("knowledge")} disabled={savingSection === "knowledge"}>
             {savingSection === "knowledge" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            Salvar
+            {getSaveButtonLabel("knowledge")}
           </button>
         </div>
 
@@ -681,7 +721,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
             <button
               type="button"
               className={`toggle-switch ${settingsDraft.ai_allow_web_search ? "active" : ""}`}
-              onClick={() => setSettingsDraft((current) => ({ ...current, ai_allow_web_search: !current.ai_allow_web_search }))}
+              onClick={() => updateSettingsDraft({ ai_allow_web_search: !settingsDraft.ai_allow_web_search })}
               aria-pressed={settingsDraft.ai_allow_web_search}
             >
               <span />
@@ -690,7 +730,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
           <p className="settings-warning">Mesmo utilizando fontes externas, a IA nunca deve afirmar informações não confirmadas oficialmente.</p>
           <button className="primary" onClick={() => saveSettings("web")} disabled={savingSection === "web"}>
             {savingSection === "web" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            Salvar
+            {getSaveButtonLabel("web")}
           </button>
         </div>
 
@@ -700,12 +740,12 @@ function SettingsPage({ appData, onSettingsSaved }) {
             <textarea
               className="large-textarea"
               value={settingsDraft.ai_absolute_restrictions}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, ai_absolute_restrictions: event.target.value }))}
+              onChange={(event) => updateSettingsDraft({ ai_absolute_restrictions: event.target.value })}
             />
           </label>
           <button className="primary" onClick={() => saveSettings("restrictions")} disabled={savingSection === "restrictions"}>
             {savingSection === "restrictions" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            Salvar
+            {getSaveButtonLabel("restrictions")}
           </button>
         </div>
         {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
