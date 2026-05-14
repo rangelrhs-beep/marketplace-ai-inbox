@@ -19,6 +19,18 @@ import {
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
+const SELECTED_COMPANY_STORAGE_KEY = "marketplace_ai_selected_company_id";
+
+function getStoredCompanyId() {
+  return localStorage.getItem(SELECTED_COMPANY_STORAGE_KEY) || "cpap_express";
+}
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const companyId = getStoredCompanyId();
+  if (companyId) headers.set("X-Company-ID", companyId);
+  return fetch(url, { ...options, headers });
+}
 
 const navItems = [
   { label: "Inbox", icon: Inbox },
@@ -318,7 +330,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
   });
 }
 
-function Sidebar({ active, onNavigate }) {
+function Sidebar({ active, companies, currentCompany, permissions, onCompanyChange, onNavigate }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -347,12 +359,40 @@ function Sidebar({ active, onNavigate }) {
         })}
       </nav>
 
+      <CompanySwitcher
+        companies={companies}
+        currentCompany={currentCompany}
+        permissions={permissions}
+        onChange={onCompanyChange}
+      />
+
       <div className="sidebar-card">
         <span>Operação real</span>
         <strong>ML</strong>
         <p>Perguntas salvas no banco, revisadas com IA e enviadas ao Mercado Livre.</p>
       </div>
     </aside>
+  );
+}
+
+function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
+  if (!permissions?.can_switch_company) return null;
+  return (
+    <div className="company-switcher">
+      <label>
+        Empresa
+        <select
+          value={currentCompany?.id || "cpap_express"}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {companies.map((company) => (
+            <option key={company.id} value={company.id}>
+              {company.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
   );
 }
 
@@ -684,7 +724,7 @@ function SettingsPage({ appData, currentCompany, currentUser, onSettingsSaved })
     setSettingsMessage("");
     setSavingSection(section);
     try {
-      const response = await fetch(`${API_URL}/company/settings`, {
+      const response = await apiFetch(`${API_URL}/company/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify(settingsDraft),
@@ -1336,7 +1376,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   }
 
   async function requestAiRewrite(originalResponse, instruction) {
-    const response = await fetch(AI_REWRITE_URL, {
+    const response = await apiFetch(AI_REWRITE_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1517,8 +1557,11 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 
 export default function App() {
   const [tenantContext, setTenantContext] = useState(FALLBACK_TENANT_CONTEXT);
+  const [companies, setCompanies] = useState([FALLBACK_TENANT_CONTEXT.company]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState(getStoredCompanyId);
   const currentUser = tenantContext.user;
   const currentCompany = tenantContext.company;
+  const currentPermissions = tenantContext.permissions;
   const [appData, setAppData] = useState(initialAppData);
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
@@ -1559,8 +1602,38 @@ export default function App() {
     }));
   }
 
+  function resetTenantScopedUi() {
+    setQuestions([]);
+    setProductsSummary({ total: 0, active: 0, inactive: 0 });
+    setIntegrationHealth(initialIntegrationHealth);
+    setIntegrations(integrationState());
+    setSelectedId(null);
+    setMarketplaceFilter("Todos");
+    setPriorityFilter("Todos");
+    setAnsweredSourceFilter("Todas");
+    setShowConversation(false);
+    setQuestionNotice("");
+    setAnswerNotice("");
+    setAnswerError("");
+    setAppData((current) => ({
+      ...current,
+      aiSettings: {
+        ai_general_rules: "",
+        ai_product_knowledge: "",
+        ai_allow_web_search: false,
+        ai_absolute_restrictions: "",
+      },
+    }));
+  }
+
+  function switchCompany(companyId) {
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, companyId);
+    resetTenantScopedUi();
+    setSelectedCompanyId(companyId);
+  }
+
   async function loadQuestionsFromDatabase() {
-    const response = await fetch(`${API_URL}/questions`);
+    const response = await apiFetch(`${API_URL}/questions`);
     const data = await response.json();
     if (!response.ok || !Array.isArray(data)) {
       throw new Error("Não foi possível carregar perguntas do banco.");
@@ -1575,7 +1648,7 @@ export default function App() {
   }
 
   async function loadProductsSummary() {
-    const response = await fetch(`${API_URL}/products`);
+    const response = await apiFetch(`${API_URL}/products`);
     const products = await response.json();
     if (!response.ok || !Array.isArray(products)) {
       throw new Error("Não foi possível carregar produtos cacheados.");
@@ -1591,7 +1664,7 @@ export default function App() {
 
   async function refreshIntegrationHealth() {
     try {
-      const response = await fetch(`${API_URL}/integrations/health`);
+      const response = await apiFetch(`${API_URL}/integrations/health`);
       const data = await response.json();
       if (!response.ok || !Array.isArray(data)) {
         throw new Error("Invalid integration health response");
@@ -1618,7 +1691,7 @@ export default function App() {
   useEffect(() => {
     async function loadTenantContext() {
       try {
-        const response = await fetch(`${API_URL}/me`);
+        const response = await apiFetch(`${API_URL}/me`);
         const tenant = await response.json();
         if (!response.ok) throw new Error("Tenant context unavailable");
         setTenantContext({
@@ -1640,6 +1713,18 @@ export default function App() {
       }
     }
 
+    async function loadCompanies() {
+      try {
+        const response = await apiFetch(`${API_URL}/companies`);
+        const data = await response.json();
+        if (response.ok && Array.isArray(data)) {
+          setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
+        }
+      } catch {
+        setCompanies([FALLBACK_TENANT_CONTEXT.company]);
+      }
+    }
+
     async function loadPersistedQuestions() {
       try {
         await loadQuestionsFromDatabase();
@@ -1650,7 +1735,7 @@ export default function App() {
 
     async function loadCompanySettings() {
       try {
-        const response = await fetch(`${API_URL}/company/settings`);
+        const response = await apiFetch(`${API_URL}/company/settings`);
         const settings = await response.json();
         if (response.ok) {
           setAppData((current) => ({
@@ -1670,14 +1755,15 @@ export default function App() {
     }
 
     loadTenantContext();
+    loadCompanies();
     loadPersistedQuestions();
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
-  }, []);
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     refreshIntegrationHealth();
-  }, [currentCompany.id]);
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     const rootState = {
@@ -1931,7 +2017,7 @@ export default function App() {
       if (!targetQuestion) return "";
 
       try {
-        const response = await fetch(`${API_URL}/questions/generate`, {
+      const response = await apiFetch(`${API_URL}/questions/generate`, {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8" },
           body: JSON.stringify({ question_id: id, external_id: targetQuestion.external_id, force: true }),
@@ -2001,7 +2087,7 @@ export default function App() {
     if (isRealMercadoLivreQuestion) {
       setSendingAnswerId(id);
       try {
-        const response = await fetch(`${API_URL}/questions/answer`, {
+        const response = await apiFetch(`${API_URL}/questions/answer`, {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8" },
           body: JSON.stringify({
@@ -2088,7 +2174,7 @@ export default function App() {
     if (id === "mercado-livre") {
       setConnectError("");
       try {
-        const response = await fetch(`${API_URL}/integrations/mercadolivre/auth-url`);
+        const response = await apiFetch(`${API_URL}/integrations/mercadolivre/auth-url`);
         const data = await response.json().catch(() => ({}));
         const authUrl = data.auth_url || data.url;
         if (response.ok && authUrl) {
@@ -2112,7 +2198,7 @@ export default function App() {
     setDisconnectingMl(true);
     setQuestionNotice("");
     try {
-      const response = await fetch(`${API_URL}/integrations/mercadolivre/disconnect`, {
+      const response = await apiFetch(`${API_URL}/integrations/mercadolivre/disconnect`, {
         method: "POST",
       });
       const data = await response.json().catch(() => ({}));
@@ -2134,7 +2220,7 @@ export default function App() {
     setFetchingMlQuestions(true);
     setQuestionNotice("");
     try {
-      const response = await fetch(`${API_URL}/integrations/mercadolivre/questions`);
+      const response = await apiFetch(`${API_URL}/integrations/mercadolivre/questions`);
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
@@ -2172,19 +2258,7 @@ export default function App() {
       const databaseQuestions = await loadQuestionsFromDatabase();
       setShowConversation(false);
       setMarketplaceFilter("Todos");
-      setIntegrations((current) =>
-        current.map((integration) =>
-          integration.id === "mercado-livre"
-            ? {
-                ...integration,
-                status: "Conectado",
-                store: integration.store || `${currentCompany?.name || "CPAP Express"} Mercado Livre`,
-                lastSync: new Date().toISOString(),
-                token_status: "valid",
-              }
-            : integration
-          )
-      );
+      await refreshIntegrationHealth();
 
       if (syncedQuestions.length === 0 && databaseQuestions.length === 0) {
         setQuestionNotice("Nenhuma pergunta pendente encontrada no Mercado Livre.");
@@ -2201,7 +2275,7 @@ export default function App() {
     setSyncingProducts(true);
     setQuestionNotice("");
     try {
-      const response = await fetch(`${API_URL}/integrations/mercadolivre/products/sync`, {
+      const response = await apiFetch(`${API_URL}/integrations/mercadolivre/products/sync`, {
         method: "POST",
       });
       const data = await response.json().catch(() => ({}));
@@ -2232,7 +2306,7 @@ export default function App() {
   async function testIntegrationHealth(id) {
     setTestingIntegrationId(id);
     try {
-      const response = await fetch(`${API_URL}/integrations/${id}/test`, { method: "POST" });
+      const response = await apiFetch(`${API_URL}/integrations/${id}/test`, { method: "POST" });
       const result = await response.json();
       setIntegrationHealth((current) =>
         current.map((health) =>
@@ -2275,7 +2349,14 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar active={active} onNavigate={changeSection} />
+      <Sidebar
+        active={active}
+        companies={companies}
+        currentCompany={currentCompany}
+        permissions={currentPermissions}
+        onCompanyChange={switchCompany}
+        onNavigate={changeSection}
+      />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
         {isIntegrations ? (
