@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 from dotenv import load_dotenv
@@ -45,6 +45,33 @@ ML_BUYER_CACHE: dict[str, dict[str, Any]] = {}
 PRODUCT_SYNC_SCHEDULE_HOURS = (0, 6, 12, 18)
 PRODUCT_SYNC_SCHEDULE_TZ = ZoneInfo("America/Sao_Paulo")
 PRODUCT_SYNC_SCHEDULE_LOCK = threading.Lock()
+
+
+# TODO auth: replace mocked tenant context with real session
+# TODO admin: allow platform admin company selector
+# TODO OAuth: include company_id in Mercado Livre state
+# TODO webhook: route by seller_id to integration/company
+def get_current_company_id(request: Request | None = None) -> str:
+    return DEFAULT_COMPANY_ID
+
+
+def get_current_user_id(request: Request | None = None) -> str | None:
+    return "admin"
+
+
+def get_current_user_role(request: Request | None = None) -> str:
+    return "platform_admin"
+
+
+def log_tenant_context(request: Request | None = None) -> tuple[str, str | None, str]:
+    company_id = get_current_company_id(request)
+    user_id = get_current_user_id(request)
+    role = get_current_user_role(request)
+    if request is None or not getattr(request.state, "tenant_context_logged", False):
+        logger.info("TENANT_CONTEXT company_id=%s user_id=%s role=%s", company_id, user_id, role)
+        if request is not None:
+            request.state.tenant_context_logged = True
+    return company_id, user_id, role
 
 
 def init_database() -> None:
@@ -536,15 +563,20 @@ def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -
     return enriched
 
 
-def get_cached_product_for_question(db: Session | None, raw_payload: dict[str, Any]) -> ProductCache | None:
+def get_cached_product_for_question(
+    db: Session | None,
+    raw_payload: dict[str, Any],
+    company_id: str | None = None,
+) -> ProductCache | None:
     item_id = extract_question_item_id(raw_payload)
     if not db or not item_id:
         return None
+    resolved_company_id = company_id or get_current_company_id()
     try:
         return (
             db.query(ProductCache)
             .filter(
-                ProductCache.company_id == DEFAULT_COMPANY_ID,
+                ProductCache.company_id == resolved_company_id,
                 ProductCache.provider == DEFAULT_PROVIDER,
                 ProductCache.external_id == item_id,
             )
@@ -653,10 +685,11 @@ def parse_datetime(value: Any) -> datetime | None:
         return None
 
 
-def get_default_settings(db: Session) -> CompanySettings:
+def get_default_settings(db: Session, company_id: str | None = None) -> CompanySettings:
+    resolved_company_id = company_id or get_current_company_id()
     settings = (
         db.query(CompanySettings)
-        .filter(CompanySettings.company_id == DEFAULT_COMPANY_ID)
+        .filter(CompanySettings.company_id == resolved_company_id)
         .first()
     )
     if settings:
@@ -664,16 +697,17 @@ def get_default_settings(db: Session) -> CompanySettings:
     seed_defaults(db)
     return (
         db.query(CompanySettings)
-        .filter(CompanySettings.company_id == DEFAULT_COMPANY_ID)
+        .filter(CompanySettings.company_id == resolved_company_id)
         .one()
     )
 
 
-def get_ml_integration(db: Session) -> Integration:
+def get_ml_integration(db: Session, company_id: str | None = None) -> Integration:
+    resolved_company_id = company_id or get_current_company_id()
     integration = (
         db.query(Integration)
         .filter(
-            Integration.company_id == DEFAULT_COMPANY_ID,
+            Integration.company_id == resolved_company_id,
             Integration.provider == DEFAULT_PROVIDER,
         )
         .first()
@@ -684,14 +718,19 @@ def get_ml_integration(db: Session) -> Integration:
     return (
         db.query(Integration)
         .filter(
-            Integration.company_id == DEFAULT_COMPANY_ID,
+            Integration.company_id == resolved_company_id,
             Integration.provider == DEFAULT_PROVIDER,
         )
         .one()
     )
 
 
-def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict[str, Any]:
+def question_to_api(
+    question: QuestionRecord,
+    db: Session | None = None,
+    company_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_company_id = company_id or question.company_id or get_current_company_id()
     suggestion = question.ai_suggestion
     suggestion_text = get_suggestion_text(suggestion)
     if not suggestion_text:
@@ -701,9 +740,10 @@ def question_to_api(question: QuestionRecord, db: Session | None = None) -> dict
         f"{question.product_title or ''} {question.question_text or ''}",
         limit=3,
         db=db,
+        company_id=resolved_company_id,
     ) if db else []
     raw_payload = question.raw_payload or {}
-    cached_product = get_cached_product_for_question(db, raw_payload)
+    cached_product = get_cached_product_for_question(db, raw_payload, company_id=resolved_company_id)
     cached_product_api = product_to_api(cached_product) if cached_product else None
     external_product_id = extract_question_item_id(raw_payload)
     external_customer_id = extract_question_customer_id(raw_payload)
@@ -1150,11 +1190,17 @@ def refresh_ml_token_if_needed(force: bool = False) -> dict[str, Any]:
         db.close()
 
 
-def get_valid_mercadolivre_token(db: Session | None = None, *, force_refresh: bool = False) -> str:
+def get_valid_mercadolivre_token(
+    db: Session | None = None,
+    *,
+    force_refresh: bool = False,
+    company_id: str | None = None,
+) -> str:
     owns_session = db is None
     session = db or SessionLocal()
+    resolved_company_id = company_id or get_current_company_id()
     try:
-        integration = get_ml_integration(session)
+        integration = get_ml_integration(session, resolved_company_id)
         if not integration.access_token and not integration.refresh_token:
             logger.warning("Mercado Livre token unavailable: no access_token or refresh_token")
             raise HTTPException(status_code=401, detail="Mercado Livre não conectado.")
@@ -1284,7 +1330,12 @@ def normalize_ml_question(payload: dict[str, Any], access_token: str) -> dict[st
     }
 
 
-def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecord:
+def upsert_ml_question(
+    db: Session,
+    normalized: dict[str, Any],
+    company_id: str | None = None,
+) -> QuestionRecord:
+    resolved_company_id = company_id or get_current_company_id()
     external_id = str(normalized.get("external_id") or "")
     if not external_id:
         raise HTTPException(status_code=502, detail="Mercado Livre question missing external_id")
@@ -1292,7 +1343,7 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
     question = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == resolved_company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
             QuestionRecord.external_id == external_id,
         )
@@ -1300,7 +1351,7 @@ def upsert_ml_question(db: Session, normalized: dict[str, Any]) -> QuestionRecor
     )
     if not question:
         question = QuestionRecord(
-            company_id=DEFAULT_COMPANY_ID,
+            company_id=resolved_company_id,
             provider=DEFAULT_PROVIDER,
             external_id=external_id,
         )
@@ -1319,19 +1370,21 @@ def upsert_portal_answered_ml_question(
     db: Session,
     question_payload: dict[str, Any],
     access_token: str,
+    company_id: str | None = None,
 ) -> tuple[QuestionRecord | None, str]:
+    resolved_company_id = company_id or get_current_company_id()
     normalized = normalize_ml_question(question_payload, access_token)
     external_id = str(normalized.get("external_id") or "")
     if not external_id:
         logger.warning("Portal answered ML question skipped: missing external_id")
         return None, "skipped"
     if isinstance(normalized.get("item_payload"), dict):
-        upsert_ml_product(db, normalized["item_payload"])
+        upsert_ml_product(db, normalized["item_payload"], company_id=resolved_company_id)
 
     question = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == resolved_company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
             QuestionRecord.external_id == external_id,
         )
@@ -1344,7 +1397,7 @@ def upsert_portal_answered_ml_question(
     action = "updated" if question else "inserted"
     if not question:
         question = QuestionRecord(
-            company_id=DEFAULT_COMPANY_ID,
+            company_id=resolved_company_id,
             provider=DEFAULT_PROVIDER,
             external_id=external_id,
         )
@@ -1366,7 +1419,12 @@ def upsert_portal_answered_ml_question(
     return question, action
 
 
-def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
+def ensure_initial_suggestion(
+    db: Session,
+    question: QuestionRecord,
+    company_id: str | None = None,
+) -> None:
+    resolved_company_id = company_id or question.company_id or get_current_company_id()
     if normalize_db_status(question.status) != "pending":
         logger.info("OpenAI skipped because question is not pending external_id=%s", question.external_id)
         return
@@ -1382,11 +1440,12 @@ def ensure_initial_suggestion(db: Session, question: QuestionRecord) -> None:
     if existing and get_suggestion_text(existing):
         logger.info("OpenAI skipped because suggestion already exists external_id=%s", question.external_id)
         return
-    settings = get_default_settings(db)
+    settings = get_default_settings(db, resolved_company_id)
     related_products = search_related_products(
         f"{question.product_title or ''} {question.question_text or ''}",
         limit=5,
         db=db,
+        company_id=resolved_company_id,
     )
     logger.info(
         "Injecting related products into initial AI suggestion external_id=%s count=%s",
@@ -1840,9 +1899,10 @@ def build_ai_system_prompt(
     *,
     settings: CompanySettings | None,
     related_products: list[dict[str, Any]] | None = None,
-    company_id: str = DEFAULT_COMPANY_ID,
+    company_id: str | None = None,
     question_id: str | int | None = None,
 ) -> str:
+    resolved_company_id = company_id or get_current_company_id()
     general_rules = (getattr(settings, "ai_general_rules", None) or "").strip()
     product_knowledge = (getattr(settings, "ai_product_knowledge", None) or "").strip()
     absolute_restrictions = (getattr(settings, "ai_absolute_restrictions", None) or "").strip()
@@ -1857,7 +1917,7 @@ def build_ai_system_prompt(
     print("AI_PROMPT_BUILD_START", flush=True)
     print(
         "AI_PROMPT_BUILD "
-        f"company_id={company_id} question_id={question_id} web_search_enabled={web_search_enabled} "
+        f"company_id={resolved_company_id} question_id={question_id} web_search_enabled={web_search_enabled} "
         f"general_rules_length={len(general_rules)} technical_knowledge_length={len(product_knowledge)} "
         f"restrictions_length={len(absolute_restrictions)} related_products_count={related_products_count}",
         flush=True,
@@ -1948,9 +2008,15 @@ def score_product_relevance(product: ProductCache, terms: list[str], question_te
     return score
 
 
-def search_related_products(question_text: str, limit: int = 5, db: Session | None = None) -> list[dict[str, Any]]:
+def search_related_products(
+    question_text: str,
+    limit: int = 5,
+    db: Session | None = None,
+    company_id: str | None = None,
+) -> list[dict[str, Any]]:
     owns_session = db is None
     session = db or SessionLocal()
+    resolved_company_id = company_id or get_current_company_id()
     try:
         try:
             terms = extract_search_terms(question_text)
@@ -1966,7 +2032,7 @@ def search_related_products(question_text: str, limit: int = 5, db: Session | No
             candidates = (
                 session.query(ProductCache)
                 .filter(
-                    ProductCache.company_id == DEFAULT_COMPANY_ID,
+                    ProductCache.company_id == resolved_company_id,
                     ProductCache.provider == DEFAULT_PROVIDER,
                     ProductCache.status == "active",
                     or_(*filters),
@@ -1992,14 +2058,19 @@ def search_related_products(question_text: str, limit: int = 5, db: Session | No
             session.close()
 
 
-def upsert_ml_product(db: Session, item_payload: dict[str, Any]) -> tuple[ProductCache, bool]:
+def upsert_ml_product(
+    db: Session,
+    item_payload: dict[str, Any],
+    company_id: str | None = None,
+) -> tuple[ProductCache, bool]:
+    resolved_company_id = company_id or get_current_company_id()
     external_id = str(item_payload.get("id") or "")
     if not external_id:
         raise ValueError("Mercado Livre product missing id")
     product = (
         db.query(ProductCache)
         .filter(
-            ProductCache.company_id == DEFAULT_COMPANY_ID,
+            ProductCache.company_id == resolved_company_id,
             ProductCache.provider == DEFAULT_PROVIDER,
             ProductCache.external_id == external_id,
         )
@@ -2008,7 +2079,7 @@ def upsert_ml_product(db: Session, item_payload: dict[str, Any]) -> tuple[Produc
     created = product is None
     if created:
         product = ProductCache(
-            company_id=DEFAULT_COMPANY_ID,
+            company_id=resolved_company_id,
             provider=DEFAULT_PROVIDER,
             external_id=external_id,
         )
@@ -2032,10 +2103,11 @@ def upsert_ml_product(db: Session, item_payload: dict[str, Any]) -> tuple[Produc
     return product, created
 
 
-def sync_mercadolivre_products(db: Session) -> dict[str, Any]:
-    logger.info("Mercado Livre products sync started")
-    access_token = get_valid_mercadolivre_token(db)
-    integration = get_ml_integration(db)
+def sync_mercadolivre_products(db: Session, company_id: str | None = None) -> dict[str, Any]:
+    resolved_company_id = company_id or get_current_company_id()
+    logger.info("Mercado Livre products sync started company_id=%s", resolved_company_id)
+    access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
+    integration = get_ml_integration(db, resolved_company_id)
     seller_id = integration.seller_id or get_ml_seller_id(
         {"access_token": access_token, "seller_id": integration.seller_id}
     )
@@ -2044,7 +2116,7 @@ def sync_mercadolivre_products(db: Session) -> dict[str, Any]:
     except HTTPException as error:
         if error.status_code != 401:
             raise
-        access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+        access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
         item_ids = fetch_ml_item_ids_by_seller(str(seller_id), access_token)
     logger.info("Mercado Livre product item ids fetched count=%s", len(item_ids))
 
@@ -2063,9 +2135,9 @@ def sync_mercadolivre_products(db: Session) -> dict[str, Any]:
             except HTTPException as error:
                 if error.status_code != 401:
                     raise
-                access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+                access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
                 item_payload = fetch_ml_item_detail(str(item_id), access_token)
-            product, created = upsert_ml_product(db, item_payload)
+            product, created = upsert_ml_product(db, item_payload, company_id=resolved_company_id)
             stats["created" if created else "updated"] += 1
             if product.status == "active":
                 stats["active"] += 1
@@ -2149,8 +2221,14 @@ def start_product_sync_scheduler() -> None:
     scheduler.start()
 
 
-def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[str, Any]:
-    logger.info("Mercado Livre sync started source=%s", source)
+def sync_mercadolivre_questions(
+    db: Session,
+    *,
+    source: str = "manual",
+    company_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_company_id = company_id or get_current_company_id()
+    logger.info("Mercado Livre sync started source=%s company_id=%s", source, resolved_company_id)
     stats = {
         "created": 0,
         "updated": 0,
@@ -2160,8 +2238,8 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
     }
 
     def run_with_tokens(force_refresh: bool = False) -> dict[str, Any]:
-        access_token = get_valid_mercadolivre_token(db, force_refresh=force_refresh)
-        integration = get_ml_integration(db)
+        access_token = get_valid_mercadolivre_token(db, force_refresh=force_refresh, company_id=resolved_company_id)
+        integration = get_ml_integration(db, resolved_company_id)
         tokens = {
             "access_token": access_token,
             "seller_id": integration.seller_id,
@@ -2181,7 +2259,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
         for question_payload in questions_payload:
             normalized = normalize_ml_question(question_payload, tokens["access_token"])
             if isinstance(normalized.get("item_payload"), dict):
-                upsert_ml_product(db, normalized["item_payload"])
+                upsert_ml_product(db, normalized["item_payload"], company_id=resolved_company_id)
             external_id = str(normalized.get("external_id") or "")
             if not external_id:
                 logger.warning("Mercado Livre sync ignored question without external_id source=%s", source)
@@ -2190,17 +2268,17 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             existing_question = (
                 db.query(QuestionRecord)
                 .filter(
-                    QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                    QuestionRecord.company_id == resolved_company_id,
                     QuestionRecord.provider == DEFAULT_PROVIDER,
                     QuestionRecord.external_id == external_id,
                 )
                 .first()
             )
             had_suggestion = bool(get_suggestion_text(existing_question.ai_suggestion)) if existing_question else False
-            question = upsert_ml_question(db, normalized)
+            question = upsert_ml_question(db, normalized, company_id=resolved_company_id)
             stats["updated" if existing_question else "created"] += 1
             db.flush()
-            ensure_initial_suggestion(db, question)
+            ensure_initial_suggestion(db, question, company_id=resolved_company_id)
             if not had_suggestion and get_suggestion_text(question.ai_suggestion):
                 stats["suggestions_generated"] += 1
             saved_questions.append(question)
@@ -2208,7 +2286,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
         local_pending_questions = (
             db.query(QuestionRecord)
             .filter(
-                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.company_id == resolved_company_id,
                 QuestionRecord.provider == DEFAULT_PROVIDER,
                 QuestionRecord.status == "pending",
             )
@@ -2229,10 +2307,10 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
                 continue
             if not ml_question_is_answered(question_detail):
                 continue
-            upsert_portal_answered_ml_question(db, question_detail, tokens["access_token"])
+            upsert_portal_answered_ml_question(db, question_detail, tokens["access_token"], company_id=resolved_company_id)
             stats["marked_responded"] += 1
 
-        integration = get_ml_integration(db)
+        integration = get_ml_integration(db, resolved_company_id)
         integration.last_sync = datetime.utcnow()
         integration.token_status = "valid"
         db.commit()
@@ -2246,7 +2324,7 @@ def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[
             stats["marked_responded"],
         )
         return {
-            "questions": [question_to_api(question, db=db) for question in saved_questions],
+            "questions": [question_to_api(question, db=db, company_id=resolved_company_id) for question in saved_questions],
             "stats": stats,
         }
 
@@ -2291,6 +2369,7 @@ def extract_ml_question_id_from_notification(payload: Any) -> str | None:
 
 
 def process_mercadolivre_question_notification(db: Session, payload: Any) -> bool:
+    company_id = get_current_company_id()
     question_id = extract_ml_question_id_from_notification(payload)
     topic = payload.get("topic") if isinstance(payload, dict) else None
     resource = payload.get("resource") if isinstance(payload, dict) else None
@@ -2299,13 +2378,13 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
         logger.info("ML question webhook has no question id; falling back to pending sync")
         return False
 
-    access_token = get_valid_mercadolivre_token(db)
+    access_token = get_valid_mercadolivre_token(db, company_id=company_id)
     try:
         question_detail = fetch_ml_question_detail(question_id, access_token)
     except HTTPException as error:
         if error.status_code != 401:
             raise
-        access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+        access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=company_id)
         question_detail = fetch_ml_question_detail(question_id, access_token)
 
     status = str(question_detail.get("status") or "").upper()
@@ -2313,7 +2392,7 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
     local_app_answer_exists = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
             QuestionRecord.external_id == str(question_id),
             QuestionRecord.answered_source == "app",
@@ -2330,7 +2409,7 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
     )
 
     if ml_question_is_answered(question_detail) and has_answer:
-        question, action = upsert_portal_answered_ml_question(db, question_detail, access_token)
+        question, action = upsert_portal_answered_ml_question(db, question_detail, access_token, company_id=company_id)
         source = question.answered_source if question else "portal"
         db.commit()
         logger.info(
@@ -2343,10 +2422,10 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
 
     normalized = normalize_ml_question(question_detail, access_token)
     if isinstance(normalized.get("item_payload"), dict):
-        upsert_ml_product(db, normalized["item_payload"])
-    question = upsert_ml_question(db, normalized)
+        upsert_ml_product(db, normalized["item_payload"], company_id=company_id)
+    question = upsert_ml_question(db, normalized, company_id=company_id)
     db.flush()
-    ensure_initial_suggestion(db, question)
+    ensure_initial_suggestion(db, question, company_id=company_id)
     db.commit()
     logger.info("ML question webhook saved_as=pending db_action=updated question_id=%s", question_id)
     return True
@@ -2697,6 +2776,7 @@ def generate_openai_rewrite(
     settings: CompanySettings | None = None,
     related_products: list[dict[str, Any]] | None = None,
     question_id: str | int | None = None,
+    company_id: str | None = None,
 ) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -2709,6 +2789,7 @@ def generate_openai_rewrite(
     system_prompt = build_ai_system_prompt(
         settings=settings,
         related_products=related_products or [],
+        company_id=company_id or getattr(settings, "company_id", None),
         question_id=question_id or "rewrite",
     )
     prompt = (
@@ -2734,6 +2815,7 @@ def generate_openai_initial_suggestion(
     settings: CompanySettings | None = None,
     related_products: list[dict[str, Any]] | None = None,
     question_id: str | int | None = None,
+    company_id: str | None = None,
 ) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -2746,6 +2828,7 @@ def generate_openai_initial_suggestion(
     system_prompt = build_ai_system_prompt(
         settings=settings,
         related_products=related_products or [],
+        company_id=company_id or getattr(settings, "company_id", None),
         question_id=question_id or "initial",
     )
     prompt = (
@@ -2774,7 +2857,8 @@ def ai_health():
 
 
 @app.post("/ai/suggest")
-def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_db)):
+def suggest_ai_response(payload: AiSuggestionPayload, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question_text = payload.question_text.strip()
     if not question_text:
         raise HTTPException(status_code=400, detail="Missing required field: question_text")
@@ -2783,11 +2867,12 @@ def suggest_ai_response(payload: AiSuggestionPayload, db: Session = Depends(get_
         suggestion = generate_openai_initial_suggestion(
             product_title=payload.product_title.strip(),
             question_text=question_text,
-            settings=get_default_settings(db),
+            settings=get_default_settings(db, company_id),
             related_products=search_related_products(
                 f"{payload.product_title} {question_text}",
                 limit=5,
                 db=db,
+                company_id=company_id,
             ),
             question_id="ai_suggest",
         )
@@ -2824,9 +2909,10 @@ def mercadolivre_auth_url():
 
 
 @app.post("/integrations/mercadolivre/disconnect")
-def mercadolivre_disconnect(db: Session = Depends(get_db)):
+def mercadolivre_disconnect(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     try:
-        integration = get_ml_integration(db)
+        integration = get_ml_integration(db, company_id)
         integration.access_token = None
         integration.refresh_token = None
         integration.expires_at = None
@@ -2895,9 +2981,10 @@ def mercadolivre_callback(code: str = Query(...)):
 
 
 @app.get("/integrations/mercadolivre/questions")
-def mercadolivre_questions(db: Session = Depends(get_db)):
+def mercadolivre_questions(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     try:
-        result = sync_mercadolivre_questions(db, source="manual")
+        result = sync_mercadolivre_questions(db, source="manual", company_id=company_id)
         return result["questions"]
     except HTTPException as error:
         if error.status_code == 403:
@@ -2998,8 +3085,9 @@ def sync_mercadolivre_job():
 
 
 @app.post("/integrations/mercadolivre/products/sync")
-def sync_mercadolivre_products_endpoint(db: Session = Depends(get_db)):
-    return sync_mercadolivre_products(db)
+def sync_mercadolivre_products_endpoint(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
+    return sync_mercadolivre_products(db, company_id=company_id)
 
 
 def send_ml_answer(question_id: str, answer: str, access_token: str) -> dict[str, Any]:
@@ -3051,11 +3139,17 @@ def extract_ml_answer_created_at(question_payload: dict[str, Any] | None) -> dat
     return parse_datetime(question_payload.get("date_created") or question_payload.get("created_at"))
 
 
-def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Session | None = None) -> dict[str, Any]:
+def ml_portal_question_to_api(
+    payload: dict[str, Any],
+    access_token: str,
+    db: Session | None = None,
+    company_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_company_id = company_id or get_current_company_id()
     external_id = str(payload.get("id") or payload.get("question_id") or "")
     question_text = payload.get("text") or payload.get("question") or payload.get("body") or ""
     answered_at = extract_ml_answer_created_at(payload)
-    cached_product = get_cached_product_for_question(db, payload)
+    cached_product = get_cached_product_for_question(db, payload, company_id=resolved_company_id)
     cached_product_api = product_to_api(cached_product) if cached_product else None
     external_product_id = extract_question_item_id(payload)
     product_sku = first_present(
@@ -3088,7 +3182,7 @@ def ml_portal_question_to_api(payload: dict[str, Any], access_token: str, db: Se
     buyer = extract_buyer_info_from_payload(payload)
     return {
         "id": f"ml-live-{external_id}",
-        "company_id": DEFAULT_COMPANY_ID,
+        "company_id": resolved_company_id,
         "marketplace": "Mercado Livre",
         "provider": DEFAULT_PROVIDER,
         "external_id": external_id,
@@ -3142,18 +3236,24 @@ def ml_question_is_answered(question_payload: dict[str, Any] | None) -> bool:
     return status == "responded" or bool(extract_ml_answer_text(question_payload))
 
 
-def get_live_portal_answered_questions(db: Session, *, days: int | None = None) -> list[dict[str, Any]]:
+def get_live_portal_answered_questions(
+    db: Session,
+    *,
+    days: int | None = None,
+    company_id: str | None = None,
+) -> list[dict[str, Any]]:
+    resolved_company_id = company_id or get_current_company_id()
     resolved_days = days or get_ml_portal_answered_lookback_days()
     try:
-        access_token = get_valid_mercadolivre_token(db)
-        integration = get_ml_integration(db)
+        access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
+        integration = get_ml_integration(db, resolved_company_id)
         seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
         raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
     except HTTPException as error:
         if error.status_code == 401:
             try:
-                access_token = get_valid_mercadolivre_token(db, force_refresh=True)
-                integration = get_ml_integration(db)
+                access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
+                integration = get_ml_integration(db, resolved_company_id)
                 seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
                 raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
             except Exception:
@@ -3170,7 +3270,7 @@ def get_live_portal_answered_questions(db: Session, *, days: int | None = None) 
     local_questions = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == resolved_company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
         )
         .all()
@@ -3195,7 +3295,7 @@ def get_live_portal_answered_questions(db: Session, *, days: int | None = None) 
         answered_at = extract_ml_answer_created_at(payload)
         if not answered_at or answered_at < cutoff:
             continue
-        live_questions.append(ml_portal_question_to_api(payload, access_token, db=db))
+        live_questions.append(ml_portal_question_to_api(payload, access_token, db=db, company_id=resolved_company_id))
     logger.warning("ML portal answered questions merged_into_response=%s", len(live_questions))
     return live_questions
 
@@ -3220,12 +3320,14 @@ def save_answered_question_state(
     raw_response: dict[str, Any] | None = None,
     answered_source: str = "app",
     answered_at: datetime | None = None,
+    company_id: str | None = None,
 ) -> QuestionRecord | None:
+    resolved_company_id = company_id or get_current_company_id()
     now = datetime.utcnow()
     question = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == resolved_company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
             QuestionRecord.external_id == str(question_id),
         )
@@ -3284,23 +3386,25 @@ def handle_portal_answered_question(
     question_id: str,
     question_detail: dict[str, Any],
     access_token: str,
+    company_id: str | None = None,
 ) -> dict[str, Any] | None:
+    resolved_company_id = company_id or get_current_company_id()
     question = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == resolved_company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
             QuestionRecord.external_id == str(question_id),
         )
         .first()
     )
     if question and question.answered_source == "app":
-        return question_to_api(question, db=db)
+        return question_to_api(question, db=db, company_id=resolved_company_id)
     if question:
         delete_local_question(db, question)
         db.commit()
     if question_detail:
-        return ml_portal_question_to_api(question_detail, access_token, db=db)
+        return ml_portal_question_to_api(question_detail, access_token, db=db, company_id=resolved_company_id)
     return None
 
 
@@ -3309,13 +3413,15 @@ def answer_mercadolivre_question(
     question_id: str,
     payload: MercadoLivreAnswerPayload,
     db: Session = Depends(get_db),
+    company_id: str | None = None,
 ):
+    resolved_company_id = company_id or get_current_company_id()
     answer = payload.answer.strip()
     if not answer:
         raise HTTPException(status_code=400, detail="Missing required field: answer")
 
     try:
-        access_token = get_valid_mercadolivre_token(db)
+        access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
         try:
             question_detail = fetch_ml_question_detail(question_id, access_token)
             if ml_question_is_answered(question_detail):
@@ -3324,6 +3430,7 @@ def answer_mercadolivre_question(
                     question_id=question_id,
                     question_detail=question_detail,
                     access_token=access_token,
+                    company_id=resolved_company_id,
                 )
                 return {
                     "sent": False,
@@ -3339,7 +3446,7 @@ def answer_mercadolivre_question(
         result = send_ml_answer(question_id, answer, access_token)
     except HTTPException as error:
         if error.status_code == 401:
-            access_token = get_valid_mercadolivre_token(db, force_refresh=True)
+            access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
             try:
                 question_detail = fetch_ml_question_detail(question_id, access_token)
                 if ml_question_is_answered(question_detail):
@@ -3348,6 +3455,7 @@ def answer_mercadolivre_question(
                         question_id=question_id,
                         question_detail=question_detail,
                         access_token=access_token,
+                        company_id=resolved_company_id,
                     )
                     return {
                         "sent": False,
@@ -3374,6 +3482,7 @@ def answer_mercadolivre_question(
                     question_id=question_id,
                     question_detail=question_detail,
                     access_token=access_token,
+                    company_id=resolved_company_id,
                 )
                 return {
                     "sent": False,
@@ -3389,7 +3498,7 @@ def answer_mercadolivre_question(
             ) from error
         elif is_already_answered_error(error):
             try:
-                access_token = get_valid_mercadolivre_token(db)
+                access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
                 question_detail = fetch_ml_question_detail(question_id, access_token)
             except HTTPException:
                 question_detail = {}
@@ -3398,6 +3507,7 @@ def answer_mercadolivre_question(
                 question_id=question_id,
                 question_detail=question_detail,
                 access_token=access_token,
+                company_id=resolved_company_id,
             )
             return {
                 "sent": False,
@@ -3415,6 +3525,7 @@ def answer_mercadolivre_question(
         approved_answer=answer,
         payload=payload,
         raw_response=result["body"],
+        company_id=resolved_company_id,
     )
 
     return {
@@ -3422,12 +3533,13 @@ def answer_mercadolivre_question(
         "already_answered": False,
         "message": "Resposta enviada ao Mercado Livre",
         "raw_response": result["body"],
-        "question": question_to_api(question, db=db) if question else None,
+        "question": question_to_api(question, db=db, company_id=resolved_company_id) if question else None,
     }
 
 
 @app.post("/ai/rewrite")
-def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
+def rewrite_ai_response(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     original_response = (payload.get("text") or payload.get("original_response") or "").strip()
     instruction = (payload.get("instruction") or "").strip()
     question = (payload.get("question") or "").strip()
@@ -3443,13 +3555,13 @@ def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing required field: instruction")
 
     try:
-        related_products = search_related_products(question, limit=5, db=db)
+        related_products = search_related_products(question, limit=5, db=db, company_id=company_id)
         logger.info("Injecting related products into AI rewrite count=%s", len(related_products))
         rewritten_text = generate_openai_rewrite(
             question,
             original_response,
             instruction,
-            settings=get_default_settings(db),
+            settings=get_default_settings(db, company_id),
             related_products=related_products,
             question_id="ai_rewrite",
         )
@@ -3465,12 +3577,13 @@ def rewrite_ai_response(payload: dict[str, Any], db: Session = Depends(get_db)):
 
 
 @app.get("/integrations/health", response_model=List[IntegrationHealth])
-def list_integrations_health(db: Session = Depends(get_db)):
+def list_integrations_health(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     health_items = []
     for service in integration_services.values():
         try:
             if service.client.id == "mercado-livre":
-                integration = get_ml_integration(db)
+                integration = get_ml_integration(db, company_id)
                 refresh_available = bool(integration.refresh_token)
                 connected = False
                 token_status = integration.token_status or "missing"
@@ -3482,7 +3595,7 @@ def list_integrations_health(db: Session = Depends(get_db)):
                         last_error = "Mercado Livre conectado temporariamente sem refresh_token. Reconecte a integração."
                     else:
                         try:
-                            get_valid_mercadolivre_token(db)
+                            get_valid_mercadolivre_token(db, company_id=company_id)
                             connected = True
                             token_status = "valid"
                             last_error = None
@@ -3563,19 +3676,21 @@ def list_integrations_health(db: Session = Depends(get_db)):
 
 
 @app.get("/company/settings")
-def read_company_settings(db: Session = Depends(get_db)):
-    settings = get_default_settings(db)
+def read_company_settings(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
+    settings = get_default_settings(db, company_id)
     return settings_to_api(settings)
 
 
 @app.get("/debug/ai/prompt/{question_id}")
-def debug_ai_prompt(question_id: str, db: Session = Depends(get_db)):
+def debug_ai_prompt(question_id: str, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question = db.get(QuestionRecord, int(question_id)) if question_id.isdigit() else None
     if not question:
         question = (
             db.query(QuestionRecord)
             .filter(
-                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.company_id == company_id,
                 QuestionRecord.provider == DEFAULT_PROVIDER,
                 QuestionRecord.external_id == question_id,
             )
@@ -3583,15 +3698,17 @@ def debug_ai_prompt(question_id: str, db: Session = Depends(get_db)):
         )
     if not question:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
-    settings = get_default_settings(db)
+    settings = get_default_settings(db, company_id)
     related_products = search_related_products(
         f"{question.product_title or ''} {question.question_text or ''}",
         limit=5,
         db=db,
+        company_id=company_id,
     )
     final_prompt = build_ai_system_prompt(
         settings=settings,
         related_products=related_products,
+        company_id=company_id,
         question_id=question.external_id or question.id,
     )
     return {
@@ -3622,8 +3739,9 @@ def settings_to_api(settings: CompanySettings) -> dict[str, Any]:
     }
 
 
-def save_company_settings(payload: CompanySettingsPayload, db: Session) -> dict[str, Any]:
-    settings = get_default_settings(db)
+def save_company_settings(payload: CompanySettingsPayload, db: Session, company_id: str | None = None) -> dict[str, Any]:
+    resolved_company_id = company_id or get_current_company_id()
+    settings = get_default_settings(db, resolved_company_id)
     settings.greeting = payload.greeting.strip()
     settings.closing = payload.closing.strip()
     settings.tone = payload.tone.strip()
@@ -3639,13 +3757,15 @@ def save_company_settings(payload: CompanySettingsPayload, db: Session) -> dict[
 
 
 @app.put("/company/settings")
-def update_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
-    return save_company_settings(payload, db)
+def update_company_settings(payload: CompanySettingsPayload, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
+    return save_company_settings(payload, db, company_id)
 
 
 @app.post("/company/settings")
-def post_company_settings(payload: CompanySettingsPayload, db: Session = Depends(get_db)):
-    return save_company_settings(payload, db)
+def post_company_settings(payload: CompanySettingsPayload, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
+    return save_company_settings(payload, db, company_id)
 
 
 @app.post("/integrations/{integration_id}/test", response_model=ConnectionTestResult)
@@ -3677,13 +3797,14 @@ def list_integration_questions(integration_id: str):
 
 
 @app.get("/questions")
-def list_questions(status: str | None = None, db: Session = Depends(get_db)):
+def list_questions(request: Request, status: str | None = None, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     try:
         print("BUYER_ENRICHMENT_START", flush=True)
         query = (
             db.query(QuestionRecord)
             .filter(
-                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.company_id == company_id,
                 or_(
                     QuestionRecord.status == "pending",
                     QuestionRecord.answered_source == "app",
@@ -3694,7 +3815,7 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         )
         if status:
             query = query.filter(QuestionRecord.status == normalize_db_status(status))
-        question_payloads = [question_to_api(question, db=db) for question in query.all()]
+        question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in query.all()]
         buyer_ids = list(dict.fromkeys(
             str(question.get("external_customer_id") or "")
             for question in question_payloads
@@ -3716,11 +3837,11 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
         return local_questions
 
     try:
-        integration = get_ml_integration(db)
+        integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
             logger.info("Skipping answered backfill: Mercado Livre disconnected")
             return local_questions
-        live_portal_questions = get_live_portal_answered_questions(db)
+        live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
         live_portal_questions = []
@@ -3731,19 +3852,20 @@ def list_questions(status: str | None = None, db: Session = Depends(get_db)):
 
 
 @app.get("/debug/ml/buyers")
-def debug_ml_buyers(db: Session = Depends(get_db)):
+def debug_ml_buyers(request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     print("BUYER_ENRICHMENT_START", flush=True)
     questions = (
         db.query(QuestionRecord)
         .filter(
-            QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+            QuestionRecord.company_id == company_id,
             QuestionRecord.provider == DEFAULT_PROVIDER,
         )
         .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
         .limit(100)
         .all()
     )
-    question_payloads = [question_to_api(question, db=db) for question in questions]
+    question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in questions]
     buyer_ids = list(dict.fromkeys(
         str(question.get("external_customer_id") or "")
         for question in question_payloads
@@ -3756,7 +3878,7 @@ def debug_ml_buyers(db: Session = Depends(get_db)):
     buyers: dict[str, dict[str, Any]] = {}
     if buyer_ids:
         try:
-            access_token = get_valid_mercadolivre_token(db)
+            access_token = get_valid_mercadolivre_token(db, company_id=company_id)
             buyers = get_ml_buyers_info(buyer_ids, access_token)
         except Exception:
             logger.exception("Debug buyer enrichment failed")
@@ -3779,14 +3901,16 @@ def debug_ml_buyers(db: Session = Depends(get_db)):
 
 @app.get("/products")
 def list_products(
+    request: Request,
     status: str | None = None,
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
+    company_id, _, _ = log_tenant_context(request)
     query = (
         db.query(ProductCache)
         .filter(
-            ProductCache.company_id == DEFAULT_COMPANY_ID,
+            ProductCache.company_id == company_id,
             ProductCache.provider == DEFAULT_PROVIDER,
         )
         .order_by(ProductCache.updated_at.desc(), ProductCache.created_at.desc())
@@ -3799,18 +3923,20 @@ def list_products(
 
 
 @app.post("/questions/generate")
-def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(get_db)):
+def generate_question_suggestion(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question_id = payload.get("question_id") or payload.get("id")
     external_id = payload.get("external_id")
     force = bool(payload.get("force"))
     question = None
     if question_id:
-        question = db.get(QuestionRecord, int(question_id))
+        candidate_question = db.get(QuestionRecord, int(question_id))
+        question = candidate_question if candidate_question and candidate_question.company_id == company_id else None
     if not question and external_id:
         question = (
             db.query(QuestionRecord)
             .filter(
-                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.company_id == company_id,
                 QuestionRecord.provider == DEFAULT_PROVIDER,
                 QuestionRecord.external_id == str(external_id),
             )
@@ -3819,7 +3945,7 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
     if not question:
         if external_id:
             try:
-                access_token = get_valid_mercadolivre_token(db)
+                access_token = get_valid_mercadolivre_token(db, company_id=company_id)
                 question_detail = fetch_ml_question_detail(str(external_id), access_token)
                 if ml_question_is_answered(question_detail):
                     live_question = handle_portal_answered_question(
@@ -3827,6 +3953,7 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
                         question_id=str(external_id),
                         question_detail=question_detail,
                         access_token=access_token,
+                        company_id=company_id,
                     )
                     return {
                         "sent": False,
@@ -3840,18 +3967,19 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
 
     if not force and question.ai_suggestion and get_suggestion_text(question.ai_suggestion):
-        return question_to_api(question, db=db)
+        return question_to_api(question, db=db, company_id=company_id)
 
     if force:
         try:
           suggestion_text = generate_openai_initial_suggestion(
               product_title=question.product_title,
               question_text=question.question_text,
-              settings=get_default_settings(db),
+              settings=get_default_settings(db, company_id),
               related_products=search_related_products(
                   f"{question.product_title or ''} {question.question_text or ''}",
                   limit=5,
                   db=db,
+                  company_id=company_id,
               ),
               question_id=question.external_id or question.id,
           )
@@ -3883,14 +4011,15 @@ def generate_question_suggestion(payload: dict[str, Any], db: Session = Depends(
             )
         question.updated_at = now
     else:
-        ensure_initial_suggestion(db, question)
+        ensure_initial_suggestion(db, question, company_id=company_id)
     db.commit()
     db.refresh(question)
-    return question_to_api(question, db=db)
+    return question_to_api(question, db=db, company_id=company_id)
 
 
 @app.post("/questions/answer")
-def answer_question(payload: dict[str, Any], db: Session = Depends(get_db)):
+def answer_question(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question_id = payload.get("question_id") or payload.get("id")
     external_id = payload.get("external_id")
     answer = (payload.get("answer") or payload.get("final_answer") or payload.get("final_response") or "").strip()
@@ -3899,12 +4028,13 @@ def answer_question(payload: dict[str, Any], db: Session = Depends(get_db)):
 
     question = None
     if question_id:
-        question = db.get(QuestionRecord, int(question_id))
+        candidate_question = db.get(QuestionRecord, int(question_id))
+        question = candidate_question if candidate_question and candidate_question.company_id == company_id else None
     if not question and external_id:
         question = (
             db.query(QuestionRecord)
             .filter(
-                QuestionRecord.company_id == DEFAULT_COMPANY_ID,
+                QuestionRecord.company_id == company_id,
                 QuestionRecord.provider == DEFAULT_PROVIDER,
                 QuestionRecord.external_id == str(external_id),
             )
@@ -3922,21 +4052,26 @@ def answer_question(payload: dict[str, Any], db: Session = Depends(get_db)):
             instruction_used=payload.get("instruction_used") or "",
         ),
         db,
+        company_id=company_id,
     )
     return result
 
 
 @app.get("/questions/{question_id}")
-def get_question(question_id: int, db: Session = Depends(get_db)):
+def get_question(question_id: int, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question = db.get(QuestionRecord, question_id)
-    if not question or question.company_id != DEFAULT_COMPANY_ID:
+    if not question or question.company_id != company_id:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
-    return question_to_api(question, db=db)
+    return question_to_api(question, db=db, company_id=company_id)
 
 
 @app.post("/questions/{question_id}/suggest", response_model=SuggestionResponse)
-def suggest_answer(question_id: int, db: Session = Depends(get_db)):
+def suggest_answer(question_id: int, request: Request, db: Session = Depends(get_db)):
+    company_id, _, _ = log_tenant_context(request)
     question = db.get(QuestionRecord, question_id)
+    if question and question.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     if not question:
         question_mock = find_question(question_id)
         variant = suggestion_variants[question_id % len(suggestion_variants)]
@@ -3946,11 +4081,12 @@ def suggest_answer(question_id: int, db: Session = Depends(get_db)):
         suggestion_text = generate_openai_initial_suggestion(
             product_title=question.product_title,
             question_text=question.question_text,
-            settings=get_default_settings(db),
+            settings=get_default_settings(db, company_id),
             related_products=search_related_products(
                 f"{question.product_title or ''} {question.question_text or ''}",
                 limit=5,
                 db=db,
+                company_id=company_id,
             ),
             question_id=question.external_id or question.id,
         )
@@ -3981,8 +4117,11 @@ def suggest_answer(question_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/questions/{question_id}/approve")
-def approve_question(question_id: int, payload: ApprovePayload, db: Session = Depends(get_db)):
+def approve_question(question_id: int, payload: ApprovePayload, request: Request, db: Session = Depends(get_db)):
+    company_id, user_id, _ = log_tenant_context(request)
     question = db.get(QuestionRecord, question_id)
+    if question and question.company_id != company_id:
+        raise HTTPException(status_code=404, detail="Pergunta não encontrada")
     if not question:
         question_mock = find_question(question_id)
         question_mock.ai_suggestion = payload.answer
@@ -3997,7 +4136,7 @@ def approve_question(question_id: int, payload: ApprovePayload, db: Session = De
         suggestion.edited_text = payload.answer if payload.answer != get_suggestion_text(suggestion) else suggestion.edited_text
         suggestion.final_response = payload.answer
         suggestion.final_answer = payload.answer
-        suggestion.approved_by = "Admin"
+        suggestion.approved_by = user_id or "admin"
         suggestion.approved_at = now
         suggestion.updated_at = now
     else:
@@ -4008,13 +4147,13 @@ def approve_question(question_id: int, payload: ApprovePayload, db: Session = De
                 suggestion_text=payload.answer,
                 final_response=payload.answer,
                 final_answer=payload.answer,
-                approved_by="Admin",
+                approved_by=user_id or "admin",
                 approved_at=now,
             )
         )
     db.commit()
     db.refresh(question)
-    return question_to_api(question, db=db)
+    return question_to_api(question, db=db, company_id=company_id)
 
 
 
