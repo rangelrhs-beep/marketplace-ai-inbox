@@ -598,7 +598,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
   });
   const [settingsMessage, setSettingsMessage] = useState("");
   const [savingSection, setSavingSection] = useState("");
-  const [failedSection, setFailedSection] = useState("");
+  const [editingSections, setEditingSections] = useState({});
 
   useEffect(() => {
     setSettingsDraft({
@@ -616,7 +616,6 @@ function SettingsPage({ appData, onSettingsSaved }) {
 
   async function saveSettings(section) {
     setSettingsMessage("");
-    setFailedSection("");
     setSavingSection(section);
     try {
       const response = await fetch(`${API_URL}/company/settings`, {
@@ -627,9 +626,9 @@ function SettingsPage({ appData, onSettingsSaved }) {
       if (!response.ok) throw new Error("Não foi possível salvar as configurações.");
       const saved = await response.json();
       onSettingsSaved(saved);
+      setEditingSections((current) => ({ ...current, [section]: false }));
       setSettingsMessage("Configurações salvas.");
     } catch (error) {
-      setFailedSection(section);
       setSettingsMessage(error.message || "Não foi possível salvar as configurações.");
     } finally {
       setSavingSection("");
@@ -637,18 +636,17 @@ function SettingsPage({ appData, onSettingsSaved }) {
   }
 
   function updateSettingsDraft(patch) {
-    setFailedSection("");
     setSettingsDraft((current) => ({ ...current, ...patch }));
   }
 
-  function isSectionDirty(section) {
+  function getSectionFields(section) {
     const sectionFields = {
       general: ["ai_general_rules"],
       knowledge: ["ai_product_knowledge"],
       web: ["ai_allow_web_search"],
       restrictions: ["ai_absolute_restrictions"],
     };
-    return sectionFields[section].some((field) => settingsDraft[field] !== savedSettings[field]);
+    return sectionFields[section];
   }
 
   function hasSavedSectionContent(section) {
@@ -661,11 +659,54 @@ function SettingsPage({ appData, onSettingsSaved }) {
     return savedContent[section];
   }
 
-  function getSaveButtonLabel(section) {
-    if (savingSection === section) return "Salvando...";
-    if (failedSection === section) return "Salvar";
-    if (!isSectionDirty(section) && hasSavedSectionContent(section)) return "Editar";
-    return "Salvar";
+  function isSectionEditable(section) {
+    return !hasSavedSectionContent(section) || Boolean(editingSections[section]);
+  }
+
+  function editSection(section) {
+    setSettingsMessage("");
+    setEditingSections((current) => ({ ...current, [section]: true }));
+  }
+
+  function cancelSectionEdit(section) {
+    const restoredValues = getSectionFields(section).reduce(
+      (values, field) => ({ ...values, [field]: savedSettings[field] }),
+      {}
+    );
+    setSettingsMessage("");
+    setSettingsDraft((current) => ({ ...current, ...restoredValues }));
+    setEditingSections((current) => ({ ...current, [section]: false }));
+  }
+
+  function renderSectionActions(section) {
+    if (hasSavedSectionContent(section) && !editingSections[section]) {
+      return (
+        <div className="settings-actions">
+          <button type="button" className="secondary" onClick={() => editSection(section)}>
+            Editar
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="settings-actions">
+        <button className="primary" onClick={() => saveSettings(section)} disabled={savingSection === section}>
+          {savingSection === section ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
+          {savingSection === section ? "Salvando..." : "Salvar"}
+        </button>
+        {hasSavedSectionContent(section) ? (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => cancelSectionEdit(section)}
+            disabled={savingSection === section}
+          >
+            Sair
+          </button>
+        ) : null}
+      </div>
+    );
   }
 
   return (
@@ -688,12 +729,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
               className="large-textarea"
               value={settingsDraft.ai_general_rules}
               onChange={(event) => updateSettingsDraft({ ai_general_rules: event.target.value })}
+              readOnly={!isSectionEditable("general")}
             />
           </label>
-          <button className="primary" onClick={() => saveSettings("general")} disabled={savingSection === "general"}>
-            {savingSection === "general" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            {getSaveButtonLabel("general")}
-          </button>
+          {renderSectionActions("general")}
         </div>
 
         <div className="settings-card settings-form ai-config-card">
@@ -703,12 +742,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
               className="xl-textarea"
               value={settingsDraft.ai_product_knowledge}
               onChange={(event) => updateSettingsDraft({ ai_product_knowledge: event.target.value })}
+              readOnly={!isSectionEditable("knowledge")}
             />
           </label>
-          <button className="primary" onClick={() => saveSettings("knowledge")} disabled={savingSection === "knowledge"}>
-            {savingSection === "knowledge" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            {getSaveButtonLabel("knowledge")}
-          </button>
+          {renderSectionActions("knowledge")}
         </div>
 
         <div className="settings-card settings-form ai-config-card">
@@ -723,15 +760,13 @@ function SettingsPage({ appData, onSettingsSaved }) {
               className={`toggle-switch ${settingsDraft.ai_allow_web_search ? "active" : ""}`}
               onClick={() => updateSettingsDraft({ ai_allow_web_search: !settingsDraft.ai_allow_web_search })}
               aria-pressed={settingsDraft.ai_allow_web_search}
+              disabled={!isSectionEditable("web")}
             >
               <span />
             </button>
           </div>
           <p className="settings-warning">Mesmo utilizando fontes externas, a IA nunca deve afirmar informações não confirmadas oficialmente.</p>
-          <button className="primary" onClick={() => saveSettings("web")} disabled={savingSection === "web"}>
-            {savingSection === "web" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            {getSaveButtonLabel("web")}
-          </button>
+          {renderSectionActions("web")}
         </div>
 
         <div className="settings-card settings-form ai-config-card">
@@ -741,12 +776,10 @@ function SettingsPage({ appData, onSettingsSaved }) {
               className="large-textarea"
               value={settingsDraft.ai_absolute_restrictions}
               onChange={(event) => updateSettingsDraft({ ai_absolute_restrictions: event.target.value })}
+              readOnly={!isSectionEditable("restrictions")}
             />
           </label>
-          <button className="primary" onClick={() => saveSettings("restrictions")} disabled={savingSection === "restrictions"}>
-            {savingSection === "restrictions" ? <RefreshCw size={17} className="spin" /> : <Check size={17} />}
-            {getSaveButtonLabel("restrictions")}
-          </button>
+          {renderSectionActions("restrictions")}
         </div>
         {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
       </section>

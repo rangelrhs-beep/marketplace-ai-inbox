@@ -1159,6 +1159,18 @@ button:disabled {
   resize: vertical;
 }
 
+.settings-form textarea[readonly] {
+  color: #293456;
+  background: #f8fafc;
+  cursor: default;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .ai-config-layout {
   grid-template-columns: 1fr;
 }
@@ -1197,6 +1209,11 @@ button:disabled {
   background: #dce3f1;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.toggle-switch:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .toggle-switch span {
