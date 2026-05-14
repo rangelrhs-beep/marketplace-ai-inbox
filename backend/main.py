@@ -952,10 +952,11 @@ def protect_tenant_question_payloads(
             continue
         if question_company_id != company_id:
             logger.error(
-                "TENANT_LEAK_EXCLUDED expected=%s found=%s external_id=%s",
+                "TENANT_LEAK_EXCLUDED expected=%s found=%s external_id=%s product_title=%s",
                 company_id,
                 question_company_id,
                 question.get("external_id") or question.get("id"),
+                question.get("product_title") or question.get("product"),
             )
             continue
         protected_questions.append(question)
@@ -974,7 +975,24 @@ def final_filter_tenant_questions(
         before_count,
         len(filtered_questions),
     )
+    logger.info(
+        "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
+        company_id,
+        tenant_question_sample(filtered_questions),
+    )
     return filtered_questions
+
+
+def tenant_question_sample(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "external_id": question.get("external_id"),
+            "company_id": question.get("company_id"),
+            "product_title": question.get("product_title") or question.get("product"),
+            "question_text": (question.get("question_text") or question.get("question") or "")[:120],
+        }
+        for question in questions[:10]
+    ]
 
 
 def get_cors_origins() -> list[str]:
@@ -4391,7 +4409,9 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         )
         if status:
             query = query.filter(QuestionRecord.status == normalize_db_status(status))
-        question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in query.all()]
+        db_questions = query.all()
+        logger.info("TENANT_QUESTIONS_SOURCE_DB company_id=%s count=%s", company_id, len(db_questions))
+        question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in db_questions]
         buyer_ids = list(dict.fromkeys(
             str(question.get("external_customer_id") or "")
             for question in question_payloads
@@ -4407,26 +4427,30 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         )
         logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(local_questions))
         logger.info(
-            "TENANT_QUESTIONS_SAMPLE company_id=%s external_ids=%s",
+            "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
             company_id,
-            [question.get("external_id") for question in local_questions[:10]],
+            tenant_question_sample(local_questions),
         )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
         return []
 
     if status and normalize_db_status(status) != "responded":
+        logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         return final_filter_tenant_questions(local_questions, company_id)
 
     if not is_ml_answered_backfill_enabled():
+        logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         return final_filter_tenant_questions(local_questions, company_id)
 
     try:
         integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
             logger.info("Skipping answered backfill: Mercado Livre disconnected")
+            logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
             return final_filter_tenant_questions(local_questions, company_id)
         live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id)
+        logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, len(live_portal_questions))
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
         live_portal_questions = []
@@ -4436,9 +4460,9 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
     combined_questions = final_filter_tenant_questions(local_questions + live_portal_questions, company_id)
     logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
     logger.info(
-        "TENANT_QUESTIONS_SAMPLE company_id=%s external_ids=%s",
+        "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
         company_id,
-        [question.get("external_id") for question in combined_questions[:10]],
+        tenant_question_sample(combined_questions),
     )
     return combined_questions
 
