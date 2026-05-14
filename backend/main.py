@@ -6,11 +6,13 @@ import logging
 import os
 from pathlib import Path
 import re
+import threading
 import time
 from typing import Any, List
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +42,9 @@ PROCESSED_ML_NOTIFICATION_IDS: dict[str, float] = {}
 DEFAULT_ML_PORTAL_ANSWERED_LOOKBACK_DAYS = 15
 ML_ENABLE_ANSWERED_BACKFILL_DEFAULT = "false"
 ML_BUYER_CACHE: dict[str, dict[str, Any]] = {}
+PRODUCT_SYNC_SCHEDULE_HOURS = (0, 6, 12, 18)
+PRODUCT_SYNC_SCHEDULE_TZ = ZoneInfo("America/Sao_Paulo")
+PRODUCT_SYNC_SCHEDULE_LOCK = threading.Lock()
 
 
 def init_database() -> None:
@@ -2082,6 +2087,68 @@ def sync_mercadolivre_products(db: Session) -> dict[str, Any]:
     return stats
 
 
+def next_product_sync_run(now: datetime | None = None) -> datetime:
+    current = now or datetime.now(PRODUCT_SYNC_SCHEDULE_TZ)
+    for hour in PRODUCT_SYNC_SCHEDULE_HOURS:
+        candidate = current.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if candidate > current:
+            return candidate
+    tomorrow = current + timedelta(days=1)
+    return tomorrow.replace(hour=PRODUCT_SYNC_SCHEDULE_HOURS[0], minute=0, second=0, microsecond=0)
+
+
+def run_scheduled_product_sync_once() -> None:
+    if not PRODUCT_SYNC_SCHEDULE_LOCK.acquire(blocking=False):
+        logger.info("PRODUCT_SYNC_SCHEDULED_SKIPPED_ALREADY_RUNNING")
+        return
+
+    db = SessionLocal()
+    try:
+        logger.info("PRODUCT_SYNC_SCHEDULED_START")
+        stats = sync_mercadolivre_products(db)
+        logger.info(
+            "PRODUCT_SYNC_SCHEDULED_END fetched=%s created=%s updated=%s active=%s inactive=%s",
+            stats.get("fetched"),
+            stats.get("created"),
+            stats.get("updated"),
+            stats.get("active"),
+            stats.get("inactive"),
+        )
+    except Exception:
+        logger.exception("Mercado Livre scheduled product sync failed")
+    finally:
+        db.close()
+        PRODUCT_SYNC_SCHEDULE_LOCK.release()
+
+
+def product_sync_scheduler_loop() -> None:
+    logger.warning(
+        "Mercado Livre automatic product sync scheduler started; Render free instances only run scheduled jobs while awake"
+    )
+    while True:
+        try:
+            next_run = next_product_sync_run()
+            sleep_seconds = max(1, int((next_run - datetime.now(PRODUCT_SYNC_SCHEDULE_TZ)).total_seconds()))
+            logger.info("Mercado Livre next automatic product sync scheduled_at=%s", next_run.isoformat())
+            time.sleep(sleep_seconds)
+            if not DATABASE_READY:
+                logger.warning("PRODUCT_SYNC_SCHEDULED_SKIPPED_DATABASE_NOT_READY")
+                continue
+            run_scheduled_product_sync_once()
+        except Exception:
+            logger.exception("Mercado Livre product sync scheduler loop failed")
+            time.sleep(60)
+
+
+def start_product_sync_scheduler() -> None:
+    scheduler = threading.Thread(
+        target=product_sync_scheduler_loop,
+        name="mercadolivre-product-sync-scheduler",
+        daemon=True,
+    )
+    scheduler.start()
+
+
 def sync_mercadolivre_questions(db: Session, *, source: str = "manual") -> dict[str, Any]:
     logger.info("Mercado Livre sync started source=%s", source)
     stats = {
@@ -2454,6 +2521,7 @@ def root_head_health():
 @app.on_event("startup")
 def startup_event():
     init_database()
+    start_product_sync_scheduler()
 
 
 def raise_connector_http_error(error: ConnectorError) -> None:
