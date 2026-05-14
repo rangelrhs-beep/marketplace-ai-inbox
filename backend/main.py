@@ -944,6 +944,10 @@ def protect_tenant_question_payloads(
     for question in questions:
         question_company_id = str(question.get("company_id") or "")
         if not question_company_id:
+            print(
+                f"TENANT_LEAK_EXCLUDED expected={company_id} found=missing external_id={question.get('external_id') or question.get('id')} title={question.get('product_title') or question.get('product')}",
+                flush=True,
+            )
             logger.error(
                 "TENANT_LEAK_MISSING_COMPANY_ID expected=%s external_id=%s",
                 company_id,
@@ -951,6 +955,10 @@ def protect_tenant_question_payloads(
             )
             continue
         if question_company_id != company_id:
+            print(
+                f"TENANT_LEAK_EXCLUDED expected={company_id} found={question_company_id} external_id={question.get('external_id') or question.get('id')} title={question.get('product_title') or question.get('product')}",
+                flush=True,
+            )
             logger.error(
                 "TENANT_LEAK_EXCLUDED expected=%s found=%s external_id=%s product_title=%s",
                 company_id,
@@ -974,6 +982,10 @@ def final_filter_tenant_questions(
         company_id,
         before_count,
         len(filtered_questions),
+    )
+    print(
+        f"TENANT_QUESTIONS_FINAL_FILTER company_id={company_id} before={before_count} after={len(filtered_questions)}",
+        flush=True,
     )
     logger.info(
         "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
@@ -4391,6 +4403,21 @@ def list_integration_questions(integration_id: str):
 @app.get("/questions")
 def list_questions(request: Request, status: str | None = None, db: Session = Depends(get_db)):
     company_id, _, _ = log_tenant_context(request)
+    print(f"TENANT_QUESTIONS_QUERY company_id={company_id}", flush=True)
+
+    def return_questions(source_questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        before_count = len(source_questions)
+        filtered_questions = final_filter_tenant_questions(source_questions, company_id)
+        print(
+            f"TENANT_QUESTIONS_FINAL_FILTER company_id={company_id} before={before_count} after={len(filtered_questions)}",
+            flush=True,
+        )
+        print(
+            f"TENANT_QUESTIONS_SAMPLE company_id={company_id} sample={tenant_question_sample(filtered_questions)}",
+            flush=True,
+        )
+        return filtered_questions
+
     try:
         logger.info("TENANT_QUESTIONS_QUERY company_id=%s", company_id)
         print("BUYER_ENRICHMENT_START", flush=True)
@@ -4411,6 +4438,7 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
             query = query.filter(QuestionRecord.status == normalize_db_status(status))
         db_questions = query.all()
         logger.info("TENANT_QUESTIONS_SOURCE_DB company_id=%s count=%s", company_id, len(db_questions))
+        print(f"TENANT_QUESTIONS_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
         question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in db_questions]
         buyer_ids = list(dict.fromkeys(
             str(question.get("external_customer_id") or "")
@@ -4421,6 +4449,10 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         print(f"BUYER_ENRICHMENT unique_buyer_ids={buyer_ids[:10]} total={len(buyer_ids)}", flush=True)
         if not buyer_ids:
             print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
+        print(
+            f"TENANT_QUESTIONS_BEFORE_BUYER_ENRICHMENT company_id={company_id} count={len(question_payloads)}",
+            flush=True,
+        )
         local_questions = protect_tenant_question_payloads(
             enrich_questions_with_buyers(question_payloads, db),
             company_id,
@@ -4437,27 +4469,34 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
 
     if status and normalize_db_status(status) != "responded":
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-        return final_filter_tenant_questions(local_questions, company_id)
+        print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+        return return_questions(local_questions)
 
     if not is_ml_answered_backfill_enabled():
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-        return final_filter_tenant_questions(local_questions, company_id)
+        print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+        return return_questions(local_questions)
 
     try:
         integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
             logger.info("Skipping answered backfill: Mercado Livre disconnected")
             logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-            return final_filter_tenant_questions(local_questions, company_id)
+            print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+            return return_questions(local_questions)
         live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id)
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, len(live_portal_questions))
+        print(
+            f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count={len(live_portal_questions)}",
+            flush=True,
+        )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
         live_portal_questions = []
     except Exception:
         logger.exception("Live portal answered questions unavailable; returning local questions only")
         live_portal_questions = []
-    combined_questions = final_filter_tenant_questions(local_questions + live_portal_questions, company_id)
+    combined_questions = return_questions(local_questions + live_portal_questions)
     logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
     logger.info(
         "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
