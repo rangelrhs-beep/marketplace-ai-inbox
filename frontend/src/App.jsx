@@ -1724,17 +1724,14 @@ export default function App() {
     if (!response.ok || !Array.isArray(data)) {
       throw new Error("Não foi possível carregar perguntas do banco.");
     }
+    const responseSample = data.slice(0, 5).map((question) => [
+      question.external_id,
+      question.company_id,
+      question.product_title || question.product,
+    ]);
     console.log(
-      "QUESTIONS_RESPONSE",
-      {
-        company_id: requestCompanyId,
-        count: data.length,
-        sample: data.slice(0, 5).map((question) => [
-          question.external_id,
-          question.company_id,
-          question.product_title || question.product,
-        ]),
-      }
+      `QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} count=${data.length}`,
+      responseSample
     );
     if (requestCompanyId !== getStoredCompanyId()) {
       console.log("QUESTIONS_RESPONSE ignored stale company response", {
@@ -1743,7 +1740,7 @@ export default function App() {
       });
       return [];
     }
-    const tenantQuestions = data.filter((question) => question.company_id === requestCompanyId);
+    const tenantQuestions = data.filter((question) => question.company_id && question.company_id === requestCompanyId);
     setQuestions(tenantQuestions);
     setSelectedId((current) =>
       current && tenantQuestions.some((question) => question.id === current)
