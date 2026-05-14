@@ -53,13 +53,23 @@ const initialIntegrationHealth = [
   },
 ];
 
-const CURRENT_COMPANY = { id: "cpap_express", name: "CPAP Express", plan: "Business" };
-const CURRENT_USER = {
-  id: "u-admin",
-  name: "Admin",
-  email: "admin@cpapexpress.com.br",
-  role: "admin",
-};
+// TODO auth: replace mocked tenant context with data from the backend session.
+// TODO admin: allow platform admin company selector.
+function getMockTenantContext() {
+  return {
+    company: { id: "cpap_express", name: "CPAP Express", plan: "Business" },
+    user: {
+      id: "u-admin",
+      name: "Admin",
+      email: "admin@cpapexpress.com.br",
+      role: "platform_admin",
+    },
+  };
+}
+
+const MOCK_TENANT_CONTEXT = getMockTenantContext();
+const CURRENT_COMPANY = MOCK_TENANT_CONTEXT.company;
+const CURRENT_USER = MOCK_TENANT_CONTEXT.user;
 
 function integrationState(overrides = {}) {
   return initialIntegrations.map((integration) => ({
