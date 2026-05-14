@@ -111,6 +111,7 @@ const initialAppData = {
 const statusClass = {
   Pendente: "pending",
   Respondida: "answered",
+  "Não respondível": "blocked",
   Rejeitada: "rejected",
   Conectado: "approved",
   "Conectado temporariamente": "pending",
@@ -289,6 +290,10 @@ function mapMercadoLivreQuestionToUi(question, index) {
     final_response: question.final_response || question.final_answer || "",
     answered_at: question.answered_at || "",
     answered_source: normalizeAnsweredSource(question.answered_source),
+    answer_error_code: question.answer_error_code || "",
+    answer_error_message: question.answer_error_message || "",
+    answer_blocked_at: question.answer_blocked_at || "",
+    is_unanswerable: Boolean(question.is_unanswerable || question.status === "Não respondível"),
     raw_payload: rawPayload,
     external_id: String(externalId),
     is_real: true,
@@ -1324,6 +1329,7 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   const [rewriteError, setRewriteError] = useState("");
   const conversationQuestions = question?.questions || (question ? [question] : []);
   const editableQuestion = conversationQuestions.find((item) => item.status === "Pendente") || question;
+  const isUnanswerable = Boolean(question?.is_unanswerable || question?.status === "Não respondível");
 
   useEffect(() => {
     const pendingQuestion = (question?.questions || [question]).find((item) => item?.status === "Pendente") || question;
@@ -1385,6 +1391,32 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
         <div className="chat-surface">
           <DetailMetadata question={question} />
 
+          <ConversationMessages questions={conversationQuestions} />
+        </div>
+      </section>
+    );
+  }
+
+  if (isUnanswerable) {
+    return (
+      <section className="conversation">
+        <header className="conversation-header">
+          <button className="back-button" onClick={onBack} aria-label="Voltar para lista">
+            <ChevronLeft size={22} />
+          </button>
+          <div>
+            <span>{question.marketplace} · {getBuyerDisplayName(question.buyer, question.customer_name, { detail: true })}</span>
+            <h2>{question.product}</h2>
+            <p>{question.answer_blocked_at ? `Bloqueada em ${formatDate(question.answer_blocked_at)}` : "Resposta bloqueada"}</p>
+          </div>
+          <span className={`pill status ${statusClass[question.status]}`}>{question.status}</span>
+        </header>
+
+        <div className="chat-surface">
+          <DetailMetadata question={question} />
+          <div className="answer-feedback info">
+            {question.answer_error_message || "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre."}
+          </div>
           <ConversationMessages questions={conversationQuestions} />
         </div>
       </section>
@@ -1950,7 +1982,7 @@ export default function App() {
   const isReadOnlyAnsweredScreen = active === "Respondidas";
   const answerFeedbackClass = answerError
     ? "error"
-    : answerNotice.includes("outro usuário")
+    : answerNotice.includes("outro usuário") || answerNotice.includes("não pode mais ser respondida")
       ? "info"
       : "success";
 
@@ -2161,6 +2193,33 @@ export default function App() {
 
         if (data.already_answered) {
           await handleAlreadyAnsweredExternally(data);
+          return;
+        }
+
+        if (data.answer_blocked) {
+          const updatedQuestion = data.question || targetQuestion;
+          setQuestions((current) =>
+            current.map((question) =>
+              question.id === id
+                ? {
+                    ...question,
+                    ...updatedQuestion,
+                    status: "Não respondível",
+                    is_unanswerable: true,
+                    answer_error_message:
+                      data.message ||
+                      updatedQuestion.answer_error_message ||
+                      "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre.",
+                    answer_error_code: data.error_code || updatedQuestion.answer_error_code || "answer_blocked",
+                    answer_blocked_at: updatedQuestion.answer_blocked_at || new Date().toISOString(),
+                  }
+                : question
+            )
+          );
+          setAnswerNotice(data.message || "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre.");
+          setShowConversation(false);
+          setSelectedId(null);
+          await loadQuestionsFromDatabase().catch(() => {});
           return;
         }
 

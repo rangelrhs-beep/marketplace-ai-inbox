@@ -731,6 +731,11 @@ button:disabled {
   color: #2457c5;
 }
 
+.status.blocked {
+  background: #f3f6fb;
+  color: #647189;
+}
+
 .answer-source {
   background: #eef3ff;
   color: #2457c5;
