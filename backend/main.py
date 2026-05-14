@@ -1,11 +1,14 @@
 ﻿from datetime import datetime, timedelta
 from datetime import timezone
 from enum import Enum
+import base64
+import binascii
 import json
 import logging
 import os
 from pathlib import Path
 import re
+import secrets
 import threading
 import time
 from typing import Any, List
@@ -49,7 +52,7 @@ PRODUCT_SYNC_SCHEDULE_LOCK = threading.Lock()
 
 # TODO auth: replace mocked tenant context with real session
 # TODO admin: allow platform admin company selector
-# TODO OAuth: include company_id in Mercado Livre state
+# TODO OAuth: replace mocked company context with authenticated tenant-aware state signing.
 def get_current_user_id(request: Request | None = None) -> str | None:
     return "admin"
 
@@ -943,15 +946,53 @@ def get_ml_config_errors(config: dict[str, str]) -> list[str]:
     return errors
 
 
-def build_mercadolivre_auth_url(config: dict[str, str]) -> str:
+def encode_ml_oauth_state(company_id: str) -> str:
+    payload = {
+        "company_id": company_id,
+        "nonce": secrets.token_urlsafe(16),
+        "timestamp": int(time.time()),
+    }
+    raw_state = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw_state).decode("ascii").rstrip("=")
+
+
+def decode_ml_oauth_state(state: str | None) -> dict[str, Any]:
+    if not state:
+        return {}
+    try:
+        padded_state = state + ("=" * (-len(state) % 4))
+        decoded = base64.urlsafe_b64decode(padded_state.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        if isinstance(payload, dict):
+            return payload
+    except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        logger.warning("Mercado Livre OAuth state could not be decoded")
+    return {}
+
+
+def get_ml_oauth_company_id_from_state(state: str | None) -> str:
+    payload = decode_ml_oauth_state(state)
+    company_id = str(payload.get("company_id") or "").strip()
+    if company_id:
+        if company_exists(company_id):
+            return company_id
+        logger.warning("Mercado Livre OAuth callback rejected invalid company_id=%s", company_id)
+        raise HTTPException(status_code=400, detail="Empresa inválida no OAuth Mercado Livre.")
+    logger.warning("Mercado Livre OAuth callback without state; using default company for backward compatibility")
+    return DEFAULT_COMPANY_ID
+
+
+def build_mercadolivre_auth_url(config: dict[str, str], state: str | None = None) -> str:
+    params = {
+        "response_type": "code",
+        "client_id": config["client_id"],
+        "redirect_uri": config["redirect_uri"],
+        "scope": "offline_access",
+    }
+    if state:
+        params["state"] = state
     query = urlencode(
-        {
-            "response_type": "code",
-            "client_id": config["client_id"],
-            "redirect_uri": config["redirect_uri"],
-            "scope": "offline_access",
-            "state": "marketplace-ai-inbox",
-        }
+        params
     )
     return f"{ML_AUTH_BASE_URL}?{query}"
 
@@ -983,7 +1024,8 @@ def non_empty_token(value: Any) -> str | None:
     return token or None
 
 
-def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
+def save_ml_tokens(token_data: dict[str, Any], company_id: str | None = None) -> dict[str, Any]:
+    resolved_company_id = company_id or DEFAULT_COMPANY_ID
     expires_in = int(token_data.get("expires_in") or 0)
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
     access_token = non_empty_token(token_data.get("access_token"))
@@ -993,7 +1035,7 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="Mercado Livre token response missing access_token")
     db = SessionLocal()
     try:
-        integration = get_ml_integration(db)
+        integration = get_ml_integration(db, resolved_company_id)
         if access_token:
             integration.access_token = access_token
         if refresh_token:
@@ -1005,7 +1047,7 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
         integration.last_sync = datetime.utcnow()
         integration.updated_at = datetime.utcnow()
         db.commit()
-        logger.info("Mercado Livre OAuth connected successfully")
+        logger.info("Mercado Livre OAuth connected successfully company_id=%s", resolved_company_id)
         token_data["expires_at"] = int(expires_at.timestamp())
         token_data["refresh_token"] = integration.refresh_token
         token_data["seller_id"] = integration.seller_id
@@ -1019,10 +1061,11 @@ def save_ml_tokens(token_data: dict[str, Any]) -> dict[str, Any]:
         db.close()
 
 
-def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
+def update_ml_tokens(updates: dict[str, Any], company_id: str | None = None) -> dict[str, Any]:
+    resolved_company_id = company_id or DEFAULT_COMPANY_ID
     db = SessionLocal()
     try:
-        integration = get_ml_integration(db)
+        integration = get_ml_integration(db, resolved_company_id)
         access_token = non_empty_token(updates.get("access_token"))
         refresh_token = non_empty_token(updates.get("refresh_token"))
         if access_token:
@@ -1049,7 +1092,11 @@ def update_ml_tokens(updates: dict[str, Any]) -> dict[str, Any]:
             "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
         }
         db.commit()
-        logger.info("Mercado Livre token metadata updated fields=%s", sorted(updates.keys()))
+        logger.info(
+            "Mercado Livre token metadata updated company_id=%s fields=%s",
+            resolved_company_id,
+            sorted(updates.keys()),
+        )
         return tokens
     except Exception:
         db.rollback()
@@ -3016,7 +3063,8 @@ def suggest_ai_response(payload: AiSuggestionPayload, request: Request, db: Sess
 
 
 @app.get("/integrations/mercadolivre/auth-url")
-def mercadolivre_auth_url():
+def mercadolivre_auth_url(request: Request):
+    company_id, _, _ = log_tenant_context(request)
     config = get_ml_config()
     config_errors = get_ml_config_errors(config)
     if config_errors:
@@ -3028,7 +3076,9 @@ def mercadolivre_auth_url():
             "errors": config_errors,
         }
 
-    auth_url = build_mercadolivre_auth_url(config)
+    state = encode_ml_oauth_state(company_id)
+    auth_url = build_mercadolivre_auth_url(config, state=state)
+    logger.info("ML_OAUTH_AUTH_URL company_id=%s", company_id)
     return {
         "auth_url": auth_url,
         "redirect_uri": config["redirect_uri"],
@@ -3058,12 +3108,14 @@ def mercadolivre_disconnect(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/integrations/mercadolivre/callback")
-def mercadolivre_callback(code: str = Query(...)):
+def mercadolivre_callback(code: str = Query(...), state: str | None = Query(default=None)):
     config = get_ml_config()
     config_errors = get_ml_config_errors(config)
     if config_errors:
         raise HTTPException(status_code=400, detail={"message": "Mercado Livre OAuth is not configured correctly.", "errors": config_errors})
 
+    company_id = get_ml_oauth_company_id_from_state(state)
+    logger.info("ML_OAUTH_CALLBACK_STATE company_id=%s", company_id)
     token_data = ml_request_json(
         f"{ML_API_BASE_URL}/oauth/token",
         method="POST",
@@ -3075,7 +3127,10 @@ def mercadolivre_callback(code: str = Query(...)):
             "redirect_uri": config["redirect_uri"],
         },
     )
-    tokens = retry_database_write(lambda: save_ml_tokens(token_data), label="mercadolivre_oauth_save_tokens")
+    tokens = retry_database_write(
+        lambda: save_ml_tokens(token_data, company_id=company_id),
+        label="mercadolivre_oauth_save_tokens",
+    )
     try:
         seller_id = get_ml_seller_id(tokens)
     except HTTPException as error:
@@ -3086,9 +3141,10 @@ def mercadolivre_callback(code: str = Query(...)):
         ) from error
     try:
         tokens = retry_database_write(
-            lambda: update_ml_tokens({"seller_id": seller_id}),
+            lambda: update_ml_tokens({"seller_id": seller_id}, company_id=company_id),
             label="mercadolivre_oauth_save_seller_id",
         )
+        logger.info("ML_OAUTH_SAVE_TOKENS company_id=%s seller_id=%s", company_id, seller_id)
     except (OperationalError, SQLAlchemyError) as error:
         logger.critical(
             "Mercado Livre OAuth token saved, but seller_id database update failed error_class=%s error_message=%s",
