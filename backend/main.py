@@ -2509,24 +2509,173 @@ def extract_ml_question_id_from_notification(payload: Any) -> str | None:
     return None
 
 
+def extract_ml_seller_id_from_notification(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    direct_seller_id = first_present(
+        payload.get("seller_id"),
+        payload.get("user_id"),
+        payload.get("user"),
+        payload.get("owner_id"),
+    )
+    if isinstance(direct_seller_id, dict):
+        direct_seller_id = first_present(direct_seller_id.get("id"), direct_seller_id.get("user_id"))
+    if direct_seller_id:
+        return str(direct_seller_id)
+    resource = str(payload.get("resource") or payload.get("path") or payload.get("url") or "")
+    match = re.search(r"/users/([^/?#]+)", resource)
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_ml_integration_by_seller_id(db: Session, seller_id: str) -> Integration | None:
+    resolved_seller_id = str(seller_id or "").strip()
+    if not resolved_seller_id:
+        return None
+    return (
+        db.query(Integration)
+        .filter(
+            Integration.provider == DEFAULT_PROVIDER,
+            Integration.seller_id == resolved_seller_id,
+        )
+        .first()
+    )
+
+
+def get_connected_ml_integrations(db: Session) -> list[Integration]:
+    return (
+        db.query(Integration)
+        .filter(
+            Integration.provider == DEFAULT_PROVIDER,
+            or_(Integration.access_token.isnot(None), Integration.refresh_token.isnot(None)),
+        )
+        .all()
+    )
+
+
+def resolve_ml_webhook_company_context(
+    db: Session,
+    payload: Any,
+    question_id: str | None = None,
+) -> dict[str, Any] | None:
+    seller_id = extract_ml_seller_id_from_notification(payload)
+    if seller_id:
+        integration = get_ml_integration_by_seller_id(db, seller_id)
+        if not integration:
+            logger.warning("ML_WEBHOOK_COMPANY_NOT_FOUND seller_id=%s", seller_id)
+            return None
+        logger.info(
+            "ML_WEBHOOK_COMPANY_RESOLVED company_id=%s seller_id=%s",
+            integration.company_id,
+            seller_id,
+        )
+        return {
+            "company_id": integration.company_id,
+            "seller_id": seller_id,
+            "question_detail": None,
+            "access_token": None,
+        }
+
+    if not question_id:
+        logger.warning("ML_WEBHOOK_COMPANY_NOT_FOUND seller_id=%s", None)
+        return None
+
+    logger.info("ML_WEBHOOK_COMPANY_NOT_FOUND seller_id=%s reason=payload_missing_seller_id", None)
+    for integration in get_connected_ml_integrations(db):
+        try:
+            access_token = get_valid_mercadolivre_token(db, company_id=integration.company_id)
+            question_detail = fetch_ml_question_detail(question_id, access_token)
+            question_seller_id = first_present(
+                question_detail.get("seller_id"),
+                question_detail.get("seller", {}).get("id") if isinstance(question_detail.get("seller"), dict) else None,
+            )
+            if question_seller_id and integration.seller_id and str(question_seller_id) != str(integration.seller_id):
+                continue
+            resolved_seller_id = str(integration.seller_id or "")
+            logger.info(
+                "ML_WEBHOOK_COMPANY_RESOLVED company_id=%s seller_id=%s",
+                integration.company_id,
+                resolved_seller_id or "unknown",
+            )
+            return {
+                "company_id": integration.company_id,
+                "seller_id": resolved_seller_id,
+                "question_detail": question_detail,
+                "access_token": access_token,
+            }
+        except HTTPException as error:
+            if error.status_code == 401:
+                try:
+                    access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=integration.company_id)
+                    question_detail = fetch_ml_question_detail(question_id, access_token)
+                    question_seller_id = first_present(
+                        question_detail.get("seller_id"),
+                        question_detail.get("seller", {}).get("id") if isinstance(question_detail.get("seller"), dict) else None,
+                    )
+                    if question_seller_id and integration.seller_id and str(question_seller_id) != str(integration.seller_id):
+                        continue
+                    resolved_seller_id = str(integration.seller_id or "")
+                    logger.info(
+                        "ML_WEBHOOK_COMPANY_RESOLVED company_id=%s seller_id=%s",
+                        integration.company_id,
+                        resolved_seller_id or "unknown",
+                    )
+                    return {
+                        "company_id": integration.company_id,
+                        "seller_id": resolved_seller_id,
+                        "question_detail": question_detail,
+                        "access_token": access_token,
+                    }
+                except HTTPException:
+                    logger.warning(
+                        "ML webhook question lookup failed after refresh company_id=%s question_id=%s",
+                        integration.company_id,
+                        question_id,
+                    )
+            else:
+                logger.warning(
+                    "ML webhook question lookup failed company_id=%s question_id=%s status=%s",
+                    integration.company_id,
+                    question_id,
+                    error.status_code,
+                )
+        except Exception:
+            logger.exception(
+                "ML webhook company resolution failed company_id=%s question_id=%s",
+                integration.company_id,
+                question_id,
+            )
+    logger.warning("ML_WEBHOOK_COMPANY_NOT_FOUND seller_id=%s", None)
+    return None
+
+
 def process_mercadolivre_question_notification(db: Session, payload: Any) -> bool:
-    company_id = get_current_company_id()
     question_id = extract_ml_question_id_from_notification(payload)
     topic = payload.get("topic") if isinstance(payload, dict) else None
     resource = payload.get("resource") if isinstance(payload, dict) else None
-    logger.info("ML question webhook processing topic=%s resource=%s question_id=%s", topic, resource, question_id)
-    if not question_id:
-        logger.info("ML question webhook has no question id; falling back to pending sync")
+    context = resolve_ml_webhook_company_context(db, payload, question_id)
+    if not context:
         return False
+    company_id = context["company_id"]
+    access_token = context.get("access_token")
+    question_detail = context.get("question_detail")
+    logger.info("ML_WEBHOOK_PROCESSING company_id=%s resource=%s", company_id, resource)
+    if not question_id:
+        logger.info("ML question webhook has no question id; syncing company pending queue company_id=%s", company_id)
+        sync_mercadolivre_questions(db, source="webhook", company_id=company_id)
+        return True
 
-    access_token = get_valid_mercadolivre_token(db, company_id=company_id)
-    try:
-        question_detail = fetch_ml_question_detail(question_id, access_token)
-    except HTTPException as error:
-        if error.status_code != 401:
-            raise
-        access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=company_id)
-        question_detail = fetch_ml_question_detail(question_id, access_token)
+    if not access_token:
+        access_token = get_valid_mercadolivre_token(db, company_id=company_id)
+    if not question_detail:
+        try:
+            question_detail = fetch_ml_question_detail(question_id, access_token)
+        except HTTPException as error:
+            if error.status_code != 401:
+                raise
+            access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=company_id)
+            question_detail = fetch_ml_question_detail(question_id, access_token)
 
     status = str(question_detail.get("status") or "").upper()
     has_answer = bool(extract_ml_answer_text(question_detail))
@@ -2542,7 +2691,8 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
         is not None
     )
     logger.info(
-        "ML question webhook fetched question_id=%s status=%s has_answer=%s local_app_answer_exists=%s",
+        "ML question webhook fetched company_id=%s question_id=%s status=%s has_answer=%s local_app_answer_exists=%s",
+        company_id,
         question_id,
         status,
         has_answer,
@@ -2554,9 +2704,10 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
         source = question.answered_source if question else "portal"
         db.commit()
         logger.info(
-            "ML question webhook saved_as=%s db_action=%s question_id=%s",
+            "ML question webhook saved_as=%s db_action=%s company_id=%s question_id=%s",
             source,
             action,
+            company_id,
             question_id,
         )
         return True
@@ -2568,7 +2719,7 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
     db.flush()
     ensure_initial_suggestion(db, question, company_id=company_id)
     db.commit()
-    logger.info("ML question webhook saved_as=pending db_action=updated question_id=%s", question_id)
+    logger.info("ML question webhook saved_as=pending db_action=updated company_id=%s question_id=%s", company_id, question_id)
     return True
 
 
@@ -2579,7 +2730,9 @@ def run_mercadolivre_sync_background(source: str, payload: Any | None = None) ->
         processed = False
         if source == "webhook":
             processed = process_mercadolivre_question_notification(db, payload)
-        if not processed:
+            if not processed:
+                logger.info("Mercado Livre webhook background sync skipped; company context not resolved")
+        elif not processed:
             sync_mercadolivre_questions(db, source=source)
         logger.info("Mercado Livre background sync completed source=%s", source)
     except OperationalError:
@@ -2595,31 +2748,22 @@ def run_mercadolivre_sync_background(source: str, payload: Any | None = None) ->
 def should_process_mercadolivre_question_notification(payload: Any) -> bool:
     if not isinstance(payload, dict):
         logger.info(
-            "webhook action=ignored topic=%s resource=%s reason=payload_not_object",
+            "ML_WEBHOOK_IGNORED topic=%s reason=%s",
             None,
-            None,
+            "payload_not_object",
         )
         return False
     topic = str(payload.get("topic") or payload.get("type") or "").strip().lower()
     resource = str(payload.get("resource") or payload.get("path") or payload.get("url") or "").strip().lower()
 
     if topic == "questions":
-        logger.info(
-            "webhook action=question_sync_started topic=%s resource=%s reason=topic_questions",
-            topic,
-            resource,
-        )
         return True
     if "/questions" in resource:
-        logger.info(
-            "webhook action=question_sync_started topic=%s resource=%s reason=resource_questions",
-            topic,
-            resource,
-        )
         return True
     logger.info(
-        "webhook action=ignored topic=%s resource=%s reason=unrelated_or_no_question_resource",
+        "ML_WEBHOOK_IGNORED topic=%s reason=%s resource=%s",
         topic,
+        "unrelated_or_no_question_resource",
         resource,
     )
     return False
@@ -3245,7 +3389,8 @@ def mercadolivre_notifications(
     try:
         topic = payload.get("topic") if isinstance(payload, dict) else None
         resource = payload.get("resource") if isinstance(payload, dict) else None
-        logger.info("Mercado Livre webhook received topic=%s resource=%s", topic, resource)
+        user_id = extract_ml_seller_id_from_notification(payload)
+        logger.info("ML_WEBHOOK_RECEIVED topic=%s resource=%s user_id=%s", topic, resource, user_id)
         if not should_process_mercadolivre_question_notification(payload):
             return {"ok": True, "processed": False}
         if not DATABASE_READY:
