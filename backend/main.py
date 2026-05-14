@@ -24,7 +24,7 @@ from integrations.errors import ApiFailureError, ConnectorError, ConnectorErrorC
 from integrations.models import ConnectionTestResult, IntegrationHealth, NormalizedQuestion
 from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
-from db_models import AiSuggestion, CompanySettings, Integration, ProductCache, QuestionRecord
+from db_models import AiSuggestion, Company, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, seed_defaults
 from sqlalchemy import Text, cast, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
@@ -2595,6 +2595,33 @@ def root_health():
 @app.head("/")
 def root_head_health():
     return Response(status_code=200)
+
+
+@app.get("/me")
+def get_me(request: Request, db: Session = Depends(get_db)):
+    # TODO auth: replace /me mock with real session user
+    # TODO admin: enable company switcher for platform admin
+    # TODO permissions: hide/show areas based on role
+    company_id, user_id, role = log_tenant_context(request)
+    company = db.get(Company, company_id)
+    company_name = company.name if company else "CPAP Express"
+    logger.info("TENANT_ME company_id=%s user_id=%s role=%s", company_id, user_id, role)
+    return {
+        "user": {
+            "id": user_id,
+            "name": "Admin",
+            "email": None,
+            "role": role,
+        },
+        "company": {
+            "id": company_id,
+            "name": company_name,
+        },
+        "permissions": {
+            "is_platform_admin": role == "platform_admin",
+            "can_switch_company": False,
+        },
+    }
 
 
 @app.on_event("startup")
