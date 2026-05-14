@@ -209,6 +209,9 @@ def ensure_database_columns() -> None:
     question_columns = {
         "answered_source": "VARCHAR(80)",
         "final_answer": "TEXT",
+        "answer_error_code": "VARCHAR(120)",
+        "answer_error_message": "TEXT",
+        "answer_blocked_at": "TIMESTAMP",
     }
     company_settings_columns = {
         "ai_general_rules": "TEXT",
@@ -402,11 +405,25 @@ def normalize_db_status(status: str | None) -> str:
     normalized = (status or "").strip().lower()
     if normalized in {"respondida", "respondido", "answered", "responded", "closed"}:
         return "responded"
+    if normalized in {
+        "closed_unanswerable",
+        "unanswerable",
+        "answer_blocked",
+        "blocked",
+        "expired",
+        "not_active_item",
+    }:
+        return "closed_unanswerable"
     return "pending"
 
 
 def status_to_ui(status: str | None) -> str:
-    return "Respondida" if normalize_db_status(status) == "responded" else "Pendente"
+    normalized = normalize_db_status(status)
+    if normalized == "responded":
+        return "Respondida"
+    if normalized == "closed_unanswerable":
+        return "Não respondível"
+    return "Pendente"
 
 
 def get_suggestion_text(suggestion: AiSuggestion | None) -> str:
@@ -904,6 +921,10 @@ def question_to_api(
         "answered_at": question.answered_at.isoformat() if question.answered_at else None,
         "answered_source": question.answered_source,
         "source": question.answered_source,
+        "answer_error_code": question.answer_error_code,
+        "answer_error_message": question.answer_error_message,
+        "answer_blocked_at": question.answer_blocked_at.isoformat() if question.answer_blocked_at else None,
+        "is_unanswerable": normalize_db_status(question.status) == "closed_unanswerable",
         "approved_by": suggestion.approved_by if suggestion else None,
         "approved_at": suggestion.approved_at.isoformat() if suggestion and suggestion.approved_at else None,
         "sku": product_sku or "",
@@ -1427,6 +1448,95 @@ def normalize_ml_question_status(raw_status: str | None) -> str:
     return "Pendente"
 
 
+def ml_item_is_unanswerable(item_payload: dict[str, Any] | None) -> bool:
+    if not isinstance(item_payload, dict) or not item_payload:
+        return False
+    status = str(item_payload.get("status") or "").strip().lower()
+    return status in {"closed", "inactive", "paused", "not_yet_active", "under_review"}
+
+
+def get_ml_item_status(item_payload: dict[str, Any] | None) -> str:
+    if not isinstance(item_payload, dict):
+        return ""
+    return str(item_payload.get("status") or "").strip()
+
+
+def is_answer_forbidden_error(error: HTTPException | Exception) -> bool:
+    detail = str(getattr(error, "detail", error) or "").lower()
+    return any(
+        marker in detail
+        for marker in (
+            "not_active_item",
+            "item must be active",
+            "item not active",
+            "item closed",
+            "invalid status",
+            "answer forbidden",
+            "cannot answer",
+            "can't answer",
+        )
+    )
+
+
+def get_ml_error_code(error: HTTPException | Exception) -> str:
+    detail = str(getattr(error, "detail", error) or "")
+    try:
+        if "Mercado Livre API error:" in detail:
+            detail = detail.split("Mercado Livre API error:", 1)[1].strip()
+        payload = json.loads(detail)
+        if isinstance(payload, dict):
+            return str(payload.get("error") or payload.get("code") or "answer_blocked")
+    except (ValueError, TypeError):
+        pass
+    lowered = detail.lower()
+    if "not_active_item" in lowered or "item must be active" in lowered:
+        return "not_active_item"
+    if "item closed" in lowered:
+        return "item_closed"
+    if "invalid status" in lowered:
+        return "invalid_status"
+    return "answer_blocked"
+
+
+def mark_question_unanswerable(
+    db: Session,
+    *,
+    question_id: str,
+    reason_code: str,
+    reason_message: str,
+    item_id: str | None = None,
+    company_id: str | None = None,
+) -> QuestionRecord | None:
+    resolved_company_id = company_id or get_current_company_id()
+    question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == resolved_company_id,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+        )
+        .first()
+    )
+    if not question:
+        return None
+    question.status = "closed_unanswerable"
+    question.answer_error_code = reason_code
+    question.answer_error_message = reason_message
+    question.answer_blocked_at = datetime.utcnow()
+    question.updated_at = datetime.utcnow()
+    if item_id:
+        raw_payload = dict(question.raw_payload or {})
+        raw_payload["answer_blocked_item_id"] = item_id
+        question.raw_payload = raw_payload
+    logger.info(
+        "ML_QUESTION_UNANSWERABLE question_id=%s item_id=%s reason=%s",
+        question.external_id,
+        item_id or extract_question_item_id(question.raw_payload or {}),
+        reason_code,
+    )
+    return question
+
+
 def fetch_ml_item_detail(item_id: str, access_token: str) -> dict[str, Any]:
     encoded_item_id = quote(str(item_id), safe="")
     return ml_request_json(
@@ -1459,12 +1569,15 @@ def normalize_ml_question(payload: dict[str, Any], access_token: str) -> dict[st
     item_payload = get_ml_product_payload(item_id, access_token)
     text = payload.get("text") or payload.get("question") or payload.get("body") or ""
     created_at = payload.get("date_created") or payload.get("created_at") or datetime.utcnow().isoformat()
+    status = normalize_ml_question_status(payload.get("status"))
+    if status == "Pendente" and ml_item_is_unanswerable(item_payload):
+        status = "closed_unanswerable"
     return {
         "channel": "mercado_livre",
         "external_id": str(payload.get("id") or payload.get("question_id") or ""),
         "product_title": get_ml_product_title(item_id, access_token, item_payload),
         "question_text": text,
-        "status": normalize_ml_question_status(payload.get("status")),
+        "status": status,
         "created_at": created_at,
         "raw_payload": payload,
         "item_payload": item_payload,
@@ -1503,6 +1616,22 @@ def upsert_ml_question(
     question.status = normalize_db_status(normalized.get("status"))
     question.created_at = parse_datetime(normalized.get("created_at"))
     question.raw_payload = normalized.get("raw_payload") or {}
+    item_payload = normalized.get("item_payload")
+    if question.status == "closed_unanswerable":
+        item_status = get_ml_item_status(item_payload)
+        question.answer_error_code = "not_active_item"
+        question.answer_error_message = (
+            "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre."
+            if not item_status
+            else f"Esta pergunta não pode mais ser respondida porque o anúncio está com status '{item_status}' no Mercado Livre."
+        )
+        question.answer_blocked_at = question.answer_blocked_at or datetime.utcnow()
+        logger.info(
+            "ML_QUESTION_UNANSWERABLE question_id=%s item_id=%s reason=%s",
+            question.external_id,
+            extract_question_item_id(question.raw_payload or {}),
+            question.answer_error_code,
+        )
     question.updated_at = datetime.utcnow()
     return question
 
@@ -2419,6 +2548,9 @@ def sync_mercadolivre_questions(
             question = upsert_ml_question(db, normalized, company_id=resolved_company_id)
             stats["updated" if existing_question else "created"] += 1
             db.flush()
+            if normalize_db_status(question.status) == "closed_unanswerable":
+                saved_questions.append(question)
+                continue
             ensure_initial_suggestion(db, question, company_id=resolved_company_id)
             if not had_suggestion and get_suggestion_text(question.ai_suggestion):
                 stats["suggestions_generated"] += 1
@@ -2717,6 +2849,10 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
         upsert_ml_product(db, normalized["item_payload"], company_id=company_id)
     question = upsert_ml_question(db, normalized, company_id=company_id)
     db.flush()
+    if normalize_db_status(question.status) == "closed_unanswerable":
+        db.commit()
+        logger.info("ML question webhook saved_as=unanswerable db_action=updated company_id=%s question_id=%s", company_id, question_id)
+        return True
     ensure_initial_suggestion(db, question, company_id=company_id)
     db.commit()
     logger.info("ML question webhook saved_as=pending db_action=updated company_id=%s question_id=%s", company_id, question_id)
@@ -3740,6 +3876,35 @@ def handle_portal_answered_question(
     return None
 
 
+def blocked_answer_response(
+    db: Session,
+    *,
+    question_id: str,
+    error: HTTPException | Exception,
+    company_id: str,
+    item_id: str | None = None,
+) -> dict[str, Any]:
+    reason_code = get_ml_error_code(error)
+    reason_message = "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre."
+    question = mark_question_unanswerable(
+        db,
+        question_id=question_id,
+        reason_code=reason_code,
+        reason_message=reason_message,
+        item_id=item_id,
+        company_id=company_id,
+    )
+    db.commit()
+    return {
+        "sent": False,
+        "answer_blocked": True,
+        "already_answered": False,
+        "message": reason_message,
+        "error_code": reason_code,
+        "question": question_to_api(question, db=db, company_id=company_id) if question else None,
+    }
+
+
 @app.post("/integrations/mercadolivre/questions/{question_id}/answer")
 def answer_mercadolivre_question(
     question_id: str,
@@ -3751,6 +3916,25 @@ def answer_mercadolivre_question(
     answer = payload.answer.strip()
     if not answer:
         raise HTTPException(status_code=400, detail="Missing required field: answer")
+    existing_question = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == resolved_company_id,
+            QuestionRecord.provider == DEFAULT_PROVIDER,
+            QuestionRecord.external_id == str(question_id),
+        )
+        .first()
+    )
+    if existing_question and normalize_db_status(existing_question.status) == "closed_unanswerable":
+        return {
+            "sent": False,
+            "answer_blocked": True,
+            "already_answered": False,
+            "message": existing_question.answer_error_message
+            or "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre.",
+            "error_code": existing_question.answer_error_code or "answer_blocked",
+            "question": question_to_api(existing_question, db=db, company_id=resolved_company_id),
+        }
 
     try:
         access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
@@ -3777,6 +3961,13 @@ def answer_mercadolivre_question(
             logger.warning("Could not verify Mercado Livre question status before answering: %s", status_error.detail)
         result = send_ml_answer(question_id, answer, access_token)
     except HTTPException as error:
+        if is_answer_forbidden_error(error):
+            return blocked_answer_response(
+                db,
+                question_id=question_id,
+                error=error,
+                company_id=resolved_company_id,
+            )
         if error.status_code == 401:
             access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
             try:
@@ -3803,6 +3994,13 @@ def answer_mercadolivre_question(
             try:
                 result = send_ml_answer(question_id, answer, access_token)
             except HTTPException as send_error:
+                if is_answer_forbidden_error(send_error):
+                    return blocked_answer_response(
+                        db,
+                        question_id=question_id,
+                        error=send_error,
+                        company_id=resolved_company_id,
+                    )
                 if not is_already_answered_error(send_error):
                     raise
                 try:
@@ -4139,6 +4337,7 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
                 QuestionRecord.company_id == company_id,
                 or_(
                     QuestionRecord.status == "pending",
+                    QuestionRecord.status == "closed_unanswerable",
                     QuestionRecord.answered_source == "app",
                     QuestionRecord.answered_source == "portal",
                 ),
@@ -4374,6 +4573,16 @@ def answer_question(payload: dict[str, Any], request: Request, db: Session = Dep
         )
     if not question:
         raise HTTPException(status_code=404, detail="Pergunta não encontrada")
+    if normalize_db_status(question.status) == "closed_unanswerable":
+        return {
+            "sent": False,
+            "answer_blocked": True,
+            "already_answered": False,
+            "message": question.answer_error_message
+            or "Esta pergunta não pode mais ser respondida porque o anúncio não está ativo no Mercado Livre.",
+            "error_code": question.answer_error_code or "answer_blocked",
+            "question": question_to_api(question, db=db, company_id=company_id),
+        }
 
     result = answer_mercadolivre_question(
         question.external_id,
