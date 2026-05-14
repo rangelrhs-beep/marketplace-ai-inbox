@@ -375,7 +375,6 @@ function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
     return (
       <div className="company-title-fallback">
         <span>{currentCompany?.name || "CPAP Express"}</span>
-        <small>Empresas carregadas: {companies.length}</small>
       </div>
     );
   }
@@ -393,9 +392,36 @@ function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
             </option>
           ))}
         </select>
-        <small>Empresas carregadas: {companies.length}</small>
       </label>
     </div>
+  );
+}
+
+function ScreenHeader({
+  title,
+  subtitle,
+  companies,
+  currentCompany,
+  currentUser,
+  permissions,
+  onCompanyChange,
+}) {
+  return (
+    <header className="topbar">
+      <div>
+        <CompanySwitcher
+          companies={companies}
+          currentCompany={currentCompany}
+          permissions={permissions}
+          onChange={onCompanyChange}
+        />
+        {subtitle ? <span>{subtitle}</span> : null}
+        <h1>{title}</h1>
+      </div>
+      <div className="topbar-actions">
+        <span className="user-badge">{currentUser?.name || "Admin"}</span>
+      </div>
+    </header>
   );
 }
 
@@ -520,10 +546,13 @@ function ConnectModal({ integration, onCancel, onConfirm, error }) {
 }
 
 function IntegrationsPage({
+  companies,
   currentCompany,
   currentUser,
+  permissions,
   integrations,
   integrationHealth,
+  onCompanyChange,
   onConnect,
   onDisconnect,
   onFetchRealQuestions,
@@ -543,15 +572,15 @@ function IntegrationsPage({
 
   return (
     <section className="integrations-page">
-      <header className="topbar">
-        <div>
-          <span>{currentCompany?.name || "CPAP Express"} · Marketplaces e operação</span>
-          <h1>Integrações</h1>
-        </div>
-        <div className="topbar-actions">
-          <span className="user-badge">{currentUser?.name || "Admin"}</span>
-        </div>
-      </header>
+      <ScreenHeader
+        title="Integrações"
+        subtitle="Marketplaces e operação"
+        companies={companies}
+        currentCompany={currentCompany}
+        currentUser={currentUser}
+        permissions={permissions}
+        onCompanyChange={onCompanyChange}
+      />
 
       <div className="integration-hero">
         <div>
@@ -639,7 +668,15 @@ function IntegrationsPage({
   );
 }
 
-function SettingsPage({ appData, currentCompany, currentUser, onSettingsSaved }) {
+function SettingsPage({
+  appData,
+  companies,
+  currentCompany,
+  currentUser,
+  permissions,
+  onCompanyChange,
+  onSettingsSaved,
+}) {
   const savedSettings = {
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
     ai_product_knowledge: appData.aiSettings.ai_product_knowledge || "",
@@ -882,15 +919,15 @@ function SettingsPage({ appData, currentCompany, currentUser, onSettingsSaved })
 
   return (
     <section className="settings-page">
-      <header className="topbar">
-        <div>
-          <span>{currentCompany?.name || "CPAP Express"} · Empresa e IA</span>
-          <h1>Configurações IA</h1>
-        </div>
-        <div className="topbar-actions">
-          <span className="user-badge">{currentUser?.name || "Admin"}</span>
-        </div>
-      </header>
+      <ScreenHeader
+        title="Configurações IA"
+        subtitle="Empresa e IA"
+        companies={companies}
+        currentCompany={currentCompany}
+        currentUser={currentUser}
+        permissions={permissions}
+        onCompanyChange={onCompanyChange}
+      />
 
       <section className="settings-layout ai-config-layout">
         <div className="settings-card settings-form ai-config-card">
@@ -970,22 +1007,31 @@ function SettingsPage({ appData, currentCompany, currentUser, onSettingsSaved })
   );
 }
 
-function AnalyticsPage({ questions, appData, productsSummary, currentCompany, currentUser }) {
+function AnalyticsPage({
+  questions,
+  appData,
+  productsSummary,
+  companies,
+  currentCompany,
+  currentUser,
+  permissions,
+  onCompanyChange,
+}) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
   const highPriority = questions.filter((question) => question.priority === "Alta").length;
 
   return (
     <section className="settings-page">
-      <header className="topbar">
-        <div>
-          <span>{currentCompany?.name || "CPAP Express"} · Operação</span>
-          <h1>Analytics</h1>
-        </div>
-        <div className="topbar-actions">
-          <span className="user-badge">{currentUser?.name || "Admin"}</span>
-        </div>
-      </header>
+      <ScreenHeader
+        title="Analytics"
+        subtitle="Operação"
+        companies={companies}
+        currentCompany={currentCompany}
+        currentUser={currentUser}
+        permissions={permissions}
+        onCompanyChange={onCompanyChange}
+      />
 
       <div className="settings-grid">
         <article className="settings-card">
@@ -2367,10 +2413,13 @@ export default function App() {
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
         {isIntegrations ? (
           <IntegrationsPage
+            companies={companies}
             currentCompany={currentCompany}
             currentUser={currentUser}
+            permissions={currentPermissions}
             integrations={integrations}
             integrationHealth={integrationHealth}
+            onCompanyChange={switchCompany}
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
@@ -2391,8 +2440,11 @@ export default function App() {
         ) : isSettings ? (
           <SettingsPage
             appData={appData}
+            companies={companies}
             currentCompany={currentCompany}
             currentUser={currentUser}
+            permissions={currentPermissions}
+            onCompanyChange={switchCompany}
             onSettingsSaved={(settings) =>
               setAppData((current) => ({
                 ...current,
@@ -2411,28 +2463,25 @@ export default function App() {
             questions={visibleQuestions}
             appData={appData}
             productsSummary={productsSummary}
+            companies={companies}
             currentCompany={currentCompany}
             currentUser={currentUser}
+            permissions={currentPermissions}
+            onCompanyChange={switchCompany}
           />
         ) : (
           <>
             <section className={`inbox-panel ${showConversation ? "hide-mobile" : ""}`}>
-          <header className="topbar">
-            <div>
-              <CompanySwitcher
+              <ScreenHeader
+                title={active}
                 companies={companies}
                 currentCompany={currentCompany}
+                currentUser={currentUser}
                 permissions={currentPermissions}
-                onChange={switchCompany}
+                onCompanyChange={switchCompany}
               />
-              <h1>{active}</h1>
-            </div>
-            <div className="topbar-actions">
-              <span className="user-badge">{currentUser?.name || "Admin"}</span>
-            </div>
-          </header>
 
-          <div className="metrics">
+              <div className="metrics">
             <button
               type="button"
               className={`metric-card ${active === "Pendentes" ? "active" : ""}`}

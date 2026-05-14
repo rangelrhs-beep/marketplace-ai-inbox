@@ -256,13 +256,6 @@ button:disabled {
   font-weight: 800;
 }
 
-.company-switcher small,
-.company-title-fallback small {
-  color: #8a94a8;
-  font-size: 11px;
-  font-weight: 800;
-}
-
 .company-title-fallback span {
   color: #647189;
   font-size: 13px;
