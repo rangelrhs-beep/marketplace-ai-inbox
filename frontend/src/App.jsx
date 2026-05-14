@@ -766,6 +766,7 @@ function SettingsPage({ appData, onSettingsSaved }) {
     const content = helpContent[section];
     const tooltipId = `ai-settings-help-${section}`;
     const isOpen = activeHelp === section;
+    const toggleTooltip = () => setActiveHelp((current) => (current === section ? "" : section));
 
     return (
       <div
@@ -779,13 +780,25 @@ function SettingsPage({ appData, onSettingsSaved }) {
           aria-label={`Ajuda sobre ${content.title}`}
           aria-describedby={isOpen ? tooltipId : undefined}
           aria-expanded={isOpen}
-          onClick={(event) => {
+          onPointerDown={(event) => {
+            event.preventDefault();
             event.stopPropagation();
-            setActiveHelp((current) => (current === section ? "" : section));
+            toggleTooltip();
           }}
-          onFocus={() => setActiveHelp(section)}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setActiveHelp("");
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleTooltip();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setActiveHelp("");
+            }
           }}
         >
           ⓘ
