@@ -1912,6 +1912,21 @@ def fetch_ml_questions_by_seller(seller_id: str, access_token: str) -> dict[str,
     return fetch_ml_questions_by_seller_status(seller_id, access_token, "unanswered")
 
 
+def extract_ml_questions_total(raw_response: Any) -> int:
+    if not isinstance(raw_response, dict):
+        return 0
+    paging = raw_response.get("paging")
+    if isinstance(paging, dict):
+        try:
+            return int(paging.get("total") or 0)
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(raw_response.get("total") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def build_ml_questions_search_url(seller_id: str, status: str, *, limit: int = 50, offset: int = 0) -> str:
     query = urlencode(
         {
@@ -1923,6 +1938,133 @@ def build_ml_questions_search_url(seller_id: str, status: str, *, limit: int = 5
         }
     )
     return f"{ML_API_BASE_URL}/questions/search?{query}"
+
+
+def fetch_ml_questions_history_page(
+    seller_id: str,
+    access_token: str,
+    status: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    request_url = build_ml_questions_search_url(seller_id, status, limit=limit, offset=offset)
+    try:
+        return ml_request_json(request_url, access_token=access_token)
+    except HTTPException as error:
+        if status == "UNANSWERED" and error.status_code in {400, 404}:
+            fallback_url = build_ml_questions_search_url(seller_id, "unanswered", limit=limit, offset=offset)
+            return ml_request_json(fallback_url, access_token=access_token)
+        raise
+
+
+def get_ml_question_effective_date(question_payload: dict[str, Any]) -> datetime | None:
+    if ml_question_is_answered(question_payload):
+        answer_date = extract_ml_answer_created_at(question_payload)
+        if answer_date:
+            return answer_date
+    return parse_datetime(question_payload.get("date_created") or question_payload.get("created_at"))
+
+
+def import_mercadolivre_questions_history(
+    db: Session,
+    *,
+    company_id: str,
+    days: int,
+) -> dict[str, Any]:
+    resolved_days = days if days in {15, 30} else 30
+    cutoff = datetime.utcnow() - timedelta(days=resolved_days)
+    print(f"ML_HISTORY_IMPORT_START company_id={company_id} days={resolved_days}", flush=True)
+    access_token = get_valid_mercadolivre_token(db, company_id=company_id)
+    integration = get_ml_integration(db, company_id)
+    seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+    print(f"ML_HISTORY_IMPORT_INTEGRATION company_id={company_id} seller_id={seller_id}", flush=True)
+
+    stats = {
+        "imported": 0,
+        "updated": 0,
+        "skipped": 0,
+        "fetched": 0,
+        "days": resolved_days,
+        "company_id": company_id,
+    }
+    limit = 50
+    max_pages_per_status = 20
+
+    for status in ("ANSWERED", "UNANSWERED"):
+        first_response = fetch_ml_questions_history_page(seller_id, access_token, status, limit=limit, offset=0)
+        total = extract_ml_questions_total(first_response)
+        first_questions = extract_ml_questions(first_response)
+        offsets = [0]
+        if total > limit:
+            last_offset = max(0, ((total - 1) // limit) * limit)
+            offsets = list(range(last_offset, -1, -limit))
+            if 0 not in offsets:
+                offsets.append(0)
+
+        for page_index, offset in enumerate(offsets[:max_pages_per_status]):
+            if page_index == 0 and offset == 0:
+                raw_response = first_response
+                questions_payload = first_questions
+            else:
+                raw_response = fetch_ml_questions_history_page(seller_id, access_token, status, limit=limit, offset=offset)
+                questions_payload = extract_ml_questions(raw_response)
+            stats["fetched"] += len(questions_payload)
+            print(
+                f"ML_HISTORY_IMPORT_FETCH status={status} offset={offset} count={len(questions_payload)}",
+                flush=True,
+            )
+            if not questions_payload:
+                continue
+
+            for question_payload in questions_payload:
+                effective_date = get_ml_question_effective_date(question_payload)
+                if effective_date and effective_date < cutoff:
+                    continue
+                external_id = str(question_payload.get("id") or question_payload.get("question_id") or "")
+                if not external_id:
+                    stats["skipped"] += 1
+                    continue
+                existing = (
+                    db.query(QuestionRecord)
+                    .filter(
+                        QuestionRecord.company_id == company_id,
+                        QuestionRecord.provider == DEFAULT_PROVIDER,
+                        QuestionRecord.external_id == external_id,
+                    )
+                    .first()
+                )
+                if ml_question_is_answered(question_payload) and extract_ml_answer_text(question_payload):
+                    _question, action = upsert_portal_answered_ml_question(
+                        db,
+                        question_payload,
+                        access_token,
+                        company_id=company_id,
+                    )
+                else:
+                    normalized = normalize_ml_question(question_payload, access_token)
+                    if isinstance(normalized.get("item_payload"), dict):
+                        upsert_ml_product(db, normalized["item_payload"], company_id=company_id)
+                    upsert_ml_question(db, normalized, company_id=company_id)
+                    action = "update" if existing else "insert"
+
+                if action in {"insert", "inserted"}:
+                    stats["imported"] += 1
+                elif action in {"update", "updated"}:
+                    stats["updated"] += 1
+                else:
+                    stats["skipped"] += 1
+                print(
+                    f"ML_HISTORY_IMPORT_UPSERT company_id={company_id} external_id={external_id} action={action}",
+                    flush=True,
+                )
+
+    db.commit()
+    print(
+        f"ML_HISTORY_IMPORT_END company_id={company_id} imported={stats['imported']} updated={stats['updated']} skipped={stats['skipped']}",
+        flush=True,
+    )
+    return stats
 
 
 def summarize_ml_answered_question(payload: dict[str, Any]) -> dict[str, Any]:
@@ -3112,6 +3254,10 @@ class MercadoLivreAnswerPayload(BaseModel):
     instruction_used: str = ""
 
 
+class MercadoLivreHistoryImportPayload(BaseModel):
+    days: int = 30
+
+
 class CompanySettingsPayload(BaseModel):
     greeting: str = ""
     closing: str = ""
@@ -3588,6 +3734,24 @@ def mercadolivre_questions(request: Request, db: Session = Depends(get_db)):
                 status_code=403,
                 detail="Permissão insuficiente para acessar perguntas.",
             ) from error
+        raise
+
+
+@app.post("/integrations/mercadolivre/questions/import-history")
+def import_mercadolivre_questions_history_endpoint(
+    payload: MercadoLivreHistoryImportPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    company_id, _, _ = log_tenant_context(request)
+    days = payload.days if payload.days in {15, 30} else None
+    if days is None:
+        raise HTTPException(status_code=400, detail="days must be 15 or 30")
+    try:
+        return import_mercadolivre_questions_history(db, company_id=company_id, days=days)
+    except HTTPException as error:
+        if error.status_code == 403:
+            raise HTTPException(status_code=403, detail="Permissão insuficiente para importar histórico.") from error
         raise
 
 
