@@ -34,6 +34,29 @@ def query_questions_for_company(rows, company_id, days=15):
     return result
 
 
+def persist_portal_answer(rows, company_id, external_id, answer_text):
+    for row in rows:
+        if row["company_id"] == company_id and row["external_id"] == external_id:
+            row["status"] = "responded"
+            row["answered_source"] = "portal"
+            row["answered_at"] = datetime.utcnow()
+            row["final_answer"] = answer_text
+            return "update"
+    rows.append(
+        {
+            "external_id": external_id,
+            "company_id": company_id,
+            "product_title": f"{company_id} product {external_id}",
+            "status": "responded",
+            "answered_source": "portal",
+            "created_at": datetime.utcnow(),
+            "answered_at": datetime.utcnow(),
+            "final_answer": answer_text,
+        }
+    )
+    return "insert"
+
+
 def assert_only_company(rows, company_id):
     assert rows, f"Expected rows for {company_id}"
     for row in rows:
@@ -64,6 +87,12 @@ def run():
 
     zasweb_rows = query_questions_for_company(rows, "nova_casa_imports", days=30)
     assert "cpap_express-app-answered" not in {row["external_id"] for row in zasweb_rows}
+
+    assert persist_portal_answer(rows, "nova_casa_imports", "zasweb-portal-webhook", "portal answer") == "insert"
+    zasweb_rows = query_questions_for_company(rows, "nova_casa_imports", days=15)
+    cpap_rows = query_questions_for_company(rows, "cpap_express", days=15)
+    assert "zasweb-portal-webhook" in {row["external_id"] for row in zasweb_rows}
+    assert "zasweb-portal-webhook" not in {row["external_id"] for row in cpap_rows}
 
     for company_id in COMPANIES:
         print(f"TENANT_ISOLATION_TEST_SAFE company_id={company_id}")
