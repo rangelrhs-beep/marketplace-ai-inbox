@@ -1622,6 +1622,17 @@ button:disabled {
   color: #7d889d;
 }
 
+.integration-warning {
+  margin-top: 12px !important;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  border-radius: 12px;
+  padding: 10px;
+  color: #8a5a00 !important;
+  background: #fffbeb;
+  font-size: 12px;
+  line-height: 1.4 !important;
+}
+
 .integration-actions {
   display: flex;
   gap: 10px;

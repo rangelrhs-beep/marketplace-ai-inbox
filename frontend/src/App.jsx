@@ -497,9 +497,11 @@ function IntegrationCard({
   onConnect,
   onDisconnect,
   onFetchRealQuestions,
+  onImportHistory,
   onSyncProducts,
   canFetchRealQuestions,
   isFetchingRealQuestions,
+  isImportingHistory,
   isSyncingProducts,
   isDisconnecting,
 }) {
@@ -528,6 +530,11 @@ function IntegrationCard({
         ) : (
           <p>Conecte por autorização oficial para importar perguntas e manter a inbox atualizada.</p>
         )}
+        {isConnected ? (
+          <p className="integration-warning">
+            Importa perguntas e respostas do Mercado Livre somente para a empresa selecionada.
+          </p>
+        ) : null}
       </div>
 
       <div className="integration-actions">
@@ -543,6 +550,14 @@ function IntegrationCard({
                 {isFetchingRealQuestions ? "Sincronizando..." : "Sincronizar perguntas"}
               </button>
             ) : null}
+            <button
+              className="secondary"
+              onClick={onImportHistory}
+              disabled={isImportingHistory}
+            >
+              <RefreshCw size={17} className={isImportingHistory ? "spin" : ""} />
+              {isImportingHistory ? "Importando histórico..." : "Importar histórico ML - 30 dias"}
+            </button>
             <button
               className="secondary"
               onClick={onSyncProducts}
@@ -615,9 +630,11 @@ function IntegrationsPage({
   onConnect,
   onDisconnect,
   onFetchRealQuestions,
+  onImportHistory,
   onSyncProducts,
   onTestHealth,
   fetchingRealQuestions,
+  importingHistory,
   syncingProducts,
   disconnecting,
   testingIntegrationId,
@@ -663,12 +680,14 @@ function IntegrationsPage({
             onConnect={onConnect}
             onDisconnect={onDisconnect}
             onFetchRealQuestions={onFetchRealQuestions}
+            onImportHistory={onImportHistory}
             onSyncProducts={onSyncProducts}
             canFetchRealQuestions={
               integration.id === "mercado-livre" &&
               (integration.status === "Conectado" || integration.status === "Conectado temporariamente")
             }
             isFetchingRealQuestions={fetchingRealQuestions}
+            isImportingHistory={importingHistory}
             isSyncingProducts={syncingProducts}
             isDisconnecting={disconnecting}
           />
@@ -1720,6 +1739,7 @@ export default function App() {
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [connectError, setConnectError] = useState("");
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
+  const [importingMlHistory, setImportingMlHistory] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
   const [disconnectingMl, setDisconnectingMl] = useState(false);
   const [productsSummary, setProductsSummary] = useState({ total: 0, active: 0, inactive: 0 });
@@ -1783,6 +1803,7 @@ export default function App() {
     setAnswerError("");
     setSendingAnswerId(null);
     setGeneratingQuestionId(null);
+    setImportingMlHistory(false);
     setPendingIntegration(null);
     setConnectError("");
     setTestingIntegrationId(null);
@@ -2539,6 +2560,31 @@ export default function App() {
     }
   }
 
+  async function importMercadoLivreHistory() {
+    setImportingMlHistory(true);
+    setQuestionNotice("");
+    try {
+      const response = await apiFetch(`${API_URL}/integrations/mercadolivre/questions/import-history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 30 }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "Não foi possível importar o histórico do Mercado Livre.");
+      }
+      await loadQuestionsFromDatabase();
+      await refreshIntegrationHealth();
+      setQuestionNotice(
+        `Histórico importado: ${data.imported || 0} novos, ${data.updated || 0} atualizados, ${data.skipped || 0} ignorados.`
+      );
+    } catch (error) {
+      setQuestionNotice(error.message || "Não foi possível importar o histórico do Mercado Livre.");
+    } finally {
+      setImportingMlHistory(false);
+    }
+  }
+
   async function syncMercadoLivreProducts() {
     setSyncingProducts(true);
     setQuestionNotice("");
@@ -2639,9 +2685,11 @@ export default function App() {
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
+            onImportHistory={importMercadoLivreHistory}
             onSyncProducts={syncMercadoLivreProducts}
             onTestHealth={testIntegrationHealth}
             fetchingRealQuestions={fetchingMlQuestions}
+            importingHistory={importingMlHistory}
             syncingProducts={syncingProducts}
             disconnecting={disconnectingMl}
             testingIntegrationId={testingIntegrationId}
