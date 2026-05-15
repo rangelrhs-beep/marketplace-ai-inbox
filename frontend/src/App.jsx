@@ -67,6 +67,9 @@ const initialIntegrations = [
     status: "Não conectado",
     store: "",
     lastSync: "",
+    lastMlHistoryImportAt: "",
+    lastMlHistoryImportDays: null,
+    lastMlHistoryImportResult: null,
   },
 ];
 
@@ -109,6 +112,9 @@ function integrationState(overrides = {}) {
     store: "",
     lastSync: "",
     token_status: "missing",
+    lastMlHistoryImportAt: "",
+    lastMlHistoryImportDays: null,
+    lastMlHistoryImportResult: null,
     ...overrides[integration.id],
   }));
 }
@@ -385,6 +391,9 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
       lastSync: isMercadoLivreConnected ? mercadoLivreHealth?.last_sync || new Date().toISOString() : "",
       token_status: mercadoLivreHealth?.token_status || "missing",
       last_error: mercadoLivreHealth?.last_error || "",
+      lastMlHistoryImportAt: mercadoLivreHealth?.last_ml_history_import_at || "",
+      lastMlHistoryImportDays: mercadoLivreHealth?.last_ml_history_import_days || null,
+      lastMlHistoryImportResult: mercadoLivreHealth?.last_ml_history_import_result || null,
     };
   });
 }
@@ -497,7 +506,7 @@ function IntegrationCard({
   onConnect,
   onDisconnect,
   onFetchRealQuestions,
-  onImportHistory,
+  onOpenHistoryImport,
   onSyncProducts,
   canFetchRealQuestions,
   isFetchingRealQuestions,
@@ -506,6 +515,7 @@ function IntegrationCard({
   isDisconnecting,
 }) {
   const isConnected = integration.status === "Conectado" || integration.status === "Conectado temporariamente";
+  const historyResult = integration.lastMlHistoryImportResult || {};
 
   return (
     <article className="integration-card">
@@ -530,10 +540,14 @@ function IntegrationCard({
         ) : (
           <p>Conecte por autorização oficial para importar perguntas e manter a inbox atualizada.</p>
         )}
-        {isConnected ? (
-          <p className="integration-warning">
-            Importa perguntas e respostas do Mercado Livre somente para a empresa selecionada.
-          </p>
+        {isConnected && integration.lastMlHistoryImportAt ? (
+          <div className="integration-import-summary">
+            <strong>Última importação:</strong>
+            <span>{formatDate(integration.lastMlHistoryImportAt)}</span>
+            <small>{historyResult.imported || 0} importadas</small>
+            <small>{historyResult.updated || 0} atualizadas</small>
+            <small>{historyResult.failed || 0} falhas</small>
+          </div>
         ) : null}
       </div>
 
@@ -552,11 +566,11 @@ function IntegrationCard({
             ) : null}
             <button
               className="secondary"
-              onClick={onImportHistory}
+              onClick={() => onOpenHistoryImport(integration)}
               disabled={isImportingHistory}
             >
               <RefreshCw size={17} className={isImportingHistory ? "spin" : ""} />
-              {isImportingHistory ? "Importando histórico..." : "Importar histórico ML - 30 dias"}
+              {isImportingHistory ? "Importando histórico..." : "Importar histórico ML"}
             </button>
             <button
               className="secondary"
@@ -576,10 +590,16 @@ function IntegrationCard({
             </button>
           </>
         ) : (
-          <button className="primary" onClick={() => onConnect(integration)}>
-            <ExternalLink size={17} />
-            Conectar
-          </button>
+          <>
+            <button className="primary" onClick={() => onConnect(integration)}>
+              <ExternalLink size={17} />
+              Conectar
+            </button>
+            <button className="secondary" disabled>
+              <RefreshCw size={17} />
+              Importar histórico ML
+            </button>
+          </>
         )}
       </div>
     </article>
@@ -619,6 +639,43 @@ function ConnectModal({ integration, onCancel, onConfirm, error }) {
   );
 }
 
+function HistoryImportModal({ integration, onCancel, onConfirm, isImporting }) {
+  const [days, setDays] = useState(30);
+  if (!integration) {
+    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="connect-modal" role="dialog" aria-modal="true">
+        <button className="modal-close" onClick={onCancel} aria-label="Fechar modal">
+          <X size={20} />
+        </button>
+        <IntegrationLogo integration={integration} />
+        <span>Importação manual segura</span>
+        <h2>Importar histórico ML</h2>
+        <p>Importa perguntas e respostas do Mercado Livre somente para a empresa selecionada.</p>
+        <label className="modal-select">
+          Período
+          <select value={days} onChange={(event) => setDays(Number(event.target.value))}>
+            <option value={15}>Últimos 15 dias</option>
+            <option value={30}>Últimos 30 dias</option>
+          </select>
+        </label>
+        <div className="modal-actions">
+          <button className="secondary" type="button" onClick={onCancel} disabled={isImporting}>
+            Cancelar
+          </button>
+          <button className="primary" type="button" onClick={() => onConfirm(days)} disabled={isImporting}>
+            <RefreshCw size={17} className={isImporting ? "spin" : ""} />
+            {isImporting ? "Importando..." : "Importar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function IntegrationsPage({
   companies,
   currentCompany,
@@ -630,7 +687,7 @@ function IntegrationsPage({
   onConnect,
   onDisconnect,
   onFetchRealQuestions,
-  onImportHistory,
+  onOpenHistoryImport,
   onSyncProducts,
   onTestHealth,
   fetchingRealQuestions,
@@ -639,9 +696,12 @@ function IntegrationsPage({
   disconnecting,
   testingIntegrationId,
   pendingIntegration,
+  pendingHistoryImport,
   connectError,
   onCancelConnect,
   onConfirmConnect,
+  onCancelHistoryImport,
+  onConfirmHistoryImport,
 }) {
   const connectedCount = integrations.filter((item) => item.status === "Conectado").length;
   const temporaryCount = integrations.filter((item) => item.status === "Conectado temporariamente").length;
@@ -680,7 +740,7 @@ function IntegrationsPage({
             onConnect={onConnect}
             onDisconnect={onDisconnect}
             onFetchRealQuestions={onFetchRealQuestions}
-            onImportHistory={onImportHistory}
+            onOpenHistoryImport={onOpenHistoryImport}
             onSyncProducts={onSyncProducts}
             canFetchRealQuestions={
               integration.id === "mercado-livre" &&
@@ -741,6 +801,12 @@ function IntegrationsPage({
         onCancel={onCancelConnect}
         onConfirm={onConfirmConnect}
         error={connectError}
+      />
+      <HistoryImportModal
+        integration={pendingHistoryImport}
+        onCancel={onCancelHistoryImport}
+        onConfirm={onConfirmHistoryImport}
+        isImporting={importingHistory}
       />
     </section>
   );
@@ -1742,6 +1808,7 @@ export default function App() {
   const [importingMlHistory, setImportingMlHistory] = useState(false);
   const [syncingProducts, setSyncingProducts] = useState(false);
   const [disconnectingMl, setDisconnectingMl] = useState(false);
+  const [pendingHistoryImport, setPendingHistoryImport] = useState(null);
   const [productsSummary, setProductsSummary] = useState({ total: 0, active: 0, inactive: 0 });
   const [sendingAnswerId, setSendingAnswerId] = useState(null);
   const [generatingQuestionId, setGeneratingQuestionId] = useState(null);
@@ -1805,6 +1872,7 @@ export default function App() {
     setGeneratingQuestionId(null);
     setImportingMlHistory(false);
     setPendingIntegration(null);
+    setPendingHistoryImport(null);
     setConnectError("");
     setTestingIntegrationId(null);
   }
@@ -2560,14 +2628,18 @@ export default function App() {
     }
   }
 
-  async function importMercadoLivreHistory() {
+  function openHistoryImport(integration) {
+    setPendingHistoryImport(integration);
+  }
+
+  async function importMercadoLivreHistory(days = 30) {
     setImportingMlHistory(true);
     setQuestionNotice("");
     try {
       const response = await apiFetch(`${API_URL}/integrations/mercadolivre/questions/import-history`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: 30 }),
+        body: JSON.stringify({ days }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -2576,8 +2648,9 @@ export default function App() {
       await loadQuestionsFromDatabase();
       await refreshIntegrationHealth();
       setQuestionNotice(
-        `Histórico importado: ${data.imported || 0} novos, ${data.updated || 0} atualizados, ${data.skipped || 0} ignorados.`
+        `Histórico importado: ${data.imported || 0} novos, ${data.updated || 0} atualizados, ${data.failed || 0} falhas.`
       );
+      setPendingHistoryImport(null);
     } catch (error) {
       setQuestionNotice(error.message || "Não foi possível importar o histórico do Mercado Livre.");
     } finally {
@@ -2685,7 +2758,7 @@ export default function App() {
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
             onFetchRealQuestions={fetchMercadoLivreQuestions}
-            onImportHistory={importMercadoLivreHistory}
+            onOpenHistoryImport={openHistoryImport}
             onSyncProducts={syncMercadoLivreProducts}
             onTestHealth={testIntegrationHealth}
             fetchingRealQuestions={fetchingMlQuestions}
@@ -2694,12 +2767,15 @@ export default function App() {
             disconnecting={disconnectingMl}
             testingIntegrationId={testingIntegrationId}
             pendingIntegration={pendingIntegration}
+            pendingHistoryImport={pendingHistoryImport}
             connectError={connectError}
             onCancelConnect={() => {
               setConnectError("");
               setPendingIntegration(null);
             }}
             onConfirmConnect={confirmConnect}
+            onCancelHistoryImport={() => setPendingHistoryImport(null)}
+            onConfirmHistoryImport={importMercadoLivreHistory}
           />
         ) : isSettings ? (
           <SettingsPage
