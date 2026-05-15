@@ -1691,6 +1691,7 @@ export default function App() {
   const [marketplaceFilter, setMarketplaceFilter] = useState("Todos");
   const [priorityFilter, setPriorityFilter] = useState("Todos");
   const [answeredSourceFilter, setAnsweredSourceFilter] = useState("Todas");
+  const [historyDays, setHistoryDays] = useState(15);
   const [showConversation, setShowConversation] = useState(false);
   const [isQuestionsLoading, setIsQuestionsLoading] = useState(false);
 
@@ -1753,10 +1754,16 @@ export default function App() {
     setSelectedCompanyId(companyId);
   }
 
+  function changeHistoryDays(days) {
+    const nextDays = Number(days) === 30 ? 30 : 15;
+    resetTenantScopedUi();
+    setHistoryDays(nextDays);
+  }
+
   async function loadQuestionsFromDatabase() {
     const requestCompanyId = getStoredCompanyId();
     setIsQuestionsLoading(true);
-    const response = await apiFetch(`${API_URL}/questions`);
+    const response = await apiFetch(`${API_URL}/questions?days=${historyDays}`);
     const data = await response.json();
     if (!response.ok || !Array.isArray(data)) {
       throw new Error("Não foi possível carregar perguntas do banco.");
@@ -1766,7 +1773,7 @@ export default function App() {
       question.company_id,
       question.product_title || question.product,
     ]);
-    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} count=${data.length}`, responseSample);
+    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${data.length}`, responseSample);
     if (requestCompanyId !== getStoredCompanyId()) {
       console.log("QUESTIONS_RESPONSE ignored stale company response", {
         requested: requestCompanyId,
@@ -1912,7 +1919,7 @@ export default function App() {
     loadPersistedQuestions();
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, historyDays]);
 
   useEffect(() => {
     refreshIntegrationHealth();
@@ -2705,6 +2712,18 @@ export default function App() {
                   <option value="Todas">Todas</option>
                   <option value="app">Respondidas pelo app</option>
                   <option value="portal">Respondidas pelo portal</option>
+                </select>
+              </label>
+            ) : null}
+            {active === "Respondidas" ? (
+              <label>
+                Período
+                <select
+                  value={historyDays}
+                  onChange={(event) => changeHistoryDays(event.target.value)}
+                >
+                  <option value={15}>Últimos 15 dias</option>
+                  <option value={30}>Últimos 30 dias</option>
                 </select>
               </label>
             ) : null}
