@@ -4513,6 +4513,15 @@ def list_questions(
         print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
         return return_questions(local_questions)
 
+    logger.warning(
+        "Answered history live backfill requested but disabled in /questions for tenant safety company_id=%s",
+        company_id,
+    )
+    print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+    print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
+    print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
+    return return_questions(local_questions)
+
     try:
         integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
