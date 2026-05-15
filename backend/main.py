@@ -205,6 +205,9 @@ def ensure_database_columns() -> None:
     }
     integration_columns = {
         "expires_in": "INTEGER",
+        "last_ml_history_import_at": "TIMESTAMP",
+        "last_ml_history_import_days": "INTEGER",
+        "last_ml_history_import_result": "JSONB",
     }
     question_columns = {
         "answered_source": "VARCHAR(80)",
@@ -330,6 +333,8 @@ def ensure_database_columns() -> None:
             }
             for column, column_type in integration_columns.items():
                 if column not in existing_integrations:
+                    if column == "last_ml_history_import_result":
+                        column_type = "JSON"
                     connection.execute(text(f"ALTER TABLE integrations ADD COLUMN {column} {column_type}"))
             existing_questions = {
                 row[1]
@@ -1971,11 +1976,13 @@ def import_mercadolivre_questions_history(
     *,
     company_id: str,
     days: int,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
     resolved_days = days if days in {15, 30} else 30
+    started_at = datetime.utcnow()
     cutoff = datetime.utcnow() - timedelta(days=resolved_days)
     print(f"ML_HISTORY_IMPORT_START company_id={company_id} days={resolved_days}", flush=True)
-    access_token = get_valid_mercadolivre_token(db, company_id=company_id)
+    access_token = get_valid_mercadolivre_token(db, company_id=company_id, force_refresh=force_refresh)
     integration = get_ml_integration(db, company_id)
     seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
     print(f"ML_HISTORY_IMPORT_INTEGRATION company_id={company_id} seller_id={seller_id}", flush=True)
@@ -1984,9 +1991,12 @@ def import_mercadolivre_questions_history(
         "imported": 0,
         "updated": 0,
         "skipped": 0,
+        "failed": 0,
         "fetched": 0,
         "days": resolved_days,
         "company_id": company_id,
+        "started_at": started_at.isoformat(),
+        "finished_at": None,
     }
     limit = 50
     max_pages_per_status = 20
@@ -2018,50 +2028,102 @@ def import_mercadolivre_questions_history(
                 continue
 
             for question_payload in questions_payload:
-                effective_date = get_ml_question_effective_date(question_payload)
-                if effective_date and effective_date < cutoff:
-                    continue
                 external_id = str(question_payload.get("id") or question_payload.get("question_id") or "")
-                if not external_id:
-                    stats["skipped"] += 1
-                    continue
-                existing = (
-                    db.query(QuestionRecord)
-                    .filter(
-                        QuestionRecord.company_id == company_id,
-                        QuestionRecord.provider == DEFAULT_PROVIDER,
-                        QuestionRecord.external_id == external_id,
+                try:
+                    effective_date = get_ml_question_effective_date(question_payload)
+                    if effective_date and effective_date < cutoff:
+                        continue
+                    if not external_id:
+                        stats["skipped"] += 1
+                        continue
+                    existing = (
+                        db.query(QuestionRecord)
+                        .filter(
+                            QuestionRecord.company_id == company_id,
+                            QuestionRecord.provider == DEFAULT_PROVIDER,
+                            QuestionRecord.external_id == external_id,
+                        )
+                        .first()
                     )
-                    .first()
-                )
-                if ml_question_is_answered(question_payload) and extract_ml_answer_text(question_payload):
-                    _question, action = upsert_portal_answered_ml_question(
-                        db,
-                        question_payload,
-                        access_token,
-                        company_id=company_id,
+                    existing_app_answer = bool(
+                        existing
+                        and (
+                            normalize_answered_source(existing.answered_source) == "app"
+                            or (
+                                normalize_db_status(existing.status) == "responded"
+                                and bool(existing.final_answer)
+                                and normalize_answered_source(existing.answered_source) != "portal"
+                            )
+                        )
                     )
-                else:
-                    normalized = normalize_ml_question(question_payload, access_token)
-                    if isinstance(normalized.get("item_payload"), dict):
-                        upsert_ml_product(db, normalized["item_payload"], company_id=company_id)
-                    upsert_ml_question(db, normalized, company_id=company_id)
-                    action = "update" if existing else "insert"
+                    if existing_app_answer:
+                        stats["skipped"] += 1
+                        print(
+                            f"ML_HISTORY_IMPORT_UPSERT company_id={company_id} external_id={external_id} action=skipped_app",
+                            flush=True,
+                        )
+                        continue
 
-                if action in {"insert", "inserted"}:
-                    stats["imported"] += 1
-                elif action in {"update", "updated"}:
-                    stats["updated"] += 1
-                else:
-                    stats["skipped"] += 1
-                print(
-                    f"ML_HISTORY_IMPORT_UPSERT company_id={company_id} external_id={external_id} action={action}",
-                    flush=True,
-                )
+                    if ml_question_is_answered(question_payload) and extract_ml_answer_text(question_payload):
+                        _question, action = upsert_portal_answered_ml_question(
+                            db,
+                            question_payload,
+                            access_token,
+                            company_id=company_id,
+                        )
+                    else:
+                        normalized = normalize_ml_question(question_payload, access_token)
+                        if isinstance(normalized.get("item_payload"), dict):
+                            upsert_ml_product(db, normalized["item_payload"], company_id=company_id)
+                        upsert_ml_question(db, normalized, company_id=company_id)
+                        action = "update" if existing else "insert"
 
+                    if action in {"insert", "inserted"}:
+                        stats["imported"] += 1
+                    elif action in {"update", "updated"}:
+                        stats["updated"] += 1
+                    else:
+                        stats["skipped"] += 1
+                    print(
+                        f"ML_HISTORY_IMPORT_UPSERT company_id={company_id} external_id={external_id} action={action}",
+                        flush=True,
+                    )
+                except Exception:
+                    stats["failed"] += 1
+                    logger.exception(
+                        "Mercado Livre history import failed for company_id=%s external_id=%s",
+                        company_id,
+                        external_id or "missing",
+                    )
+                    print(
+                        f"ML_HISTORY_IMPORT_UPSERT company_id={company_id} external_id={external_id or 'missing'} action=failed",
+                        flush=True,
+                    )
+
+    finished_at = datetime.utcnow()
+    stats["finished_at"] = finished_at.isoformat()
+    integration.last_ml_history_import_at = finished_at
+    integration.last_ml_history_import_days = resolved_days
+    integration.last_ml_history_import_result = {
+        "imported": stats["imported"],
+        "updated": stats["updated"],
+        "skipped": stats["skipped"],
+        "failed": stats["failed"],
+        "company_id": company_id,
+        "days": resolved_days,
+        "started_at": stats["started_at"],
+        "finished_at": stats["finished_at"],
+    }
+    integration.updated_at = datetime.utcnow()
     db.commit()
     print(
         f"ML_HISTORY_IMPORT_END company_id={company_id} imported={stats['imported']} updated={stats['updated']} skipped={stats['skipped']}",
+        flush=True,
+    )
+    print(
+        "ML_HISTORY_IMPORT_SUMMARY "
+        f"company_id={company_id} days={resolved_days} imported={stats['imported']} "
+        f"updated={stats['updated']} skipped={stats['skipped']} failed={stats['failed']}",
         flush=True,
     )
     return stats
@@ -3750,6 +3812,8 @@ def import_mercadolivre_questions_history_endpoint(
     try:
         return import_mercadolivre_questions_history(db, company_id=company_id, days=days)
     except HTTPException as error:
+        if error.status_code == 401:
+            return import_mercadolivre_questions_history(db, company_id=company_id, days=days, force_refresh=True)
         if error.status_code == 403:
             raise HTTPException(status_code=403, detail="Permissão insuficiente para importar histórico.") from error
         raise
@@ -4449,6 +4513,9 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                         last_error=last_error,
                         token_status=token_status,
                         refresh_available=refresh_available,
+                        last_ml_history_import_at=format_optional_datetime(integration.last_ml_history_import_at),
+                        last_ml_history_import_days=integration.last_ml_history_import_days,
+                        last_ml_history_import_result=integration.last_ml_history_import_result,
                     )
                 )
                 continue

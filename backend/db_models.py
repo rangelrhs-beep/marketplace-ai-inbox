@@ -52,6 +52,9 @@ class Integration(Base):
     expires_in = Column(Integer, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     last_sync = Column(DateTime, nullable=True)
+    last_ml_history_import_at = Column(DateTime, nullable=True)
+    last_ml_history_import_days = Column(Integer, nullable=True)
+    last_ml_history_import_result = Column(JsonType, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

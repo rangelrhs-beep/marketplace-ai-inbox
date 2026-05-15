@@ -28,6 +28,9 @@ class IntegrationHealth(BaseModel):
     last_error: Optional[str] = None
     token_status: str = "unknown"
     refresh_available: bool = False
+    last_ml_history_import_at: Optional[str] = None
+    last_ml_history_import_days: Optional[int] = None
+    last_ml_history_import_result: Optional[dict[str, Any]] = None
 
 
 class ConnectionTestResult(BaseModel):
