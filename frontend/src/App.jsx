@@ -214,6 +214,23 @@ function getQuestionTimestamp(question) {
   return new Date(question.answered_at || question.created_at || 0).getTime() || 0;
 }
 
+function getQuestionCreatedTimestamp(question) {
+  return new Date(question.created_at || question.answered_at || 0).getTime() || 0;
+}
+
+function sortQuestionsChronologically(questions) {
+  return [...(questions || [])].filter(Boolean).sort((a, b) => {
+    const timeDiff = getQuestionCreatedTimestamp(a) - getQuestionCreatedTimestamp(b);
+    if (timeDiff !== 0) return timeDiff;
+    return String(a.external_id || a.id || "").localeCompare(String(b.external_id || b.id || ""));
+  });
+}
+
+function getNewestPendingQuestion(questions) {
+  const pendingQuestions = sortQuestionsChronologically(questions).filter((question) => question.status === "Pendente");
+  return pendingQuestions[pendingQuestions.length - 1];
+}
+
 function getHighestPriority(questions) {
   if (questions.some((question) => question.priority === "Alta")) return "Alta";
   if (questions.some((question) => question.priority === "Media")) return "Media";
@@ -237,10 +254,13 @@ function buildConversationGroups(questions) {
   });
 
   return Array.from(groups.entries()).map(([key, groupQuestions]) => {
-    const sorted = [...groupQuestions].sort((a, b) => getQuestionTimestamp(a) - getQuestionTimestamp(b));
+    const sorted = sortQuestionsChronologically(groupQuestions);
     const latest = sorted[sorted.length - 1];
-    const hasPending = sorted.some((question) => question.status === "Pendente");
-    const allAnswered = sorted.every((question) => question.status === "Respondida");
+    const pendingCount = sorted.filter((question) => question.status === "Pendente").length;
+    const answeredCount = sorted.filter((question) => question.status === "Respondida").length;
+    const totalQuestions = sorted.length;
+    const hasPending = pendingCount > 0;
+    const allAnswered = totalQuestions > 0 && answeredCount === totalQuestions;
     const answeredSources = [...new Set(sorted.map((question) => normalizeAnsweredSource(question.answered_source)).filter(Boolean))];
     const priority = getHighestPriority(sorted);
     return {
@@ -248,7 +268,12 @@ function buildConversationGroups(questions) {
       id: `group:${key}`,
       group_key: key,
       questions: sorted,
-      question_count: sorted.length,
+      question_count: totalQuestions,
+      totalQuestions,
+      pendingCount,
+      answeredCount,
+      hasPending,
+      allAnswered,
       status: hasPending ? "Pendente" : allAnswered ? "Respondida" : latest.status,
       answered_source: hasPending ? "" : answeredSources.length === 1 ? answeredSources[0] : "",
       priority,
@@ -1122,7 +1147,7 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
           </div>
           <div className="header-line buyer-line">
             <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
-            {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
+            {question.totalQuestions > 1 ? <span className="count-badge">{question.totalQuestions}</span> : null}
           </div>
         </div>
       </div>
@@ -1142,7 +1167,8 @@ function QuestionRow({ question, selected, onSelect, sourceLabel, sourceColor })
 }
 
 function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, onEdit, onGenerate, isApproving, isGenerating }) {
-  const editableQuestion = question.questions?.find((item) => item.status === "Pendente") || question;
+  const conversationQuestions = sortQuestionsChronologically(question.questions || [question]);
+  const editableQuestion = getNewestPendingQuestion(conversationQuestions) || question;
   const hasSuggestion = editableQuestion.has_ai_suggestion !== false;
 
   return (
@@ -1164,13 +1190,28 @@ function PendingQuestionCard({ question, sourceLabel, sourceColor, onApprove, on
           </div>
           <div className="header-line buyer-line">
             <span className="buyer-name">{getBuyerDisplayName(question.buyer, question.customer_name)}</span>
-            {question.question_count > 1 ? <span className="count-badge">{question.question_count}</span> : null}
+            {question.totalQuestions > 1 ? <span className="count-badge">{question.totalQuestions}</span> : null}
           </div>
         </div>
       </div>
 
       <h3>{question.product}</h3>
-      <p className="pending-question">{question.question}</p>
+      <div className="pending-thread-preview">
+        {conversationQuestions.map((item) => (
+          <div className="pending-thread-item" key={item.id || item.external_id}>
+            <div>
+              <span>{formatDate(item.created_at)}</span>
+              <p>{item.question}</p>
+            </div>
+            {item.status === "Respondida" && (item.final_response || item.final_answer || item.ai_suggestion) ? (
+              <div className="pending-thread-answer">
+                <span>{getAnsweredSourceLabel(item.answered_source)}</span>
+                <p>{item.final_response || item.final_answer || item.ai_suggestion}</p>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
 
       <div className="suggestion-preview">
         <span>Sugestão da IA</span>
@@ -1325,10 +1366,11 @@ function DetailMetadata({ question }) {
 }
 
 function ConversationMessages({ questions }) {
+  const sortedQuestions = sortQuestionsChronologically(questions || []);
   return (
     <div className="conversation-thread">
-      {questions.map((item) => (
-        <div className="thread-item" key={item.id}>
+      {sortedQuestions.map((item) => (
+        <div className="thread-item" key={item.id || item.external_id}>
           <div className="message customer">
             <span>{getBuyerDisplayName(item.buyer, item.customer_name, { detail: true })}</span>
             <p>{item.question}</p>
@@ -1356,12 +1398,12 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRewriting, setIsRewriting] = useState(false);
   const [rewriteError, setRewriteError] = useState("");
-  const conversationQuestions = question?.questions || (question ? [question] : []);
-  const editableQuestion = conversationQuestions.find((item) => item.status === "Pendente") || question;
+  const conversationQuestions = sortQuestionsChronologically(question?.questions || (question ? [question] : []));
+  const editableQuestion = getNewestPendingQuestion(conversationQuestions) || question;
   const isUnanswerable = Boolean(question?.is_unanswerable || question?.status === "Não respondível");
 
   useEffect(() => {
-    const pendingQuestion = (question?.questions || [question]).find((item) => item?.status === "Pendente") || question;
+    const pendingQuestion = getNewestPendingQuestion(question?.questions || [question]) || question;
     const originalText = pendingQuestion?.ai_suggestion || "";
     setVersions([
       {
@@ -2027,35 +2069,36 @@ export default function App() {
     [visibleQuestions, selectedCompanyId, currentCompany?.id]
   );
 
-  const filteredQuestions = useMemo(() => {
-    const forcedStatus =
-      active === "Respondidas"
-          ? "Respondida"
-          : active === "Pendentes"
-            ? "Pendente"
-            : null;
+  const conversationGroups = useMemo(
+    () => buildConversationGroups(visibleQuestions),
+    [visibleQuestions, selectedCompanyId, currentCompany?.id]
+  );
 
-    return visibleQuestions.filter((question) => {
+  const filteredConversationGroups = useMemo(() => {
+    return conversationGroups.filter((conversation) => {
       const marketplaceMatches =
-        marketplaceFilter === "Todos" || question.marketplace === marketplaceFilter;
-      const statusMatches = forcedStatus ? question.status === forcedStatus : true;
+        marketplaceFilter === "Todos" || conversation.marketplace === marketplaceFilter;
       const priorityMatches =
-        priorityFilter === "Todos" || question.priority === priorityFilter;
+        priorityFilter === "Todos" || conversation.priority === priorityFilter;
+      const statusMatches =
+        active === "Respondidas"
+          ? conversation.allAnswered
+          : active === "Pendentes"
+            ? conversation.hasPending
+            : true;
       const answeredSourceMatches =
         active !== "Respondidas" ||
         answeredSourceFilter === "Todas" ||
-        normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter);
-      return marketplaceMatches && statusMatches && priorityMatches && answeredSourceMatches;
+        conversation.questions.some(
+          (question) => normalizeAnsweredSource(question.answered_source) === normalizeAnsweredSource(answeredSourceFilter)
+        );
+      return marketplaceMatches && priorityMatches && statusMatches && answeredSourceMatches;
     });
-  }, [active, visibleQuestions, marketplaceFilter, priorityFilter, answeredSourceFilter, selectedCompanyId, currentCompany?.id]);
+  }, [active, conversationGroups, marketplaceFilter, priorityFilter, answeredSourceFilter]);
 
-  const conversationGroups = useMemo(
-    () => buildConversationGroups(filteredQuestions),
-    [filteredQuestions, selectedCompanyId, currentCompany?.id]
-  );
   const finalCards = useMemo(() => {
     const companyId = selectedCompanyId || currentCompany?.id || getStoredCompanyId();
-    const cards = conversationGroups.filter((card) => {
+    const cards = filteredConversationGroups.filter((card) => {
       const belongs = cardBelongsToCompany(card, companyId);
       if (!belongs) {
         console.log(
@@ -2074,19 +2117,19 @@ export default function App() {
       }))
     );
     return cards;
-  }, [conversationGroups, selectedCompanyId, currentCompany?.id]);
+  }, [filteredConversationGroups, selectedCompanyId, currentCompany?.id]);
   const selectedQuestion = isQuestionsLoading
     ? null
     : finalCards.find((question) => question.id === selectedId) ||
       finalCards[0] ||
       null;
   const selectedEditableQuestion =
-    selectedQuestion?.questions?.find((question) => question.status === "Pendente") || selectedQuestion;
+    getNewestPendingQuestion(selectedQuestion?.questions || (selectedQuestion ? [selectedQuestion] : [])) || selectedQuestion;
 
   const metrics = {
-    pending: finalCards.filter((question) => question.status === "Pendente").length,
-    answered: finalCards.filter((question) => question.status === "Respondida").length,
-    high: finalCards.filter((question) => question.priority === "Alta").length,
+    pending: visibleQuestions.filter((question) => question.status === "Pendente").length,
+    answered: visibleQuestions.filter((question) => question.status === "Respondida").length,
+    high: visibleQuestions.filter((question) => question.priority === "Alta").length,
   };
 
   const hasVisibleQuestions = finalCards.length > 0;
@@ -2130,7 +2173,7 @@ export default function App() {
       });
       setActive("Pendentes");
       setPriorityFilter("Todos");
-      setSelectedId(finalCards.find((question) => question.status === "Pendente")?.id || null);
+      setSelectedId(conversationGroups.find((conversation) => conversation.hasPending)?.id || null);
       return;
     }
 
@@ -2143,7 +2186,7 @@ export default function App() {
       });
       setActive("Respondidas");
       setPriorityFilter("Todos");
-      setSelectedId(finalCards.find((question) => question.status === "Respondida")?.id || null);
+      setSelectedId(conversationGroups.find((conversation) => conversation.allAnswered)?.id || null);
       return;
     }
 
@@ -2155,7 +2198,7 @@ export default function App() {
     });
     setActive("Inbox");
     setPriorityFilter("Alta");
-    setSelectedId(finalCards.find((question) => question.priority === "Alta")?.id || null);
+    setSelectedId(conversationGroups.find((conversation) => conversation.priority === "Alta")?.id || null);
   }
 
   useEffect(() => {
@@ -2776,8 +2819,8 @@ export default function App() {
                   onApprove={approveQuestion}
                   onEdit={openEditorForQuestion}
                   onGenerate={generateSuggestion}
-                  isApproving={sendingAnswerId === (question.questions?.find((item) => item.status === "Pendente") || question).id}
-                  isGenerating={generatingQuestionId === (question.questions?.find((item) => item.status === "Pendente") || question).id}
+                  isApproving={sendingAnswerId === (getNewestPendingQuestion(question.questions || [question]) || question).id}
+                  isGenerating={generatingQuestionId === (getNewestPendingQuestion(question.questions || [question]) || question).id}
                 />
               ))
             ) : (

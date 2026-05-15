@@ -634,6 +634,48 @@ button:disabled {
   overflow: hidden;
 }
 
+.pending-thread-preview {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.pending-thread-item {
+  border: 1px solid rgba(126, 139, 168, 0.14);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.pending-thread-item span {
+  display: block;
+  color: #7d889d;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.pending-thread-item p {
+  margin: 0;
+  color: #566176;
+  font-size: 13px;
+  line-height: 1.42;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pending-thread-answer {
+  margin-top: 8px;
+  border-left: 3px solid #22c55e;
+  padding-left: 9px;
+}
+
+.pending-thread-answer span {
+  color: #167442;
+}
+
 .suggestion-preview {
   border: 1px solid rgba(95, 61, 196, 0.13);
   border-radius: 16px;
