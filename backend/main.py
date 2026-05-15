@@ -948,6 +948,10 @@ def protect_tenant_question_payloads(
                 f"TENANT_LEAK_EXCLUDED expected={company_id} found=missing external_id={question.get('external_id') or question.get('id')} title={question.get('product_title') or question.get('product')}",
                 flush=True,
             )
+            print(
+                f"TENANT_LEAK_BLOCKED expected={company_id} found=missing external_id={question.get('external_id') or question.get('id')}",
+                flush=True,
+            )
             logger.error(
                 "TENANT_LEAK_MISSING_COMPANY_ID expected=%s external_id=%s",
                 company_id,
@@ -957,6 +961,10 @@ def protect_tenant_question_payloads(
         if question_company_id != company_id:
             print(
                 f"TENANT_LEAK_EXCLUDED expected={company_id} found={question_company_id} external_id={question.get('external_id') or question.get('id')} title={question.get('product_title') or question.get('product')}",
+                flush=True,
+            )
+            print(
+                f"TENANT_LEAK_BLOCKED expected={company_id} found={question_company_id} external_id={question.get('external_id') or question.get('id')}",
                 flush=True,
             )
             logger.error(
@@ -4507,21 +4515,14 @@ def list_questions(
         return return_questions(local_questions)
 
     if not is_ml_answered_backfill_enabled():
+        print(f"TENANT_HISTORY_BACKFILL_DISABLED company_id={company_id}", flush=True)
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
         print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
         print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
         return return_questions(local_questions)
 
-    logger.warning(
-        "Answered history live backfill requested but disabled in /questions for tenant safety company_id=%s",
-        company_id,
-    )
-    print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
-    print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
-    print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
-    return return_questions(local_questions)
-
+    print(f"TENANT_HISTORY_BACKFILL_ENABLED company_id={company_id}", flush=True)
     try:
         integration = get_ml_integration(db, company_id)
         if not integration.access_token and not integration.refresh_token:
@@ -4555,6 +4556,68 @@ def list_questions(
         tenant_question_sample(combined_questions),
     )
     return combined_questions
+
+
+@app.get("/debug/tenant/questions")
+def debug_tenant_questions(
+    company_id: str = Query(...),
+    days: int = Query(default=15),
+    db: Session = Depends(get_db),
+):
+    history_days = days if days in {15, 30} else 15
+    history_cutoff = datetime.utcnow() - timedelta(days=history_days)
+    query = (
+        db.query(QuestionRecord)
+        .filter(
+            QuestionRecord.company_id == company_id,
+            or_(
+                QuestionRecord.status == "pending",
+                QuestionRecord.status == "closed_unanswerable",
+                and_(
+                    or_(
+                        QuestionRecord.answered_source == "app",
+                        QuestionRecord.answered_source == "portal",
+                    ),
+                    or_(
+                        QuestionRecord.answered_at >= history_cutoff,
+                        and_(
+                            QuestionRecord.answered_at.is_(None),
+                            QuestionRecord.created_at >= history_cutoff,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
+    )
+    db_questions = query.all()
+    payloads = [question_to_api(question, db=db, company_id=company_id) for question in db_questions]
+    leaks_detected = [
+        {
+            "external_id": payload.get("external_id"),
+            "company_id": payload.get("company_id"),
+            "product_title": payload.get("product_title") or payload.get("product"),
+        }
+        for payload in payloads
+        if payload.get("company_id") != company_id
+    ]
+    returned = protect_tenant_question_payloads(payloads, company_id)
+    return {
+        "company_id": company_id,
+        "days": history_days,
+        "db_count": len(db_questions),
+        "returned_count": len(returned),
+        "sample": [
+            {
+                "external_id": question.get("external_id"),
+                "company_id": question.get("company_id"),
+                "product_title": question.get("product_title") or question.get("product"),
+                "answered_source": question.get("answered_source"),
+            }
+            for question in returned[:10]
+        ],
+        "leaks_detected": leaks_detected,
+    }
 
 
 @app.get("/debug/ml/buyers")
