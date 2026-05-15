@@ -417,6 +417,15 @@ def normalize_db_status(status: str | None) -> str:
     return "pending"
 
 
+def normalize_answered_source(source: str | None) -> str:
+    normalized = (source or "").strip().lower()
+    if normalized in {"mercado_livre_portal", "ml_portal", "portal"}:
+        return "portal"
+    if normalized in {"app", "application"}:
+        return "app"
+    return normalized
+
+
 def status_to_ui(status: str | None) -> str:
     normalized = normalize_db_status(status)
     if normalized == "responded":
@@ -1724,8 +1733,13 @@ def upsert_portal_answered_ml_question(
     resolved_company_id = company_id or get_current_company_id()
     normalized = normalize_ml_question(question_payload, access_token)
     external_id = str(normalized.get("external_id") or "")
+    print(
+        f"ML_PORTAL_ANSWER_SAVE_ATTEMPT company_id={resolved_company_id} external_id={external_id or 'missing'}",
+        flush=True,
+    )
     if not external_id:
         logger.warning("Portal answered ML question skipped: missing external_id")
+        print("ML_PORTAL_ANSWER_SKIPPED reason=missing_external_id", flush=True)
         return None, "skipped"
     if isinstance(normalized.get("item_payload"), dict):
         upsert_ml_product(db, normalized["item_payload"], company_id=resolved_company_id)
@@ -1739,11 +1753,23 @@ def upsert_portal_answered_ml_question(
         )
         .first()
     )
-    if question and question.answered_source == "app":
+    has_local_app_answer = bool(
+        question
+        and (
+            question.answered_source == "app"
+            or (
+                normalize_db_status(question.status) == "responded"
+                and bool(question.final_answer)
+                and normalize_answered_source(question.answered_source) != "portal"
+            )
+        )
+    )
+    if has_local_app_answer:
         logger.info("ML portal answer skipped because local app answer exists external_id=%s", external_id)
+        print(f"ML_PORTAL_ANSWER_SKIPPED reason=local_app_answer_exists external_id={external_id}", flush=True)
         return question, "skipped_app"
 
-    action = "updated" if question else "inserted"
+    action = "update" if question else "insert"
     if not question:
         question = QuestionRecord(
             company_id=resolved_company_id,
@@ -1765,6 +1791,10 @@ def upsert_portal_answered_ml_question(
         db.delete(question.ai_suggestion)
     db.flush()
     logger.info("ML portal answered question DB action=%s external_id=%s", action, external_id)
+    print(
+        f"ML_PORTAL_ANSWER_SAVED company_id={resolved_company_id} external_id={external_id} source=portal action={action}",
+        flush=True,
+    )
     return question, action
 
 
@@ -2865,15 +2895,27 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
     question_id = extract_ml_question_id_from_notification(payload)
     topic = payload.get("topic") if isinstance(payload, dict) else None
     resource = payload.get("resource") if isinstance(payload, dict) else None
+    webhook_seller_id = extract_ml_seller_id_from_notification(payload)
+    print(
+        f"ML_WEBHOOK_QUESTION_RECEIVED seller_id={webhook_seller_id} resource={resource}",
+        flush=True,
+    )
+    print(
+        f"ML_PORTAL_ANSWER_WEBHOOK_RECEIVED seller_id={webhook_seller_id} question_id={question_id}",
+        flush=True,
+    )
     context = resolve_ml_webhook_company_context(db, payload, question_id)
     if not context:
+        print("ML_PORTAL_ANSWER_SKIPPED reason=company_not_resolved", flush=True)
         return False
     company_id = context["company_id"]
     access_token = context.get("access_token")
     question_detail = context.get("question_detail")
+    print(f"ML_PORTAL_ANSWER_COMPANY_RESOLVED company_id={company_id}", flush=True)
     logger.info("ML_WEBHOOK_PROCESSING company_id=%s resource=%s", company_id, resource)
     if not question_id:
         logger.info("ML question webhook has no question id; syncing company pending queue company_id=%s", company_id)
+        print("ML_PORTAL_ANSWER_SKIPPED reason=missing_question_id", flush=True)
         sync_mercadolivre_questions(db, source="webhook", company_id=company_id)
         return True
 
@@ -2881,15 +2923,21 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
         access_token = get_valid_mercadolivre_token(db, company_id=company_id)
     if not question_detail:
         try:
+            print(f"ML_WEBHOOK_QUESTION_FETCH company_id={company_id} question_id={question_id}", flush=True)
             question_detail = fetch_ml_question_detail(question_id, access_token)
         except HTTPException as error:
             if error.status_code != 401:
                 raise
             access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=company_id)
+            print(f"ML_WEBHOOK_QUESTION_FETCH company_id={company_id} question_id={question_id}", flush=True)
             question_detail = fetch_ml_question_detail(question_id, access_token)
+    else:
+        print(f"ML_WEBHOOK_QUESTION_FETCH company_id={company_id} question_id={question_id}", flush=True)
 
     status = str(question_detail.get("status") or "").upper()
     has_answer = bool(extract_ml_answer_text(question_detail))
+    print(f"ML_WEBHOOK_QUESTION_FETCHED status={status} has_answer={has_answer}", flush=True)
+    print(f"ML_PORTAL_ANSWER_FETCHED status={status} has_answer={has_answer}", flush=True)
     local_app_answer_exists = (
         db.query(QuestionRecord)
         .filter(
@@ -2922,6 +2970,9 @@ def process_mercadolivre_question_notification(db: Session, payload: Any) -> boo
             question_id,
         )
         return True
+
+    if status == "ANSWERED" and not has_answer:
+        print("ML_PORTAL_ANSWER_SKIPPED reason=answered_without_answer_text", flush=True)
 
     normalized = normalize_ml_question(question_detail, access_token)
     if isinstance(normalized.get("item_payload"), dict):
@@ -2971,7 +3022,7 @@ def should_process_mercadolivre_question_notification(payload: Any) -> bool:
     topic = str(payload.get("topic") or payload.get("type") or "").strip().lower()
     resource = str(payload.get("resource") or payload.get("path") or payload.get("url") or "").strip().lower()
 
-    if topic == "questions":
+    if topic == "questions" or "questions" in topic:
         return True
     if "/questions" in resource:
         return True
@@ -2991,7 +3042,6 @@ def get_mercadolivre_notification_id(payload: Any) -> str | None:
         payload.get("_id")
         or payload.get("id")
         or payload.get("notification_id")
-        or payload.get("resource")
     )
     notification_id = str(raw_id or "").strip()
     return notification_id or None
@@ -4618,6 +4668,37 @@ def debug_tenant_questions(
         ],
         "leaks_detected": leaks_detected,
     }
+
+
+@app.get("/debug/tenant/portal-answers")
+def debug_tenant_portal_answers(db: Session = Depends(get_db)):
+    result: dict[str, list[dict[str, Any]]] = {}
+    for company_id, _company_name in MOCK_COMPANIES:
+        questions = (
+            db.query(QuestionRecord)
+            .filter(
+                QuestionRecord.company_id == company_id,
+                QuestionRecord.provider == DEFAULT_PROVIDER,
+                QuestionRecord.answered_source == "portal",
+                QuestionRecord.status == "responded",
+            )
+            .order_by(QuestionRecord.answered_at.desc(), QuestionRecord.updated_at.desc())
+            .limit(20)
+            .all()
+        )
+        result[company_id] = [
+            {
+                "external_id": question.external_id,
+                "product_title": question.product_title,
+                "question_text": question.question_text,
+                "final_answer": question.final_answer,
+                "answered_at": question.answered_at.isoformat() if question.answered_at else None,
+                "answered_source": question.answered_source,
+                "status": question.status,
+            }
+            for question in questions
+        ]
+    return result
 
 
 @app.get("/debug/ml/buyers")
