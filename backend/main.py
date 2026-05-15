@@ -29,7 +29,7 @@ from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
 from db_models import AiSuggestion, Company, CompanySettings, Integration, ProductCache, QuestionRecord
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, MOCK_COMPANIES, seed_defaults
-from sqlalchemy import Text, cast, or_, text
+from sqlalchemy import Text, and_, cast, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -3786,7 +3786,11 @@ def get_live_portal_answered_questions(
     try:
         access_token = get_valid_mercadolivre_token(db, company_id=resolved_company_id)
         integration = get_ml_integration(db, resolved_company_id)
+        if not integration.access_token and not integration.refresh_token:
+            print(f"HISTORY_SKIPPED_NO_INTEGRATION company_id={resolved_company_id}", flush=True)
+            return []
         seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+        print(f"HISTORY_INTEGRATION company_id={resolved_company_id} seller_id={seller_id}", flush=True)
         raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
     except HTTPException as error:
         if error.status_code == 401:
@@ -3794,6 +3798,7 @@ def get_live_portal_answered_questions(
                 access_token = get_valid_mercadolivre_token(db, force_refresh=True, company_id=resolved_company_id)
                 integration = get_ml_integration(db, resolved_company_id)
                 seller_id = get_ml_seller_id({"access_token": access_token, "seller_id": integration.seller_id})
+                print(f"HISTORY_INTEGRATION company_id={resolved_company_id} seller_id={seller_id}", flush=True)
                 raw_response = fetch_ml_answered_questions_by_seller(seller_id, access_token)
             except Exception:
                 logger.exception("Could not fetch live portal answered Mercado Livre questions after refresh")
@@ -3834,7 +3839,14 @@ def get_live_portal_answered_questions(
         answered_at = extract_ml_answer_created_at(payload)
         if not answered_at or answered_at < cutoff:
             continue
-        live_questions.append(ml_portal_question_to_api(payload, access_token, db=db, company_id=resolved_company_id))
+        live_question = ml_portal_question_to_api(payload, access_token, db=db, company_id=resolved_company_id)
+        if live_question.get("company_id") != resolved_company_id:
+            print(
+                f"HISTORY_LEAK_BLOCKED expected_company={resolved_company_id} found_company={live_question.get('company_id')} external_id={external_id}",
+                flush=True,
+            )
+            continue
+        live_questions.append(live_question)
     logger.warning("ML portal answered questions merged_into_response=%s", len(live_questions))
     return live_questions
 
@@ -4401,9 +4413,17 @@ def list_integration_questions(integration_id: str):
 
 
 @app.get("/questions")
-def list_questions(request: Request, status: str | None = None, db: Session = Depends(get_db)):
+def list_questions(
+    request: Request,
+    status: str | None = None,
+    days: int = Query(default=15),
+    db: Session = Depends(get_db),
+):
     company_id, _, _ = log_tenant_context(request)
+    history_days = days if days in {15, 30} else 15
+    history_cutoff = datetime.utcnow() - timedelta(days=history_days)
     print(f"TENANT_QUESTIONS_QUERY company_id={company_id}", flush=True)
+    print(f"HISTORY_PERIOD company_id={company_id} days={history_days}", flush=True)
 
     def return_questions(source_questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         before_count = len(source_questions)
@@ -4428,8 +4448,19 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
                 or_(
                     QuestionRecord.status == "pending",
                     QuestionRecord.status == "closed_unanswerable",
-                    QuestionRecord.answered_source == "app",
-                    QuestionRecord.answered_source == "portal",
+                    and_(
+                        or_(
+                            QuestionRecord.answered_source == "app",
+                            QuestionRecord.answered_source == "portal",
+                        ),
+                        or_(
+                            QuestionRecord.answered_at >= history_cutoff,
+                            and_(
+                                QuestionRecord.answered_at.is_(None),
+                                QuestionRecord.created_at >= history_cutoff,
+                            ),
+                        ),
+                    ),
                 ),
             )
             .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
@@ -4439,6 +4470,7 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         db_questions = query.all()
         logger.info("TENANT_QUESTIONS_SOURCE_DB company_id=%s count=%s", company_id, len(db_questions))
         print(f"TENANT_QUESTIONS_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
+        print(f"HISTORY_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
         question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in db_questions]
         buyer_ids = list(dict.fromkeys(
             str(question.get("external_customer_id") or "")
@@ -4470,11 +4502,15 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
     if status and normalize_db_status(status) != "responded":
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+        print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
+        print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
         return return_questions(local_questions)
 
     if not is_ml_answered_backfill_enabled():
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+        print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
+        print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
         return return_questions(local_questions)
 
     try:
@@ -4483,13 +4519,18 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
             logger.info("Skipping answered backfill: Mercado Livre disconnected")
             logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
             print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+            print(f"HISTORY_SKIPPED_NO_INTEGRATION company_id={company_id}", flush=True)
+            print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
+            print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
             return return_questions(local_questions)
-        live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id)
+        print(f"HISTORY_INTEGRATION company_id={company_id} seller_id={integration.seller_id}", flush=True)
+        live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id, days=history_days)
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, len(live_portal_questions))
         print(
             f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count={len(live_portal_questions)}",
             flush=True,
         )
+        print(f"HISTORY_SOURCE_ML company_id={company_id} count={len(live_portal_questions)}", flush=True)
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading live portal answers")
         live_portal_questions = []
@@ -4497,6 +4538,7 @@ def list_questions(request: Request, status: str | None = None, db: Session = De
         logger.exception("Live portal answered questions unavailable; returning local questions only")
         live_portal_questions = []
     combined_questions = return_questions(local_questions + live_portal_questions)
+    print(f"HISTORY_MERGED company_id={company_id} count={len(combined_questions)}", flush=True)
     logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
     logger.info(
         "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
