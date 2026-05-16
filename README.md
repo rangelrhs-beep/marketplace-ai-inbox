@@ -4,6 +4,21 @@ Marketplace AI Inbox is a multi-tenant SaaS application for marketplace sellers 
 
 This README is the persistent source of truth for future Codex sessions. When changing architecture, tenant behavior, integration flows, or operational rules, update this file in the same session.
 
+## Important Rules
+
+These critical architectural and operational rules must never be broken in future development:
+
+- `GET /questions` must read from the local database only.
+- Never re-enable unsafe live Mercado Livre history merge inside `GET /questions`.
+- Mercado Livre history import must always be a manual operation.
+- Webhooks are the source of real-time synchronization.
+- All routes must respect `company_id` isolation.
+- Never mix `seller_id` values or tokens between tenants.
+- Preserve app answers during imports.
+- Use UPSERT behavior for imports so repeated imports update existing tenant-scoped records instead of duplicating data.
+- The frontend must never render questions from another company.
+- Buyer enrichment should be cached locally.
+
 ## Project Overview
 
 The app currently focuses on Mercado Livre questions. Sellers connect a Mercado Livre account, sync product and question data, review AI-generated response suggestions, optionally edit or rewrite them, and send final answers back to Mercado Livre.
