@@ -210,6 +210,11 @@ def ensure_database_columns() -> None:
         "last_ml_history_import_result": "JSONB",
     }
     question_columns = {
+        "item_id": "VARCHAR(120)",
+        "buyer_id": "VARCHAR(120)",
+        "buyer_nickname": "VARCHAR(255)",
+        "buyer_first_name": "VARCHAR(255)",
+        "buyer_last_name": "VARCHAR(255)",
         "answered_source": "VARCHAR(80)",
         "final_answer": "TEXT",
         "answer_error_code": "VARCHAR(120)",
@@ -291,6 +296,16 @@ def ensure_database_columns() -> None:
                     "ON products_cache (company_id, provider, external_id)"
                 )
             )
+            for index_name, index_sql in {
+                "idx_questions_company_id": "CREATE INDEX IF NOT EXISTS idx_questions_company_id ON questions (company_id)",
+                "idx_questions_company_status": "CREATE INDEX IF NOT EXISTS idx_questions_company_status ON questions (company_id, status)",
+                "idx_questions_company_created_at": "CREATE INDEX IF NOT EXISTS idx_questions_company_created_at ON questions (company_id, created_at)",
+                "idx_questions_company_answered_at": "CREATE INDEX IF NOT EXISTS idx_questions_company_answered_at ON questions (company_id, answered_at)",
+                "idx_questions_company_provider_external": "CREATE INDEX IF NOT EXISTS idx_questions_company_provider_external ON questions (company_id, provider, external_id)",
+                "idx_questions_company_buyer_id": "CREATE INDEX IF NOT EXISTS idx_questions_company_buyer_id ON questions (company_id, buyer_id)",
+                "idx_questions_company_item_id": "CREATE INDEX IF NOT EXISTS idx_questions_company_item_id ON questions (company_id, item_id)",
+            }.items():
+                connection.execute(text(index_sql))
             existing_suggestion_unique_index = connection.execute(
                 text(
                     "SELECT 1 FROM pg_indexes "
@@ -388,6 +403,16 @@ def ensure_database_columns() -> None:
                     "ON products_cache (company_id, provider, external_id)"
                 )
             )
+            for index_sql in (
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_id ON questions (company_id)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_status ON questions (company_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_created_at ON questions (company_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_answered_at ON questions (company_id, answered_at)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_provider_external ON questions (company_id, provider, external_id)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_buyer_id ON questions (company_id, buyer_id)",
+                "CREATE INDEX IF NOT EXISTS idx_questions_company_item_id ON questions (company_id, item_id)",
+            ):
+                connection.execute(text(index_sql))
             duplicate_suggestion = connection.execute(
                 text(
                     "SELECT question_id FROM ai_suggestions "
@@ -628,8 +653,18 @@ def get_ml_buyers_info(buyer_ids: list[str], access_token: str) -> dict[str, dic
     return result
 
 
-def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -> list[dict[str, Any]]:
-    buyer_ids = [str(question.get("external_customer_id") or "") for question in questions if question.get("external_customer_id")]
+def enrich_questions_with_buyers(
+    questions: list[dict[str, Any]],
+    db: Session,
+    company_id: str | None = None,
+) -> list[dict[str, Any]]:
+    buyer_ids = [
+        str(question.get("external_customer_id") or "")
+        for question in questions
+        if question.get("external_customer_id")
+        and not (question.get("buyer") or {}).get("nickname")
+        and not (question.get("buyer") or {}).get("first_name")
+    ]
     unique_buyer_ids = list(dict.fromkeys(buyer_ids))
     logger.info(
         "buyer enrichment start questions_count=%s unique_buyer_ids_count=%s buyer_ids_sample=%s",
@@ -641,11 +676,13 @@ def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -
     print(f"BUYER_ENRICHMENT questions_count={len(questions)}", flush=True)
     print(f"BUYER_ENRICHMENT unique_buyer_ids={unique_buyer_ids[:10]} total={len(unique_buyer_ids)}", flush=True)
     if not buyer_ids:
+        print("BUYER_ENRICHMENT_SKIPPED_FROM_CACHE", flush=True)
         print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
         return questions
     try:
-        access_token = get_valid_mercadolivre_token(db)
+        access_token = get_valid_mercadolivre_token(db, company_id=company_id)
         buyers = get_ml_buyers_info(unique_buyer_ids, access_token)
+        print(f"BUYER_ENRICHMENT_FETCHED count={len(buyers)}", flush=True)
     except Exception:
         logger.warning("Mercado Livre buyer enrichment unavailable; returning fallback buyer names")
         buyers = {}
@@ -653,6 +690,15 @@ def enrich_questions_with_buyers(questions: list[dict[str, Any]], db: Session) -
     for question in questions:
         buyer_id = str(question.get("external_customer_id") or "")
         buyer = buyers.get(buyer_id) or question.get("buyer") or build_buyer_info(buyer_id or None)
+        if buyers.get(buyer_id) and question.get("id"):
+            record = db.get(QuestionRecord, question["id"])
+            if record:
+                record.buyer_id = buyer.get("id") or record.buyer_id
+                record.buyer_nickname = buyer.get("nickname") or record.buyer_nickname
+                record.buyer_first_name = buyer.get("first_name") or record.buyer_first_name
+                record.buyer_last_name = buyer.get("last_name") or record.buyer_last_name
+                record.updated_at = datetime.utcnow()
+                print(f"BUYER_ENRICHMENT_SAVED buyer_id={buyer_id}", flush=True)
         enriched.append({
             **question,
             "buyer": buyer,
@@ -873,10 +919,17 @@ def question_to_api(
     raw_payload = question.raw_payload or {}
     cached_product = get_cached_product_for_question(db, raw_payload, company_id=resolved_company_id)
     cached_product_api = product_to_api(cached_product) if cached_product else None
-    external_product_id = extract_question_item_id(raw_payload)
-    external_customer_id = extract_question_customer_id(raw_payload)
+    external_product_id = question.item_id or extract_question_item_id(raw_payload)
+    external_customer_id = question.buyer_id or extract_question_customer_id(raw_payload)
     extracted_customer_name = extract_question_customer_name(raw_payload)
-    buyer = extract_buyer_info_from_payload(raw_payload)
+    stored_buyer = build_buyer_info(
+        question.buyer_id,
+        nickname=question.buyer_nickname,
+        first_name=question.buyer_first_name,
+        last_name=question.buyer_last_name,
+    )
+    payload_buyer = extract_buyer_info_from_payload(raw_payload)
+    buyer = stored_buyer if stored_buyer.get("nickname") or stored_buyer.get("first_name") else payload_buyer
     external_order_id = first_present(
         raw_payload.get("order_id"),
         raw_payload.get("order", {}).get("id") if isinstance(raw_payload.get("order"), dict) else None,
@@ -1709,6 +1762,12 @@ def upsert_ml_question(
     question.status = normalize_db_status(normalized.get("status"))
     question.created_at = parse_datetime(normalized.get("created_at"))
     question.raw_payload = normalized.get("raw_payload") or {}
+    question.item_id = extract_question_item_id(question.raw_payload or {})
+    buyer_info = extract_buyer_info_from_payload(question.raw_payload or {})
+    question.buyer_id = buyer_info.get("id") or question.buyer_id
+    question.buyer_nickname = buyer_info.get("nickname") or question.buyer_nickname
+    question.buyer_first_name = buyer_info.get("first_name") or question.buyer_first_name
+    question.buyer_last_name = buyer_info.get("last_name") or question.buyer_last_name
     item_payload = normalized.get("item_payload")
     if question.status == "closed_unanswerable":
         item_status = get_ml_item_status(item_payload)
@@ -1787,6 +1846,12 @@ def upsert_portal_answered_ml_question(
     question.question_text = normalized.get("question_text") or ""
     question.status = "responded"
     question.created_at = parse_datetime(normalized.get("created_at"))
+    question.item_id = extract_question_item_id(question_payload)
+    buyer_info = extract_buyer_info_from_payload(question_payload)
+    question.buyer_id = buyer_info.get("id") or question.buyer_id
+    question.buyer_nickname = buyer_info.get("nickname") or question.buyer_nickname
+    question.buyer_first_name = buyer_info.get("first_name") or question.buyer_first_name
+    question.buyer_last_name = buyer_info.get("last_name") or question.buyer_last_name
     question.answered_at = extract_ml_answer_created_at(question_payload)
     question.answered_source = "portal"
     question.final_answer = extract_ml_answer_text(question_payload)
@@ -4706,15 +4771,19 @@ def list_questions(
     request: Request,
     status: str | None = None,
     days: int = Query(default=15),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    total_start = time.perf_counter()
     company_id, _, _ = log_tenant_context(request)
     history_days = days if days in {15, 30} else 15
     history_cutoff = datetime.utcnow() - timedelta(days=history_days)
+    print(f"PERF_GET_QUESTIONS_START company_id={company_id}", flush=True)
     print(f"TENANT_QUESTIONS_QUERY company_id={company_id}", flush=True)
     print(f"HISTORY_PERIOD company_id={company_id} days={history_days}", flush=True)
 
-    def return_questions(source_questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def return_questions(source_questions: list[dict[str, Any]], total: int) -> dict[str, Any]:
         before_count = len(source_questions)
         filtered_questions = final_filter_tenant_questions(source_questions, company_id)
         print(
@@ -4725,12 +4794,22 @@ def list_questions(
             f"TENANT_QUESTIONS_SAMPLE company_id={company_id} sample={tenant_question_sample(filtered_questions)}",
             flush=True,
         )
-        return filtered_questions
+        total_ms = (time.perf_counter() - total_start) * 1000
+        print("PERF_GROUPING_MS=0", flush=True)
+        print(f"PERF_TOTAL_GET_QUESTIONS_MS={total_ms:.2f}", flush=True)
+        return {
+            "items": filtered_questions,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_more": page * page_size < total,
+        }
 
     try:
         logger.info("TENANT_QUESTIONS_QUERY company_id=%s", company_id)
         print("BUYER_ENRICHMENT_START", flush=True)
-        query = (
+        db_start = time.perf_counter()
+        base_query = (
             db.query(QuestionRecord)
             .filter(
                 QuestionRecord.company_id == company_id,
@@ -4752,11 +4831,19 @@ def list_questions(
                     ),
                 ),
             )
-            .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
         )
         if status:
-            query = query.filter(QuestionRecord.status == normalize_db_status(status))
-        db_questions = query.all()
+            base_query = base_query.filter(QuestionRecord.status == normalize_db_status(status))
+        total_count = base_query.count()
+        db_questions = (
+            base_query
+            .order_by(QuestionRecord.created_at.desc(), QuestionRecord.created_in_app_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        db_ms = (time.perf_counter() - db_start) * 1000
+        print(f"PERF_DB_QUERY_MS={db_ms:.2f}", flush=True)
         logger.info("TENANT_QUESTIONS_SOURCE_DB company_id=%s count=%s", company_id, len(db_questions))
         print(f"TENANT_QUESTIONS_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
         print(f"HISTORY_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
@@ -4774,10 +4861,14 @@ def list_questions(
             f"TENANT_QUESTIONS_BEFORE_BUYER_ENRICHMENT company_id={company_id} count={len(question_payloads)}",
             flush=True,
         )
+        buyer_start = time.perf_counter()
         local_questions = protect_tenant_question_payloads(
-            enrich_questions_with_buyers(question_payloads, db),
+            enrich_questions_with_buyers(question_payloads, db, company_id=company_id),
             company_id,
         )
+        db.commit()
+        buyer_ms = (time.perf_counter() - buyer_start) * 1000
+        print(f"PERF_BUYER_ENRICH_MS={buyer_ms:.2f}", flush=True)
         logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(local_questions))
         logger.info(
             "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
@@ -4786,14 +4877,14 @@ def list_questions(
         )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
-        return []
+        return {"items": [], "total": 0, "page": page, "page_size": page_size, "has_more": False}
 
     if status and normalize_db_status(status) != "responded":
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
         print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
         print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
         print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
-        return return_questions(local_questions)
+        return return_questions(local_questions, total_count)
 
     if not is_ml_answered_backfill_enabled():
         print(f"TENANT_HISTORY_BACKFILL_DISABLED company_id={company_id}", flush=True)
@@ -4801,42 +4892,14 @@ def list_questions(
         print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
         print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
         print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
-        return return_questions(local_questions)
+        return return_questions(local_questions, total_count)
 
     print(f"TENANT_HISTORY_BACKFILL_ENABLED company_id={company_id}", flush=True)
-    try:
-        integration = get_ml_integration(db, company_id)
-        if not integration.access_token and not integration.refresh_token:
-            logger.info("Skipping answered backfill: Mercado Livre disconnected")
-            logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-            print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
-            print(f"HISTORY_SKIPPED_NO_INTEGRATION company_id={company_id}", flush=True)
-            print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
-            print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
-            return return_questions(local_questions)
-        print(f"HISTORY_INTEGRATION company_id={company_id} seller_id={integration.seller_id}", flush=True)
-        live_portal_questions = get_live_portal_answered_questions(db, company_id=company_id, days=history_days)
-        logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, len(live_portal_questions))
-        print(
-            f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count={len(live_portal_questions)}",
-            flush=True,
-        )
-        print(f"HISTORY_SOURCE_ML company_id={company_id} count={len(live_portal_questions)}", flush=True)
-    except (OperationalError, SQLAlchemyError):
-        logger.exception("Questions database unavailable while loading live portal answers")
-        live_portal_questions = []
-    except Exception:
-        logger.exception("Live portal answered questions unavailable; returning local questions only")
-        live_portal_questions = []
-    combined_questions = return_questions(local_questions + live_portal_questions)
-    print(f"HISTORY_MERGED company_id={company_id} count={len(combined_questions)}", flush=True)
-    logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(combined_questions))
-    logger.info(
-        "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
-        company_id,
-        tenant_question_sample(combined_questions),
-    )
-    return combined_questions
+    logger.warning("Answered history backfill is disabled in GET /questions; use manual import endpoint")
+    print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
+    print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
+    print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
+    return return_questions(local_questions, total_count)
 
 
 @app.get("/debug/tenant/questions")
