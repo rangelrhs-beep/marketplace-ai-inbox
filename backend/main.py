@@ -4572,6 +4572,7 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                     IntegrationHealth(
                         id=service.client.id,
                         channel=service.client.channel,
+                        company_id=company_id,
                         connected=connected,
                         api_status="degraded" if token_status == "missing_refresh_token" else "operational" if connected else "down",
                         last_sync=format_optional_datetime(integration.last_sync),
@@ -4589,6 +4590,7 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                 IntegrationHealth(
                     id=health.id,
                     channel=health.channel,
+                    company_id=company_id,
                     connected=health.token_status in {"valid", "not_required"},
                     api_status=health.api_status,
                     last_sync=format_optional_datetime(health.last_sync)
@@ -4604,6 +4606,7 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                 IntegrationHealth(
                     id=service.client.id,
                     channel=service.client.channel,
+                    company_id=company_id,
                     connected=False,
                     api_status="down",
                     last_sync=None,
@@ -4618,6 +4621,7 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                 IntegrationHealth(
                     id=service.client.id,
                     channel=service.client.channel,
+                    company_id=company_id,
                     connected=False,
                     api_status="down",
                     last_sync=None,
@@ -4632,6 +4636,7 @@ def list_integrations_health(request: Request, db: Session = Depends(get_db)):
                 IntegrationHealth(
                     id=service.client.id,
                     channel=service.client.channel,
+                    company_id=company_id,
                     connected=False,
                     api_status="down",
                     last_sync=None,

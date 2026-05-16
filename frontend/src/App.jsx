@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Check,
@@ -70,18 +70,22 @@ const initialIntegrations = [
     lastMlHistoryImportAt: "",
     lastMlHistoryImportDays: null,
     lastMlHistoryImportResult: null,
+    lastProductsSync: "",
+    company_id: "",
   },
 ];
 
-const initialIntegrationHealth = [
+const initialIntegrationHealth = [];
+
+const loadingIntegrationHealth = [
   {
     id: "mercado-livre",
     channel: "Mercado Livre",
     connected: false,
-    api_status: "down",
+    api_status: "degraded",
     last_sync: null,
-    last_error: "Aguardando leitura do backend.",
-    token_status: "missing",
+    last_error: "Carregando integração...",
+    token_status: "loading",
   },
 ];
 
@@ -115,6 +119,8 @@ function integrationState(overrides = {}) {
     lastMlHistoryImportAt: "",
     lastMlHistoryImportDays: null,
     lastMlHistoryImportResult: null,
+    lastProductsSync: "",
+    company_id: "",
     ...overrides[integration.id],
   }));
 }
@@ -367,8 +373,20 @@ function isBackendIntegrationConnected(health) {
   return health.token_status === "valid" || health.token_status === "expired";
 }
 
+function getCompanyNameById(companies, companyId, fallbackName = "CPAP Express") {
+  return companies.find((company) => company.id === companyId)?.name || fallbackName;
+}
+
+function getHealthCompanyId(health) {
+  return health?.company_id || health?.companyId || null;
+}
+
 function applyBackendHealthToIntegrations(integrations, healthItems, companyId, companyName = "CPAP Express") {
-  const healthById = new Map((healthItems || []).map((health) => [health.id, health]));
+  const tenantHealthItems = (healthItems || []).filter((health) => {
+    const responseCompanyId = getHealthCompanyId(health);
+    return !responseCompanyId || responseCompanyId === companyId;
+  });
+  const healthById = new Map(tenantHealthItems.map((health) => [health.id, health]));
   const mercadoLivreHealth = healthById.get("mercado-livre");
   const isMercadoLivreConnected =
     Boolean(companyId) && isBackendIntegrationConnected(mercadoLivreHealth);
@@ -387,6 +405,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
         : isMercadoLivreConnected
           ? "Conectado"
           : "Não conectado",
+      company_id: companyId || "",
       store: isMercadoLivreConnected ? `${companyName} Mercado Livre` : "",
       lastSync: isMercadoLivreConnected ? mercadoLivreHealth?.last_sync || new Date().toISOString() : "",
       token_status: mercadoLivreHealth?.token_status || "missing",
@@ -513,22 +532,29 @@ function IntegrationCard({
   isImportingHistory,
   isSyncingProducts,
   isDisconnecting,
+  isLoadingIntegration,
+  currentCompanyId,
 }) {
-  const isConnected = integration.status === "Conectado" || integration.status === "Conectado temporariamente";
-  const historyResult = integration.lastMlHistoryImportResult || {};
+  const isTenantScoped = !integration.company_id || integration.company_id === currentCompanyId;
+  const isConnected =
+    isTenantScoped && (integration.status === "Conectado" || integration.status === "Conectado temporariamente");
+  const historyResult = isTenantScoped ? integration.lastMlHistoryImportResult || {} : {};
+  const displayedStatus = isLoadingIntegration ? "Carregando" : isTenantScoped ? integration.status : "Não conectado";
 
   return (
     <article className="integration-card">
       <div className="integration-card-top">
         <IntegrationLogo integration={integration} />
-        <span className={`integration-status ${statusClass[integration.status] || "soon"}`}>
-          {integration.status}
+        <span className={`integration-status ${statusClass[displayedStatus] || "soon"}`}>
+          {isLoadingIntegration ? "Carregando..." : displayedStatus}
         </span>
       </div>
 
       <div className="integration-body">
         <h3>{integration.name}</h3>
-        {isConnected ? (
+        {isLoadingIntegration ? (
+          <p>Carregando integração...</p>
+        ) : isConnected ? (
           <>
             <p>{integration.store}</p>
             <small>Última sincronização: {formatDate(integration.lastSync)}</small>
@@ -540,7 +566,7 @@ function IntegrationCard({
         ) : (
           <p>Conecte por autorização oficial para importar perguntas e manter a inbox atualizada.</p>
         )}
-        {isConnected && integration.lastMlHistoryImportAt ? (
+        {!isLoadingIntegration && isConnected && integration.lastMlHistoryImportAt ? (
           <div className="integration-import-summary">
             <strong>Última importação:</strong>
             <span>{formatDate(integration.lastMlHistoryImportAt)}</span>
@@ -552,7 +578,18 @@ function IntegrationCard({
       </div>
 
       <div className="integration-actions">
-        {isConnected ? (
+        {isLoadingIntegration ? (
+          <>
+            <button className="primary" disabled>
+              <RefreshCw size={17} className="spin" />
+              Carregando integração...
+            </button>
+            <button className="secondary" disabled>
+              <RefreshCw size={17} />
+              Importar histórico ML
+            </button>
+          </>
+        ) : isConnected ? (
           <>
             {canFetchRealQuestions ? (
               <button
@@ -702,9 +739,14 @@ function IntegrationsPage({
   onConfirmConnect,
   onCancelHistoryImport,
   onConfirmHistoryImport,
+  isIntegrationHealthLoading,
+  selectedCompanyId,
 }) {
-  const connectedCount = integrations.filter((item) => item.status === "Conectado").length;
-  const temporaryCount = integrations.filter((item) => item.status === "Conectado temporariamente").length;
+  const tenantIntegrations = integrations.filter((item) => !item.company_id || item.company_id === selectedCompanyId);
+  const connectedCount = isIntegrationHealthLoading ? 0 : tenantIntegrations.filter((item) => item.status === "Conectado").length;
+  const temporaryCount = isIntegrationHealthLoading
+    ? 0
+    : tenantIntegrations.filter((item) => item.status === "Conectado temporariamente").length;
 
   return (
     <section className="integrations-page">
@@ -750,6 +792,8 @@ function IntegrationsPage({
             isImportingHistory={importingHistory}
             isSyncingProducts={syncingProducts}
             isDisconnecting={disconnecting}
+            isLoadingIntegration={isIntegrationHealthLoading}
+            currentCompanyId={selectedCompanyId}
           />
         ))}
       </div>
@@ -763,7 +807,7 @@ function IntegrationsPage({
         </div>
 
         <div className="health-grid">
-          {integrationHealth.map((health) => (
+          {(isIntegrationHealthLoading ? loadingIntegrationHealth : integrationHealth).map((health) => (
             <article className="health-card" key={health.id}>
               <div className="health-card-top">
                 <strong>{health.channel}</strong>
@@ -772,21 +816,21 @@ function IntegrationsPage({
               <dl>
                 <div>
                   <dt>Último sync</dt>
-                  <dd>{health.last_sync ? formatDate(health.last_sync) : "Ainda não sincronizado"}</dd>
+                  <dd>{isIntegrationHealthLoading ? "Carregando integração..." : health.last_sync ? formatDate(health.last_sync) : "Ainda não sincronizado"}</dd>
                 </div>
                 <div>
                   <dt>Token</dt>
-                  <dd>{health.token_status}</dd>
+                  <dd>{isIntegrationHealthLoading ? "Carregando integração..." : health.token_status}</dd>
                 </div>
                 <div>
                   <dt>Último erro</dt>
-                  <dd>{health.last_error || "Sem erros recentes"}</dd>
+                  <dd>{isIntegrationHealthLoading ? "Carregando integração..." : health.last_error || "Sem erros recentes"}</dd>
                 </div>
               </dl>
               <button
                 className="secondary"
                 onClick={() => onTestHealth(health.id)}
-                disabled={testingIntegrationId === health.id}
+                disabled={isIntegrationHealthLoading || testingIntegrationId === health.id}
               >
                 <RefreshCw size={17} className={testingIntegrationId === health.id ? "spin" : ""} />
                 {testingIntegrationId === health.id ? "Testando..." : "Testar conexão"}
@@ -1802,6 +1846,7 @@ export default function App() {
   const [appData, setAppData] = useState(initialAppData);
   const [active, setActive] = useState("Inbox");
   const [integrationHealth, setIntegrationHealth] = useState(initialIntegrationHealth);
+  const [isIntegrationHealthLoading, setIsIntegrationHealthLoading] = useState(true);
   const [pendingIntegration, setPendingIntegration] = useState(null);
   const [connectError, setConnectError] = useState("");
   const [fetchingMlQuestions, setFetchingMlQuestions] = useState(false);
@@ -1867,6 +1912,7 @@ export default function App() {
     }));
     setProductsSummary({ total: 0, active: 0, inactive: 0 });
     setIntegrationHealth(initialIntegrationHealth);
+    setIsIntegrationHealthLoading(true);
     setQuestionsPageInfo({ total: 0, page: 1, page_size: 20, has_more: false });
     setIsLoadingMoreQuestions(false);
     setSelectedId(null);
@@ -1991,25 +2037,52 @@ export default function App() {
     return products;
   }
 
-  async function refreshIntegrationHealth() {
+  async function refreshIntegrationHealth(companyId = selectedCompanyId) {
+    const requestCompanyId = companyId || getStoredCompanyId();
+    const requestCompanyName = getCompanyNameById(companies, requestCompanyId, requestCompanyId);
+    console.log(`INTEGRATION_HEALTH_REQUEST company=${requestCompanyId}`);
+    setIsIntegrationHealthLoading(true);
+    setIntegrationHealth(initialIntegrationHealth);
+    setIntegrations(() => integrationState());
     try {
-      const response = await apiFetch(`${API_URL}/integrations/health`);
+      const response = await fetch(`${API_URL}/integrations/health`, {
+        headers: { "X-Company-ID": requestCompanyId },
+      });
       const data = await response.json();
       if (!response.ok || !Array.isArray(data)) {
         throw new Error("Invalid integration health response");
       }
-      const mercadoLivreHealth = data.filter((health) => health.id === "mercado-livre");
+      const responseCompanyIds = Array.from(new Set(data.map(getHealthCompanyId).filter(Boolean)));
+      const responseCompanyId = responseCompanyIds[0] || "missing";
+      console.log(`INTEGRATION_HEALTH_RESPONSE company=${requestCompanyId} responseCompany=${responseCompanyId}`);
+      const staleResponseCompanyId = responseCompanyIds.find((id) => id !== requestCompanyId);
+      if (staleResponseCompanyId || requestCompanyId !== getStoredCompanyId()) {
+        console.log(
+          `INTEGRATION_HEALTH_STALE_IGNORED expected=${requestCompanyId} found=${staleResponseCompanyId || getStoredCompanyId()}`
+        );
+        return initialIntegrationHealth;
+      }
+      const mercadoLivreHealth = data.filter((health) => {
+        const healthCompanyId = getHealthCompanyId(health);
+        return health.id === "mercado-livre" && (!healthCompanyId || healthCompanyId === requestCompanyId);
+      });
       setIntegrationHealth(mercadoLivreHealth);
       setIntegrations((current) =>
-        applyBackendHealthToIntegrations(current, mercadoLivreHealth, currentCompany.id, currentCompany.name)
+        applyBackendHealthToIntegrations(current, mercadoLivreHealth, requestCompanyId, requestCompanyName)
       );
       return mercadoLivreHealth;
     } catch {
-      setIntegrationHealth(initialIntegrationHealth);
-      setIntegrations((current) =>
-        applyBackendHealthToIntegrations(current, initialIntegrationHealth, currentCompany.id, currentCompany.name)
-      );
+      if (requestCompanyId === getStoredCompanyId()) {
+        setIntegrationHealth(initialIntegrationHealth);
+        setIntegrations((current) =>
+          applyBackendHealthToIntegrations(current, initialIntegrationHealth, requestCompanyId, requestCompanyName)
+        );
+      }
       return initialIntegrationHealth;
+    } finally {
+      if (requestCompanyId === getStoredCompanyId()) {
+        setIsIntegrationHealthLoading(false);
+      }
     }
   }
 
@@ -2020,12 +2093,22 @@ export default function App() {
 
   useEffect(() => {
     resetTenantScopedUi();
+    const requestCompanyId = selectedCompanyId;
+
     async function loadTenantContext() {
       try {
         const response = await apiFetch(`${API_URL}/me`);
         const tenant = await response.json();
         console.log("/me response", tenant);
         if (!response.ok) throw new Error("Tenant context unavailable");
+        if (requestCompanyId !== getStoredCompanyId() || tenant?.company?.id !== requestCompanyId) {
+          console.log("/me response ignored stale company response", {
+            requested: requestCompanyId,
+            current: getStoredCompanyId(),
+            found: tenant?.company?.id,
+          });
+          return;
+        }
         setTenantContext({
           user: {
             ...FALLBACK_TENANT_CONTEXT.user,
@@ -2041,7 +2124,16 @@ export default function App() {
           },
         });
       } catch {
-        setTenantContext(FALLBACK_TENANT_CONTEXT);
+        if (requestCompanyId === getStoredCompanyId()) {
+          setTenantContext({
+            ...FALLBACK_TENANT_CONTEXT,
+            company: {
+              ...FALLBACK_TENANT_CONTEXT.company,
+              id: requestCompanyId,
+              name: getCompanyNameById(companies, requestCompanyId, FALLBACK_TENANT_CONTEXT.company.name),
+            },
+          });
+        }
       }
     }
 
@@ -2097,7 +2189,7 @@ export default function App() {
   }, [selectedCompanyId, historyDays]);
 
   useEffect(() => {
-    refreshIntegrationHealth();
+    refreshIntegrationHealth(selectedCompanyId);
   }, [selectedCompanyId]);
 
   useEffect(() => {
@@ -2798,6 +2890,8 @@ export default function App() {
             permissions={currentPermissions}
             integrations={integrations}
             integrationHealth={integrationHealth}
+            isIntegrationHealthLoading={isIntegrationHealthLoading}
+            selectedCompanyId={selectedCompanyId}
             onCompanyChange={switchCompany}
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
