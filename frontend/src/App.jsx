@@ -1823,6 +1823,13 @@ export default function App() {
   const [historyDays, setHistoryDays] = useState(15);
   const [showConversation, setShowConversation] = useState(false);
   const [isQuestionsLoading, setIsQuestionsLoading] = useState(false);
+  const [isLoadingMoreQuestions, setIsLoadingMoreQuestions] = useState(false);
+  const [questionsPageInfo, setQuestionsPageInfo] = useState({
+    total: 0,
+    page: 1,
+    page_size: 20,
+    has_more: false,
+  });
 
   const questions = appData.questions;
   const integrations = appData.integrations;
@@ -1860,6 +1867,8 @@ export default function App() {
     }));
     setProductsSummary({ total: 0, active: 0, inactive: 0 });
     setIntegrationHealth(initialIntegrationHealth);
+    setQuestionsPageInfo({ total: 0, page: 1, page_size: 20, has_more: false });
+    setIsLoadingMoreQuestions(false);
     setSelectedId(null);
     setMarketplaceFilter("Todos");
     setPriorityFilter("Todos");
@@ -1891,28 +1900,48 @@ export default function App() {
     setHistoryDays(nextDays);
   }
 
-  async function loadQuestionsFromDatabase() {
+  async function loadMoreQuestions() {
+    if (isLoadingMoreQuestions || !questionsPageInfo.has_more) return;
+    try {
+      await loadQuestionsFromDatabase({ page: questionsPageInfo.page + 1, append: true });
+    } catch (error) {
+      setQuestionNotice(error.message || "Não foi possível carregar mais perguntas.");
+      setIsLoadingMoreQuestions(false);
+    }
+  }
+
+  async function loadQuestionsFromDatabase({ page = 1, append = false } = {}) {
     const requestCompanyId = getStoredCompanyId();
-    setIsQuestionsLoading(true);
-    const response = await apiFetch(`${API_URL}/questions?days=${historyDays}`);
+    if (append) {
+      setIsLoadingMoreQuestions(true);
+    } else {
+      setIsQuestionsLoading(true);
+    }
+    const pageSize = questionsPageInfo.page_size || 20;
+    const response = await apiFetch(`${API_URL}/questions?days=${historyDays}&page=${page}&page_size=${pageSize}`);
     const data = await response.json();
-    if (!response.ok || !Array.isArray(data)) {
+    const responseItems = Array.isArray(data) ? data : data.items;
+    if (!response.ok || !Array.isArray(responseItems)) {
+      setIsQuestionsLoading(false);
+      setIsLoadingMoreQuestions(false);
       throw new Error("Não foi possível carregar perguntas do banco.");
     }
-    const responseSample = data.slice(0, 5).map((question) => [
+    const responseSample = responseItems.slice(0, 5).map((question) => [
       question.external_id,
       question.company_id,
       question.product_title || question.product,
     ]);
-    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${data.length}`, responseSample);
+    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${responseItems.length}`, responseSample);
     if (requestCompanyId !== getStoredCompanyId()) {
       console.log("QUESTIONS_RESPONSE ignored stale company response", {
         requested: requestCompanyId,
         current: getStoredCompanyId(),
       });
+      setIsQuestionsLoading(false);
+      setIsLoadingMoreQuestions(false);
       return [];
     }
-    const tenantQuestions = data.filter((question) => {
+    const tenantQuestions = responseItems.filter((question) => {
       if (!question.company_id || question.company_id !== requestCompanyId) {
         console.log(
           `FRONTEND_DROPPED_WRONG_TENANT expected=${requestCompanyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
@@ -1922,13 +1951,28 @@ export default function App() {
       return true;
     });
     console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
-    setQuestions(tenantQuestions);
+    const nextPageInfo = Array.isArray(data)
+      ? { total: tenantQuestions.length, page, page_size: pageSize, has_more: false }
+      : {
+          total: data.total || tenantQuestions.length,
+          page: data.page || page,
+          page_size: data.page_size || pageSize,
+          has_more: Boolean(data.has_more),
+        };
+    setQuestionsPageInfo(nextPageInfo);
+    setQuestions((current) => {
+      if (!append) return tenantQuestions;
+      const byKey = new Map(current.map((question) => [question.id || question.external_id, question]));
+      tenantQuestions.forEach((question) => byKey.set(question.id || question.external_id, question));
+      return Array.from(byKey.values());
+    });
     setSelectedId((current) =>
-      current && tenantQuestions.some((question) => question.id === current)
+      current && (append || tenantQuestions.some((question) => question.id === current))
         ? current
         : tenantQuestions[0]?.id || null
     );
     setIsQuestionsLoading(false);
+    setIsLoadingMoreQuestions(false);
     return tenantQuestions;
   }
 
@@ -2155,12 +2199,12 @@ export default function App() {
 
   const marketplaces = useMemo(
     () => ["Todos", ...new Set(visibleQuestions.map((question) => question.marketplace))],
-    [visibleQuestions, selectedCompanyId, currentCompany?.id]
+    [visibleQuestions]
   );
 
   const conversationGroups = useMemo(
     () => buildConversationGroups(visibleQuestions),
-    [visibleQuestions, selectedCompanyId, currentCompany?.id]
+    [visibleQuestions]
   );
 
   const filteredConversationGroups = useMemo(() => {
@@ -2959,6 +3003,12 @@ export default function App() {
                 />
               ))
             )}
+            {!isQuestionsLoading && questionsPageInfo.has_more ? (
+              <button className="load-more-button" onClick={loadMoreQuestions} disabled={isLoadingMoreQuestions}>
+                <RefreshCw size={17} className={isLoadingMoreQuestions ? "spin" : ""} />
+                {isLoadingMoreQuestions ? "Carregando..." : "Carregar mais"}
+              </button>
+            ) : null}
           </div>
             </section>
 

@@ -1647,6 +1647,20 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.load-more-button {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #dce3f1;
+  border-radius: 14px;
+  background: white;
+  color: #2563eb;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .integration-health-section {
   margin-top: 16px;
 }
