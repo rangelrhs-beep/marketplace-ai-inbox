@@ -1,34 +1,507 @@
 # Marketplace AI Inbox
 
-MVP de um SaaS web app para atendimento com IA para vendedores de marketplaces, com foco inicial em perguntas do Mercado Livre.
+Marketplace AI Inbox is a multi-tenant SaaS application for marketplace sellers who need to manage customer questions, generate AI-assisted answers, and keep marketplace response history synchronized in one operational inbox.
 
-O MVP usa CPAP Express como empresa única, mantém perguntas demo separadas e persiste integrações, tokens, perguntas, sugestões de IA e configurações em Supabase/PostgreSQL via SQLAlchemy.
+This README is the persistent source of truth for future Codex sessions. When changing architecture, tenant behavior, integration flows, or operational rules, update this file in the same session.
 
-## Estrutura
+## Project Overview
 
-```text
-backend/
-  Dockerfile
-  .env.example
-  main.py
-  database.py
-  db_models.py
-  db_seed.py
-  requirements.txt
-frontend/
-  .env.example
-  vercel.json
-  index.html
-  package.json
-  src/
-    App.jsx
-    main.jsx
-    styles.css
-```
+The app currently focuses on Mercado Livre questions. Sellers connect a Mercado Livre account, sync product and question data, review AI-generated response suggestions, optionally edit or rewrite them, and send final answers back to Mercado Livre.
 
-## Rodar localmente
+Main goals:
 
-### Backend
+- Centralize marketplace questions in a fast seller support inbox.
+- Generate useful AI answer drafts using company rules, product knowledge, and cached product data.
+- Preserve tenant isolation across all UI and API flows.
+- Keep local database state as the canonical operational source for the inbox.
+- Support multiple companies from one platform-admin view while preparing for real authentication and onboarding.
+
+The application is designed as a SaaS multi-tenant system. Each company has isolated integrations, settings, products, questions, and AI suggestions keyed by `company_id`.
+
+## Tech Stack
+
+Frontend:
+
+- React with Vite.
+- Main implementation in `frontend/src/App.jsx`.
+- Styling in `frontend/src/styles.css`.
+- Deployed on Vercel.
+
+Backend:
+
+- FastAPI.
+- SQLAlchemy ORM.
+- Uvicorn runtime.
+- Main implementation in `backend/main.py`.
+- Deployed on Render.
+
+Database:
+
+- Supabase PostgreSQL in production.
+- Local SQLite fallback when `DATABASE_URL` is empty.
+- SQLAlchemy creates and backfills tables/columns at startup.
+
+Hosting and source control:
+
+- GitHub repository.
+- Render for the backend web service.
+- Vercel for the frontend app.
+- Supabase for PostgreSQL persistence.
+
+AI provider:
+
+- OpenAI via `OPENAI_API_KEY`.
+- Configurable model via `OPENAI_MODEL`.
+- Default in env example: `gpt-4o-mini`.
+
+Integrations:
+
+- Mercado Livre is the primary real integration.
+- Connector scaffolding exists for Amazon, Magalu, Shopee, and Tiny ERP.
+- Products are synced into `products_cache` and used to enrich UI details and AI prompts.
+
+## Current Companies
+
+Seeded tenant companies:
+
+| Company | `company_id` |
+| --- | --- |
+| CPAP Express | `cpap_express` |
+| Indusat | `atlas_commerce` |
+| Zasweb | `nova_casa_imports` |
+
+The default company is CPAP Express. The current mock user is `admin`, and the backend currently treats the user role as `platform_admin` until real authentication is implemented.
+
+## Multi-Tenant Architecture
+
+Tenant isolation is mandatory.
+
+Core model:
+
+- `companies.id` is the canonical `company_id`.
+- `integrations.company_id` isolates OAuth tokens, seller IDs, sync timestamps, and import metadata.
+- `questions.company_id` isolates marketplace questions and answer state.
+- `products_cache.company_id` isolates product metadata.
+- `company_settings.company_id` isolates AI behavior and response rules.
+- `users.company_id` is present for the future real-auth model.
+
+Request flow:
+
+1. The frontend stores the selected company in `localStorage` under `marketplace_ai_selected_company_id`.
+2. All frontend API calls go through `apiFetch`.
+3. `apiFetch` sends `X-Company-ID` when a selected company exists.
+4. The backend resolves the tenant in `get_current_company_id(request)`.
+5. The backend accepts `X-Company-ID` only for the current mock `platform_admin` role and only if the company exists.
+6. If no valid header is present, the backend falls back to `cpap_express`.
+
+Admin selector:
+
+- `/me` returns the active company and permissions.
+- `/companies` returns the company list for platform admins.
+- The frontend `CompanySwitcher` changes the selected company, clears tenant-scoped UI state, and reloads questions/settings/health for that company.
+- Frontend filtering additionally drops any question or conversation card whose `company_id` does not match the selected company.
+
+Webhook routing:
+
+- Mercado Livre webhooks arrive at `POST /integrations/mercadolivre/notifications`.
+- The handler extracts the Mercado Livre seller/user identifier from the notification payload.
+- Background sync routes the notification by matching `seller_id` to the correct company integration.
+- If the seller cannot be mapped to an integration, the webhook must not write into another tenant.
+
+## Mercado Livre Integration Flow
+
+OAuth:
+
+1. Frontend calls `GET /integrations/mercadolivre/auth-url`.
+2. Backend validates ML config and builds an authorization URL.
+3. The OAuth `state` encodes the active `company_id`.
+4. Mercado Livre redirects to `GET /integrations/mercadolivre/callback`.
+5. Backend exchanges the authorization code for tokens.
+6. Backend resolves and persists `seller_id`.
+7. Backend redirects to `FRONTEND_URL/?ml_connected=true` when `FRONTEND_URL` is configured.
+
+Token storage:
+
+- Tokens are stored in `integrations` per `company_id` and provider.
+- Important fields: `access_token`, `refresh_token`, `seller_id`, `token_status`, `expires_in`, `expires_at`, `last_sync`, `last_ml_history_import_at`, `last_ml_history_import_days`, and `last_ml_history_import_result`.
+- Token refresh is handled server-side when Mercado Livre returns authorization errors.
+
+Question sync:
+
+- Manual sync endpoint: `GET /integrations/mercadolivre/questions`.
+- The frontend exposes this as the Mercado Livre sync action.
+- Synced questions are upserted into the local `questions` table by `(company_id, provider, external_id)`.
+- Initial AI suggestions are created only when a question does not already have one.
+
+Webhook flow:
+
+- Real-time question updates should come from `POST /integrations/mercadolivre/notifications`.
+- Duplicate notifications are skipped with an in-memory notification cache.
+- Webhook work is scheduled in the FastAPI background task and should resolve the correct tenant by `seller_id`.
+- `POST /jobs/sync-mercadolivre` intentionally skips scheduled question sync. Manual sync and webhooks are the intended paths.
+
+Portal answers:
+
+- If a question was already answered in the Mercado Livre portal, the app marks/removes it from pending flows and shows it as portal-answered where appropriate.
+- Portal answers use `answered_source = "portal"`.
+- App answers use `answered_source = "app"`.
+- App answers must not be overwritten by portal history imports.
+
+Import history:
+
+- Manual history import endpoint: `POST /integrations/mercadolivre/questions/import-history`.
+- Supported `days` values are `15` and `30`.
+- Import results are persisted on the integration record.
+- Use manual import for historical answered questions; do not make `/questions` perform live history merging.
+
+Product sync:
+
+- Endpoint: `POST /integrations/mercadolivre/products/sync`.
+- Product data is cached in `products_cache`.
+- Cached products enrich question cards, details, SKU display, and AI prompts.
+
+## AI Flow
+
+AI suggestion generation:
+
+- Initial suggestions are generated with OpenAI when `OPENAI_API_KEY` is configured.
+- Main paths:
+  - `POST /ai/suggest`
+  - `POST /questions/generate`
+  - `POST /questions/{question_id}/suggest`
+- Suggestions are persisted in `ai_suggestions`.
+- Important fields: `original_suggestion`, `suggestion_text`, `edited_text`, `final_response`, `final_answer`, `was_edited`, `instruction_used`, `approved_by`, and `approved_at`.
+
+Conversation grouping:
+
+- The frontend groups related questions into conversations.
+- Grouping key is based on buyer/customer identity plus item/product identity.
+- The newest pending question is the editable/sendable target.
+- A conversation can contain both pending and answered messages.
+- Counters derive from the grouped question set, not from unrelated tenant data.
+
+Follow-up logic:
+
+- When multiple questions from the same buyer and product exist, the UI presents them as a single thread.
+- The answer flow targets the newest pending question.
+- Already-answered or blocked questions are removed from the pending action flow and surfaced as read-only/history state.
+
+Rules/settings system:
+
+- Company-specific settings are read from `GET /company/settings`.
+- Settings are saved through `PUT /company/settings` or `POST /company/settings`.
+- Settings include greeting, closing, tone, custom prompt, general AI rules, product knowledge, web-search flag, and absolute restrictions.
+- Prompt debug endpoint: `GET /debug/ai/prompt/{question_id}`.
+
+Products cache usage:
+
+- AI prompt generation searches cached products related to the question title/text.
+- Question API payloads include cached product metadata when available.
+- The UI uses cached product title, thumbnail, permalink, listing status, quantity, price, SKU, and related products.
+
+## Frontend Structure
+
+Primary files:
+
+- `frontend/src/App.jsx`: application state, routing-like section switching, API calls, tenant selector, inbox, integrations, settings, analytics, conversation view.
+- `frontend/src/styles.css`: visual styling and responsive behavior.
+- `frontend/src/main.jsx`: React entrypoint.
+
+Major UI areas:
+
+- Sidebar navigation.
+- Company selector for platform admin.
+- Inbox/Pendentes/Respondidas question screens.
+- Integrations page.
+- AI settings page.
+- Analytics page.
+- Conversation detail panel.
+- Mercado Livre OAuth/connect modal.
+- Mercado Livre history import modal.
+
+Important components/functions:
+
+- `apiFetch`: attaches `X-Company-ID`.
+- `CompanySwitcher`: admin tenant selector.
+- `buildConversationGroups`: groups questions by buyer and item.
+- `PendingQuestionCard`: grouped inbox card with AI suggestion actions.
+- `Conversation`: detailed message thread, manual edit, rewrite, generate, and approve flow.
+- `ConversationMessages`: chronological question/answer timeline.
+- `IntegrationCard`: connection, sync, import, product sync, and health actions.
+- `SettingsPage`: company-specific AI rules and response settings.
+
+Counters logic:
+
+- `pending`: count visible questions with status `Pendente`.
+- `answered`: count visible questions with status `Respondida`.
+- `high`: count visible questions with priority `Alta`.
+- Visible questions are tenant-filtered before metrics and grouping.
+
+Filters:
+
+- Marketplace filter.
+- Priority filter.
+- Status/section filter through navigation.
+- Answered-source filter for app vs portal answers.
+- History window selector for 15 or 30 days.
+
+Pagination:
+
+- Frontend requests `/questions?days={15|30}&page={page}&page_size={page_size}`.
+- Default page size is currently 20.
+- `has_more` controls the load-more button.
+
+## Backend Structure
+
+Primary files:
+
+- `backend/main.py`: FastAPI app, tenant resolution, Mercado Livre OAuth/sync/webhook/answer logic, AI prompt/suggestion logic, question listing, products sync, settings.
+- `backend/database.py`: database URL, engine, session configuration.
+- `backend/db_models.py`: SQLAlchemy models.
+- `backend/db_seed.py`: seeded companies, admin, default integration, default settings.
+- `backend/integrations/*`: connector client/mapper/service scaffolding.
+- `backend/tests/test_tenant_isolation_simple.py`: simple tenant isolation regression coverage.
+
+Major endpoints:
+
+- `GET /` and `GET /health`: service health.
+- `GET /me`: current mock user, active company, permissions.
+- `GET /companies`: platform-admin company list.
+- `GET /questions`: paginated local inbox source.
+- `GET /questions/{question_id}`: tenant-scoped question detail.
+- `POST /questions/generate`: generate/regenerate suggestion for a question.
+- `POST /questions/answer`: app-level answer flow for real Mercado Livre questions.
+- `POST /questions/{question_id}/suggest`: generate suggestion by local ID.
+- `POST /questions/{question_id}/approve`: local approval path.
+- `GET /company/settings`, `PUT /company/settings`, `POST /company/settings`: company AI settings.
+- `GET /integrations/health`: integration health, token state, import metadata.
+- `POST /integrations/{integration_id}/test`: connector health test.
+- `GET /integrations/{integration_id}/questions`: connector demo/list questions.
+- `GET /integrations/mercadolivre/auth-url`: OAuth start.
+- `GET /integrations/mercadolivre/callback`: OAuth callback and token persistence.
+- `POST /integrations/mercadolivre/disconnect`: clear ML tokens for active company.
+- `GET /integrations/mercadolivre/questions`: manual ML question sync.
+- `POST /integrations/mercadolivre/questions/import-history`: manual answered history import.
+- `POST /integrations/mercadolivre/notifications`: ML webhook receiver.
+- `POST /integrations/mercadolivre/products/sync`: product cache sync.
+- `POST /integrations/mercadolivre/questions/{question_id}/answer`: direct ML answer endpoint.
+- `POST /jobs/sync-mercadolivre`: intentionally skipped scheduled sync.
+- `GET /products`: product cache summary/list for active company.
+- Debug endpoints under `/debug/*` are operational diagnostics and should not be treated as product APIs.
+
+Services/helpers:
+
+- Tenant helpers: `get_current_company_id`, `log_tenant_context`, `company_exists`.
+- ML helpers: token config, token refresh, seller ID resolution, OAuth state encode/decode, API request helpers.
+- Sync helpers: question extraction, upsert, portal answer handling, webhook background sync.
+- AI helpers: prompt building, OpenAI initial suggestion, rewrite, related product search.
+- Product helpers: ML product sync, product-to-API mapping, cached SKU extraction.
+- Safety helpers: tenant final filtering, payload protection, unanswerable question marking.
+
+Webhook handlers:
+
+- `mercadolivre_notifications` receives and validates ML notifications.
+- It skips non-question topics and duplicates.
+- It schedules `run_mercadolivre_sync_background`.
+- Background sync must use seller mapping to choose the tenant.
+
+Import endpoints:
+
+- `POST /integrations/mercadolivre/questions/import-history` is the approved historical import path.
+- `GET /debug/ml/questions/answered` and `GET /debug/ml/questions/answered-date-range` are diagnostic only.
+
+## Performance Stabilization Phase
+
+Current strategy:
+
+- The local database is the source of truth for `/questions`.
+- `/questions` must query local `questions` only, with tenant filtering, pagination, and cached enrichment.
+- Live Mercado Livre answered-history merge is not part of `/questions`.
+- Real-time updates come from webhooks.
+- Historical answered data comes from manual import.
+- Products are cached locally and refreshed through product sync.
+
+Do not re-enable unsafe live merge in `GET /questions`.
+
+Why:
+
+- Live history merge increased latency.
+- Live merge created tenant-leak risk when external data was not strictly company-scoped.
+- Local DB pagination is more predictable and keeps the UI fast.
+- Manual import and webhook sync provide clearer operational boundaries.
+
+Current pagination:
+
+- Backend defaults to `page=1` and `page_size=20`.
+- Maximum `page_size` is 100.
+- Response shape is `{ items, total, page, page_size, has_more }`.
+
+Caching strategy:
+
+- Questions: local DB canonical store.
+- Products: `products_cache` keyed by `(company_id, provider, external_id)`.
+- Buyers: short-lived in-process buyer cache for ML buyer enrichment.
+- Webhook dedupe: in-memory processed-notification cache.
+
+Planned optimizations:
+
+- Add stronger DB indexes if query volume grows.
+- Move webhook dedupe to persistent storage or Redis.
+- Add background product sync observability.
+- Add cursor-based pagination if offset pagination becomes insufficient.
+- Add job queue for imports and large syncs.
+- Reduce frontend render work for very large inboxes.
+
+## Environment Variables
+
+Backend (`backend/.env` or Render environment):
+
+| Variable | Purpose |
+| --- | --- |
+| `ENVIRONMENT` | Runtime environment label. |
+| `PORT` | Backend port. Render usually sets this. |
+| `DATABASE_URL` | PostgreSQL/Supabase connection string. Empty uses local SQLite. |
+| `DB_POOL_SIZE` | SQLAlchemy pool size for PostgreSQL. |
+| `DB_MAX_OVERFLOW` | SQLAlchemy pool overflow. |
+| `DB_POOL_TIMEOUT` | SQLAlchemy pool timeout seconds. |
+| `DB_POOL_RECYCLE` | SQLAlchemy pool recycle seconds. |
+| `DB_USE_NULLPOOL` | Use SQLAlchemy `NullPool`; useful for unstable Supabase pooler scenarios. |
+| `SUPABASE_URL` | Supabase project URL for future direct Supabase use. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Backend only. Never expose in frontend. |
+| `CORS_ORIGINS` | Comma-separated allowed frontend origins. |
+| `CORS_ORIGIN_REGEX` | Optional regex for Vercel previews. |
+| `OPENAI_API_KEY` | OpenAI API key for suggestions and rewrites. |
+| `OPENAI_MODEL` | OpenAI model used by AI endpoints. |
+| `MERCADO_LIVRE_CLIENT_ID` | Legacy/alternate ML OAuth client ID. |
+| `MERCADO_LIVRE_CLIENT_SECRET` | Legacy/alternate ML OAuth client secret. |
+| `MERCADO_LIVRE_REDIRECT_URI` | Legacy/alternate ML OAuth redirect URI. |
+| `ML_CLIENT_ID` | Mercado Livre OAuth client ID. |
+| `ML_CLIENT_SECRET` | Mercado Livre OAuth client secret. |
+| `ML_REDIRECT_URI` | Mercado Livre OAuth redirect URI. Must match the ML app exactly. |
+| `ML_ENABLE_ANSWERED_BACKFILL` | Keep `false` in production. Do not use to re-enable live merge in `/questions`. |
+| `ML_PORTAL_ANSWERED_LOOKBACK_DAYS` | Lookback for portal answered diagnostics/import helpers. Default 15. |
+| `FRONTEND_URL` | Frontend URL used after OAuth callback. |
+| `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD` | Reserved/future external data integration configuration. |
+
+Frontend (`frontend/.env` or Vercel environment):
+
+| Variable | Purpose |
+| --- | --- |
+| `VITE_API_URL` | Public backend API base URL. |
+| `VITE_APP_NAME` | Public app display name. |
+
+Frontend variables must be public and prefixed with `VITE_`. Secrets belong only in backend environment variables.
+
+## Deployment Architecture
+
+Render:
+
+- Hosts the FastAPI backend.
+- Root directory: `backend`.
+- Build command: `pip install -r requirements.txt`.
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+- Configure backend secrets and `CORS_ORIGINS`.
+
+Vercel:
+
+- Hosts the Vite frontend.
+- Root directory: `frontend`.
+- Build command: `npm run build`.
+- Output directory: `dist`.
+- Configure `VITE_API_URL` to the Render backend URL.
+
+Supabase:
+
+- Hosts PostgreSQL.
+- `DATABASE_URL` points to the Supabase Postgres connection string.
+- SQLAlchemy creates/backfills schema on backend startup.
+
+GitHub:
+
+- Source repository and deployment source for Render/Vercel.
+- Keep README updates committed with architecture-impacting changes.
+
+## Current Implemented Features
+
+- Multi-company seed data for CPAP Express, Indusat, and Zasweb.
+- Platform-admin company selector.
+- Tenant-aware `X-Company-ID` request flow.
+- Tenant filtering on backend query and frontend render paths.
+- Mercado Livre OAuth connection.
+- Token storage and refresh handling.
+- Mercado Livre manual question sync.
+- Mercado Livre question webhook receiver.
+- Mercado Livre product sync and product cache.
+- Manual Mercado Livre answered-history import.
+- Local DB-backed inbox with pagination.
+- Grouped conversations by buyer/product.
+- AI suggestion generation and regeneration.
+- AI rewrite flow with custom instruction.
+- Manual edit and version selection in conversation view.
+- Send answer to Mercado Livre.
+- Already-answered portal handling.
+- Unanswerable/blocked question handling.
+- App vs portal answered-source display/filtering.
+- Company-specific AI settings.
+- Integration health cards.
+- Basic analytics counts.
+- Tenant isolation regression test.
+
+## Pending Roadmap
+
+- Real authentication and sessions.
+- Real authorization roles beyond the current mock `platform_admin`.
+- Per-company onboarding flow.
+- Notifications for new questions, failed syncs, and answered/blocked states.
+- PWA/mobile app experience.
+- Improved analytics and operational dashboards.
+- Marketplace expansion beyond Mercado Livre.
+- Robust background job queue.
+- Persistent webhook deduplication.
+- Better audit logs for answer approvals and edits.
+- Production-grade monitoring and alerting.
+- Customer/company billing and plan enforcement.
+
+## Known Resolved Issues
+
+Tenant leak issue:
+
+- Resolved by enforcing `company_id` on backend queries and frontend rendering.
+- `GET /questions` filters by active company.
+- Frontend drops any wrong-tenant payloads before metrics, grouping, and rendering.
+- Regression coverage exists in `backend/tests/test_tenant_isolation_simple.py`.
+
+Portal history issue:
+
+- Resolved by moving historical answered data into explicit manual import instead of live merging into `/questions`.
+- Portal answers are marked with `answered_source = "portal"`.
+- App answers are preserved as `answered_source = "app"` and should not be overwritten by portal imports.
+
+Grouped conversation bugs:
+
+- Resolved by grouping around buyer/product identity and choosing the newest pending question as the editable target.
+- Counters and cards are derived after tenant filtering.
+- Conversation detail renders chronological messages for the group.
+
+## Operational Guidelines
+
+These rules are important:
+
+- Never re-enable unsafe live history merge in `GET /questions`.
+- Treat the local DB as the source of truth for the inbox.
+- Use manual Mercado Livre import for historical answered questions.
+- Treat Mercado Livre webhooks as the source of real-time question sync.
+- Keep tenant isolation keyed by `company_id` in every query, upsert, cache lookup, and response.
+- Preserve `X-Company-ID` flow until real authentication replaces it.
+- Route webhooks by `seller_id`; never infer the tenant from defaults when processing webhook writes.
+- Do not expose backend secrets in frontend env vars.
+- Keep app answers and portal answers distinct through `answered_source`.
+- Do not overwrite existing AI suggestions unless the user explicitly regenerates or edits them.
+- Keep product data cached locally and use cache lookups for UI and AI context.
+
+## Local Development
+
+Backend:
 
 ```bash
 cd backend
@@ -39,39 +512,7 @@ copy .env.example .env
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-API local: `http://localhost:8000`
-
-Endpoints simulados:
-
-- `GET /health`
-- `GET /questions`
-- `GET /questions/{id}`
-- `POST /questions/{id}/suggest`
-- `POST /questions/{id}/approve`
-- `POST /ai/rewrite`
-- `GET /integrations/health`
-- `POST /integrations/{id}/test`
-- `GET /integrations/{id}/questions`
-- `GET /integrations/mercadolivre/auth-url`
-- `GET /integrations/mercadolivre/callback`
-- `GET /integrations/mercadolivre/questions`
-- `POST /integrations/mercadolivre/questions/{question_id}/answer`
-- `GET /company/settings`
-- `PUT /company/settings`
-- `POST /company/settings`
-- `POST /questions/generate`
-- `POST /questions/answer`
-
-Na primeira inicialização o backend cria as tabelas e faz seed de:
-
-- empresa `CPAP Express`
-- usuário `Admin`
-- integração `mercado_livre`
-- configurações padrão de IA
-
-### Frontend
-
-Em outro terminal:
+Frontend:
 
 ```bash
 cd frontend
@@ -80,129 +521,18 @@ copy .env.example .env
 npm run dev
 ```
 
-App local: `http://localhost:5173`
+Local URLs:
 
-## Variaveis de ambiente
+- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:5173`
 
-### Backend
+## Testing
 
-Configure em `backend/.env` localmente, ou no painel do Render/Railway em producao:
-
-- `PORT`: porta usada pelo servidor. Em nuvem geralmente e definida automaticamente.
-- `DATABASE_URL`: conexão PostgreSQL/Supabase. Se vazio, o backend usa SQLite local em `backend/marketplace_ai_inbox.db`.
-- `SUPABASE_URL`: URL do projeto Supabase, reservada para futuras chamadas diretas à API Supabase.
-- `SUPABASE_SERVICE_ROLE_KEY`: service role key do Supabase. Nunca exponha no frontend.
-- `CORS_ORIGINS`: URLs do frontend separadas por virgula. Exemplo: `https://marketplace-ai-inbox.vercel.app`.
-- `CORS_ORIGIN_REGEX`: opcional para previews da Vercel. Exemplo: `https://.*\.vercel\.app`.
-- `OPENAI_API_KEY`: futura chave da OpenAI para gerar respostas reais.
-- `OPENAI_MODEL`: modelo usado no endpoint `/ai/rewrite`. Padrao: `gpt-4o-mini`.
-- `MERCADO_LIVRE_CLIENT_ID`, `MERCADO_LIVRE_CLIENT_SECRET`, `MERCADO_LIVRE_REDIRECT_URI`: futuras credenciais OAuth do Mercado Livre.
-- `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ML_REDIRECT_URI`: credenciais OAuth reais do Mercado Livre. `ML_REDIRECT_URI` deve ser exatamente a URL cadastrada no app Mercado Livre, por exemplo `https://SUA-API.onrender.com/integrations/mercadolivre/callback`.
-- `FRONTEND_URL`: URL do frontend para voltar apos callback OAuth, por exemplo `https://SEU-FRONTEND.vercel.app`.
-
-### Supabase / PostgreSQL
-
-1. Crie um projeto no Supabase.
-2. Abra **Project Settings > Database** e copie a connection string PostgreSQL.
-3. Configure no backend:
-
-```env
-DATABASE_URL=postgresql://postgres:SUA-SENHA@db.SEU-PROJECT-REF.supabase.co:5432/postgres
-SUPABASE_URL=https://SEU-PROJECT-REF.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=SUA_SERVICE_ROLE_KEY
-```
-
-4. Suba o backend. As tabelas são criadas automaticamente por SQLAlchemy no startup.
-5. O OAuth do Mercado Livre passa a salvar `access_token`, `refresh_token`, `seller_id` e `expires_at` na tabela `integrations`.
-6. Ao buscar perguntas reais, o backend faz upsert em `questions` por `company_id + provider + external_id` e cria a primeira sugestão em `ai_suggestions` apenas quando ela ainda não existe.
-7. Sugestões são salvas em `suggestion_text`, edições em `edited_text` e respostas aprovadas em `final_answer`.
-
-### Frontend
-
-Configure em `frontend/.env` localmente, ou nas Environment Variables da Vercel:
-
-- `VITE_API_URL`: URL publica do backend. Exemplo: `https://marketplace-ai-backend-ky72.onrender.com`.
-
-## Deploy do backend no Render
-
-1. Suba este projeto para um repositorio no GitHub.
-2. No Render, crie um novo **Web Service**.
-3. Conecte o repositorio.
-4. Configure:
-   - Root Directory: `backend`
-   - Runtime: `Python`
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Em **Environment**, configure:
-   - `CORS_ORIGINS=https://SEU-FRONTEND.vercel.app`
-- Adicione `DATABASE_URL`, `OPENAI_API_KEY` e credenciais do Mercado Livre.
-6. Depois do deploy, teste `https://SUA-API.onrender.com/health`.
-
-## Deploy do backend no Railway
-
-1. Crie um novo projeto no Railway a partir do GitHub.
-2. Selecione o diretorio `backend`.
-3. Configure o comando de start:
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port $PORT
-```
-
-4. Adicione as variaveis de ambiente:
-   - `CORS_ORIGINS=https://SEU-FRONTEND.vercel.app`
-- `DATABASE_URL`, `OPENAI_API_KEY` e credenciais Mercado Livre.
-5. Use a URL publica gerada pelo Railway como `VITE_API_URL` no frontend.
-
-## Deploy do backend com Docker
-
-O backend inclui `backend/Dockerfile`.
+Current lightweight tenant isolation test:
 
 ```bash
 cd backend
-docker build -t marketplace-ai-inbox-api .
-docker run -p 8000:8000 --env-file .env marketplace-ai-inbox-api
+python -m pytest tests/test_tenant_isolation_simple.py
 ```
 
-Render e Railway tambem conseguem usar o Dockerfile se voce escolher deploy via container.
-
-## Deploy do frontend na Vercel
-
-1. No Vercel, crie um novo projeto importando o repositorio.
-2. Configure:
-   - Framework Preset: `Vite`
-   - Root Directory: `frontend`
-   - Build Command: `npm run build`
-   - Output Directory: `dist`
-3. Em **Environment Variables**, configure:
-   - `VITE_API_URL=https://SUA-API.onrender.com` ou a URL do Railway.
-4. Faca o deploy.
-5. Volte no backend e atualize `CORS_ORIGINS` com a URL final da Vercel.
-
-## Opcao futura: PythonAnywhere
-
-PythonAnywhere pode hospedar o backend FastAPI via ASGI, mas costuma exigir configuracao manual.
-
-Passos gerais:
-
-1. Envie a pasta `backend`.
-2. Crie um virtualenv e instale `pip install -r requirements.txt`.
-3. Configure as variaveis de ambiente no painel ou em um arquivo `.env`.
-4. Configure o app web para servir `main:app` como aplicacao ASGI.
-5. Defina `CORS_ORIGINS` com a URL do frontend na Vercel.
-
-Para producao mais simples com FastAPI, Render ou Railway tendem a ser caminhos mais diretos.
-
-## Integracoes futuras
-
-- OpenAI: usado para sugestão inicial e reescrita quando `OPENAI_API_KEY` está configurada.
-- Mercado Livre OAuth: o backend gera URL de autorização, recebe callback, persiste tokens no banco, renova token, busca perguntas e envia respostas aprovadas.
-- Banco: a persistência atual usa SQLAlchemy com PostgreSQL/Supabase em produção e SQLite como fallback local.
-- Conectores: a pasta `backend/integrations/` ja separa `client.py`, `mapper.py` e `service.py` por canal. Cada mapper converte payloads externos para `NormalizedQuestion` e preserva `raw_payload`.
-
-## Notas do MVP
-
-- Perguntas demo continuam no frontend e são carregadas somente pelo botão `Carregar perguntas demo`.
-- Perguntas reais ficam no banco e não regeneram sugestão ao abrir a tela.
-- A aprovação de pergunta real envia a resposta ao Mercado Livre antes de marcar como `Respondida`.
-- A rejeicao esta implementada no frontend como estado local do MVP.
-- O frontend so deve receber variaveis publicas prefixadas com `VITE_`; segredos ficam sempre no backend.
+Add tests whenever changing tenant isolation, question listing, Mercado Livre sync/import, webhook routing, or grouped conversation behavior.
