@@ -1,5 +1,6 @@
-﻿from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 from datetime import timezone
+from dataclasses import dataclass
 from enum import Enum
 import base64
 import binascii
@@ -27,7 +28,7 @@ from integrations.errors import ApiFailureError, ConnectorError, ConnectorErrorC
 from integrations.models import ConnectionTestResult, IntegrationHealth, NormalizedQuestion
 from integrations.registry import services as integration_services
 from database import Base, SessionLocal, engine, get_db
-from db_models import AiSuggestion, Company, CompanySettings, Integration, ProductCache, QuestionRecord
+from db_models import AiSuggestion, Company, CompanySettings, Integration, ProductCache, QuestionRecord, User
 from db_seed import DEFAULT_COMPANY_ID, DEFAULT_PROVIDER, MOCK_COMPANIES, seed_defaults
 from sqlalchemy import Text, and_, cast, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
@@ -50,17 +51,146 @@ PRODUCT_SYNC_SCHEDULE_TZ = ZoneInfo("America/Sao_Paulo")
 PRODUCT_SYNC_SCHEDULE_LOCK = threading.Lock()
 
 
-# TODO auth: replace mocked tenant context with real session
-# TODO admin: allow platform admin company selector
-# TODO OAuth: replace mocked company context with authenticated tenant-aware state signing.
+@dataclass(frozen=True)
+class CurrentUserContext:
+    id: str
+    email: str | None
+    name: str
+    role: str
+    company_id: str
+    source: str
+
+
+USER_AUTH_FIELDS = ("id", "email", "name", "role", "company_id")
+MOCK_PLATFORM_ADMIN_USER = CurrentUserContext(
+    id="admin",
+    email=None,
+    name="Admin",
+    role="platform_admin",
+    company_id=DEFAULT_COMPANY_ID,
+    source="mock",
+)
+
+
+def audit_user_auth_model() -> None:
+    model_fields = {column.name for column in User.__table__.columns}
+    missing_fields = [field for field in USER_AUTH_FIELDS if field not in model_fields]
+    if missing_fields:
+        logger.warning("AUTH_USER_MODEL_AUDIT missing_fields=%s", missing_fields)
+        return
+    logger.info("AUTH_USER_MODEL_AUDIT fields=%s", list(USER_AUTH_FIELDS))
+
+
+def audit_user_auth_database_columns(connection) -> None:
+    if engine.dialect.name == "postgresql":
+        rows = connection.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'users'"
+            )
+        ).fetchall()
+        database_fields = {row[0] for row in rows}
+    elif engine.dialect.name == "sqlite":
+        database_fields = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info(users)")).fetchall()
+        }
+    else:
+        logger.info("AUTH_USER_TABLE_AUDIT skipped dialect=%s", engine.dialect.name)
+        return
+
+    missing_fields = [field for field in USER_AUTH_FIELDS if field not in database_fields]
+    if missing_fields:
+        logger.warning("AUTH_USER_TABLE_AUDIT missing_fields=%s", missing_fields)
+        return
+    logger.info("AUTH_USER_TABLE_AUDIT fields=%s", list(USER_AUTH_FIELDS))
+
+
+def get_bearer_token(request: Request | None) -> str | None:
+    authorization = request.headers.get("Authorization") if request is not None else None
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def decode_supabase_jwt_payload_unverified(token: str) -> dict[str, Any] | None:
+    # TODO auth: validate Supabase Auth JWT signature, issuer, audience, and expiry before trusting claims.
+    # This readiness step only decodes claims to find a matching local user record.
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    padded_payload = payload + "=" * (-len(payload) % 4)
+    try:
+        decoded_payload = base64.urlsafe_b64decode(padded_payload.encode("utf-8"))
+        claims = json.loads(decoded_payload.decode("utf-8"))
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return claims if isinstance(claims, dict) else None
+
+
+def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext | None:
+    # TODO auth: replace this local lookup with validated Supabase user identity mapping.
+    auth_user_id = str(claims.get("sub") or "").strip()
+    email = str(claims.get("email") or "").strip().lower()
+    db = SessionLocal()
+    try:
+        user = db.get(User, auth_user_id) if auth_user_id else None
+        if user is None and email:
+            user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            logger.info("AUTH_CONTEXT_TOKEN_USER_NOT_FOUND sub=%s email_present=%s", auth_user_id, bool(email))
+            return None
+        if not user.company_id or db.get(Company, user.company_id) is None:
+            logger.warning("AUTH_CONTEXT_USER_COMPANY_INVALID user_id=%s company_id=%s", user.id, user.company_id)
+            return None
+        return CurrentUserContext(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            company_id=user.company_id,
+            source="auth",
+        )
+    except SQLAlchemyError:
+        logger.exception("AUTH_CONTEXT_USER_LOOKUP_FAILED sub=%s", auth_user_id)
+        return None
+    finally:
+        db.close()
+
+
+def get_current_user(request: Request | None = None) -> CurrentUserContext:
+    cached_user = getattr(request.state, "current_user", None) if request is not None else None
+    if isinstance(cached_user, CurrentUserContext):
+        return cached_user
+
+    token = get_bearer_token(request)
+    if token:
+        claims = decode_supabase_jwt_payload_unverified(token)
+        auth_user = find_user_for_auth_claims(claims) if claims else None
+        if auth_user is not None:
+            if request is not None:
+                request.state.current_user = auth_user
+            return auth_user
+        logger.warning("AUTH_CONTEXT_TOKEN_FALLBACK_TO_MOCK reason=unvalidated_or_unmapped_token")
+
+    if request is not None:
+        request.state.current_user = MOCK_PLATFORM_ADMIN_USER
+    return MOCK_PLATFORM_ADMIN_USER
+
+
 def get_current_user_id(request: Request | None = None) -> str | None:
-    return "admin"
+    return get_current_user(request).id
 
 
 def get_current_user_role(request: Request | None = None) -> str:
-    return "platform_admin"
+    return get_current_user(request).role
 
 
+# TODO OAuth: replace mocked company context with authenticated tenant-aware state signing.
 def company_exists(company_id: str) -> bool:
     db = SessionLocal()
     try:
@@ -73,30 +203,40 @@ def company_exists(company_id: str) -> bool:
 
 
 def get_current_company_id(request: Request | None = None) -> str:
-    role = get_current_user_role(request)
+    current_user = get_current_user(request)
     header_company_id = request.headers.get("X-Company-ID") if request is not None else None
-    if role == "platform_admin" and header_company_id:
+    if current_user.role == "platform_admin" and header_company_id:
         requested_company_id = header_company_id.strip()
         if company_exists(requested_company_id):
             if request is not None:
                 request.state.tenant_company_source = "header"
             return requested_company_id
         logger.warning("Tenant company override ignored; company not found company_id=%s", requested_company_id)
+    if current_user.source == "auth" and current_user.company_id and company_exists(current_user.company_id):
+        if request is not None:
+            request.state.tenant_company_source = "auth_user"
+        return current_user.company_id
     if request is not None:
-        request.state.tenant_company_source = "default"
+        request.state.tenant_company_source = "mock_default"
     return DEFAULT_COMPANY_ID
 
 
 def log_tenant_context(request: Request | None = None) -> tuple[str, str | None, str]:
+    current_user = get_current_user(request)
     company_id = get_current_company_id(request)
-    user_id = get_current_user_id(request)
-    role = get_current_user_role(request)
-    source = getattr(request.state, "tenant_company_source", "default") if request is not None else "default"
+    source = getattr(request.state, "tenant_company_source", "mock_default") if request is not None else "mock_default"
     if request is None or not getattr(request.state, "tenant_context_logged", False):
-        logger.info("TENANT_CONTEXT company_id=%s user_id=%s role=%s source=%s", company_id, user_id, role, source)
+        logger.info(
+            "TENANT_CONTEXT company_id=%s user_id=%s role=%s tenant_source=%s auth_source=%s",
+            company_id,
+            current_user.id,
+            current_user.role,
+            source,
+            current_user.source,
+        )
         if request is not None:
             request.state.tenant_context_logged = True
-    return company_id, user_id, role
+    return company_id, current_user.id, current_user.role
 
 
 def ensure_mock_multitenant_companies(db: Session) -> None:
@@ -160,6 +300,7 @@ def init_database() -> None:
     DATABASE_READY = False
     try:
         logger.info("Database startup migration started")
+        audit_user_auth_model()
         Base.metadata.create_all(bind=engine)
         ensure_database_columns()
         db = SessionLocal()
@@ -251,6 +392,7 @@ def ensure_database_columns() -> None:
         "updated_at": "TIMESTAMP NOT NULL DEFAULT NOW()",
     }
     with engine.begin() as connection:
+        audit_user_auth_database_columns(connection)
         if engine.dialect.name == "postgresql":
             existing_columns = {
                 (row[0], row[1])
@@ -3426,14 +3568,15 @@ def get_me(request: Request, db: Session = Depends(get_db)):
     # TODO admin: enable company switcher for platform admin
     # TODO permissions: hide/show areas based on role
     company_id, user_id, role = log_tenant_context(request)
+    current_user = get_current_user(request)
     company = db.get(Company, company_id)
     company_name = company.name if company else "CPAP Express"
-    logger.info("TENANT_ME company_id=%s user_id=%s role=%s", company_id, user_id, role)
+    logger.info("TENANT_ME company_id=%s user_id=%s role=%s auth_source=%s", company_id, user_id, role, current_user.source)
     return {
         "user": {
             "id": user_id,
-            "name": "Admin",
-            "email": None,
+            "name": current_user.name,
+            "email": current_user.email,
             "role": role,
         },
         "company": {
@@ -3444,6 +3587,25 @@ def get_me(request: Request, db: Session = Depends(get_db)):
             "is_platform_admin": role == "platform_admin",
             "can_switch_company": role == "platform_admin",
         },
+    }
+
+
+@app.get("/debug/auth-context")
+def debug_auth_context(request: Request):
+    current_user = get_current_user(request)
+    company_id = get_current_company_id(request)
+    logger.info(
+        "DEBUG_AUTH_CONTEXT user_id=%s role=%s company_id=%s source=%s",
+        current_user.id,
+        current_user.role,
+        company_id,
+        current_user.source,
+    )
+    return {
+        "user_id": current_user.id,
+        "role": current_user.role,
+        "company_id": company_id,
+        "source": current_user.source,
     }
 
 

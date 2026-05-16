@@ -25,10 +25,12 @@ def seed_defaults(db: Session) -> None:
                 id="admin",
                 email="admin@cpapexpress.demo",
                 name="Admin",
-                role="admin",
+                role="platform_admin",
                 company_id=DEFAULT_COMPANY_ID,
             )
         )
+    elif admin.role != "platform_admin":
+        admin.role = "platform_admin"
 
     integration = (
         db.query(Integration)

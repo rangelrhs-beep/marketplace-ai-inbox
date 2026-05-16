@@ -85,7 +85,7 @@ Seeded tenant companies:
 | Indusat | `atlas_commerce` |
 | Zasweb | `nova_casa_imports` |
 
-The default company is CPAP Express. The current mock user is `admin`, and the backend currently treats the user role as `platform_admin` until real authentication is implemented.
+The default company is CPAP Express. The current mock user is `admin`, and the backend keeps the mock user role as `platform_admin` until real authentication is fully enforced. The current `users` model is ready for the first authentication handoff fields: `id`, `email`, `name`, `role`, and `company_id`.
 
 ## Multi-Tenant Architecture
 
@@ -115,6 +115,14 @@ Admin selector:
 - `/companies` returns the company list for platform admins.
 - The frontend `CompanySwitcher` changes the selected company, clears tenant-scoped UI state, and reloads questions/settings/health for that company.
 - Frontend filtering additionally drops any question or conversation card whose `company_id` does not match the selected company.
+
+Auth readiness step:
+
+- Backend tenant/auth context now flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
+- If no `Authorization: Bearer ...` token is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow.
+- If a bearer token is present, the backend can decode Supabase-style JWT payloads only to locate a matching local `users` row; real Supabase JWT signature, issuer, audience, and expiry validation is still marked with TODO comments and must be added before auth is enforced.
+- Authenticated non-platform-admin users resolve their tenant from `users.company_id`; only `platform_admin` can use `X-Company-ID` to switch companies.
+- `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` (`mock` or `auth`) for safe rollout diagnostics.
 
 Webhook routing:
 
@@ -280,7 +288,8 @@ Primary files:
 Major endpoints:
 
 - `GET /` and `GET /health`: service health.
-- `GET /me`: current mock user, active company, permissions.
+- `GET /me`: current user context, active company, permissions, with mock fallback until real auth is enforced.
+- `GET /debug/auth-context`: auth-readiness diagnostic for resolved user, role, tenant, and `mock`/`auth` source.
 - `GET /companies`: platform-admin company list.
 - `GET /questions`: paginated local inbox source.
 - `GET /questions/{question_id}`: tenant-scoped question detail.
@@ -306,7 +315,7 @@ Major endpoints:
 
 Services/helpers:
 
-- Tenant helpers: `get_current_company_id`, `log_tenant_context`, `company_exists`.
+- Auth/tenant helpers: `get_current_user`, `get_current_company_id`, `get_current_user_role`, `log_tenant_context`, `company_exists`.
 - ML helpers: token config, token refresh, seller ID resolution, OAuth state encode/decode, API request helpers.
 - Sync helpers: question extraction, upsert, portal answer handling, webhook background sync.
 - AI helpers: prompt building, OpenAI initial suggestion, rewrite, related product search.
