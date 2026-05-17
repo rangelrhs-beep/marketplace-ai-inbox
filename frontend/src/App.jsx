@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   BarChart3,
   Check,
@@ -20,15 +21,31 @@ import {
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
 const SELECTED_COMPANY_STORAGE_KEY = "marketplace_ai_selected_company_id";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const isSupabaseAuthConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const supabase = isSupabaseAuthConfigured
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
 
 function getStoredCompanyId() {
   return localStorage.getItem(SELECTED_COMPANY_STORAGE_KEY) || "cpap_express";
 }
 
-function apiFetch(url, options = {}) {
+async function getSupabaseAccessToken() {
+  if (!supabase) return "";
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token || "";
+}
+
+async function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
   const companyId = getStoredCompanyId();
+  const accessToken = await getSupabaseAccessToken();
   if (companyId) headers.set("X-Company-ID", companyId);
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
   return fetch(url, { ...options, headers });
 }
 
@@ -417,7 +434,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
   });
 }
 
-function Sidebar({ active, companies, currentCompany, permissions, onCompanyChange, onNavigate }) {
+function Sidebar({ active, onNavigate, isAuthenticated, onLogout }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -451,7 +468,60 @@ function Sidebar({ active, companies, currentCompany, permissions, onCompanyChan
         <strong>ML</strong>
         <p>Perguntas salvas no banco, revisadas com IA e enviadas ao Mercado Livre.</p>
       </div>
+
+      {isAuthenticated ? (
+        <button className="logout-button" type="button" onClick={onLogout}>
+          Sair
+        </button>
+      ) : null}
     </aside>
+  );
+}
+
+function LoginScreen({ email, password, error, isLoading, onEmailChange, onPasswordChange, onSubmit }) {
+  return (
+    <main className="login-screen">
+      <section className="login-panel" aria-labelledby="login-title">
+        <div className="login-brand">
+          <div className="brand-mark">
+            <Sparkles size={22} />
+          </div>
+          <div>
+            <strong>Marketplace AI</strong>
+            <span>Inbox</span>
+          </div>
+        </div>
+        <h1 id="login-title">Entrar na operação</h1>
+        <p>Use seu e-mail e senha para acessar o painel da sua empresa.</p>
+
+        <form className="login-form" onSubmit={onSubmit}>
+          <label>
+            E-mail
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+              autoComplete="email"
+              required
+            />
+          </label>
+          <label>
+            Senha
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => onPasswordChange(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          {error ? <div className="login-error">{error}</div> : null}
+          <button className="primary" type="submit" disabled={isLoading}>
+            {isLoading ? "Entrando..." : "Entrar"}
+          </button>
+        </form>
+      </section>
+    </main>
   );
 }
 
@@ -1837,6 +1907,11 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 }
 
 export default function App() {
+  const [authSession, setAuthSession] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseAuthConfigured);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
   const [tenantContext, setTenantContext] = useState(FALLBACK_TENANT_CONTEXT);
   const [companies, setCompanies] = useState([FALLBACK_TENANT_CONTEXT.company]);
   const [selectedCompanyId, setSelectedCompanyId] = useState(getStoredCompanyId);
@@ -1946,6 +2021,59 @@ export default function App() {
     setHistoryDays(nextDays);
   }
 
+
+  useEffect(() => {
+    if (!supabase) {
+      setIsAuthLoading(false);
+      return undefined;
+    }
+
+    let isMounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!isMounted) return;
+      setAuthSession(data.session || null);
+      setIsAuthLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthSession(session || null);
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogin(event) {
+    event.preventDefault();
+    if (!supabase) return;
+    setLoginError("");
+    setIsAuthLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: loginPassword,
+    });
+    if (error) {
+      setLoginError(error.message || "Não foi possível entrar.");
+      setIsAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    resetTenantScopedUi();
+    clearTenantQuestionStorage();
+    localStorage.removeItem(SELECTED_COMPANY_STORAGE_KEY);
+    setSelectedCompanyId(getStoredCompanyId());
+    setTenantContext(FALLBACK_TENANT_CONTEXT);
+    setCompanies([FALLBACK_TENANT_CONTEXT.company]);
+    setLoginPassword("");
+    setLoginError("");
+    if (supabase) await supabase.auth.signOut();
+    setAuthSession(null);
+  }
+
   async function loadMoreQuestions() {
     if (isLoadingMoreQuestions || !questionsPageInfo.has_more) return;
     try {
@@ -2045,7 +2173,7 @@ export default function App() {
     setIntegrationHealth(initialIntegrationHealth);
     setIntegrations(() => integrationState());
     try {
-      const response = await fetch(`${API_URL}/integrations/health`, {
+      const response = await apiFetch(`${API_URL}/integrations/health`, {
         headers: { "X-Company-ID": requestCompanyId },
       });
       const data = await response.json();
@@ -2092,6 +2220,11 @@ export default function App() {
   }, [questions, isQuestionsLoading, selectedCompanyId, currentCompany?.id]);
 
   useEffect(() => {
+    if (isSupabaseAuthConfigured && !authSession) {
+      setIsQuestionsLoading(false);
+      return;
+    }
+
     resetTenantScopedUi();
     const requestCompanyId = selectedCompanyId;
 
@@ -2101,12 +2234,22 @@ export default function App() {
         const tenant = await response.json();
         console.log("/me response", tenant);
         if (!response.ok) throw new Error("Tenant context unavailable");
-        if (requestCompanyId !== getStoredCompanyId() || tenant?.company?.id !== requestCompanyId) {
+        if (requestCompanyId !== getStoredCompanyId()) {
           console.log("/me response ignored stale company response", {
             requested: requestCompanyId,
             current: getStoredCompanyId(),
             found: tenant?.company?.id,
           });
+          return;
+        }
+        if (tenant?.company?.id && tenant.company.id !== requestCompanyId) {
+          console.log("/me response selected authenticated company", {
+            requested: requestCompanyId,
+            found: tenant.company.id,
+          });
+          localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, tenant.company.id);
+          clearTenantQuestionStorage();
+          setSelectedCompanyId(tenant.company.id);
           return;
         }
         setTenantContext({
@@ -2186,11 +2329,15 @@ export default function App() {
     loadPersistedQuestions();
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
-  }, [selectedCompanyId, historyDays]);
+  }, [selectedCompanyId, historyDays, authSession?.access_token]);
 
   useEffect(() => {
+    if (isSupabaseAuthConfigured && !authSession) {
+      setIsIntegrationHealthLoading(false);
+      return;
+    }
     refreshIntegrationHealth(selectedCompanyId);
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, authSession?.access_token]);
 
   useEffect(() => {
     const rootState = {
@@ -2870,15 +3017,27 @@ export default function App() {
         ? "Nenhuma pergunta respondida encontrada."
         : "Nenhuma pergunta encontrada.";
 
+  if (isSupabaseAuthConfigured && !authSession) {
+    return (
+      <LoginScreen
+        email={loginEmail}
+        password={loginPassword}
+        error={loginError}
+        isLoading={isAuthLoading}
+        onEmailChange={setLoginEmail}
+        onPasswordChange={setLoginPassword}
+        onSubmit={handleLogin}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
         active={active}
-        companies={companies}
-        currentCompany={currentCompany}
-        permissions={currentPermissions}
-        onCompanyChange={switchCompany}
         onNavigate={changeSection}
+        isAuthenticated={Boolean(authSession)}
+        onLogout={handleLogout}
       />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>

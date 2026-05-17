@@ -101,6 +101,59 @@ button:disabled {
   color: #647189;
 }
 
+
+.login-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 8px;
+  color: #3b465c;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.login-form input {
+  min-height: 46px;
+  border: 1px solid #dce3f1;
+  border-radius: 14px;
+  padding: 0 14px;
+  color: #172033;
+  background: #fff;
+}
+
+.login-form input:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.16);
+  border-color: #2563eb;
+}
+
+.login-error {
+  border: 1px solid rgba(220, 38, 38, 0.24);
+  border-radius: 14px;
+  padding: 12px 14px;
+  color: #991b1b;
+  background: #fef2f2;
+  font-size: 14px;
+}
+
+.logout-button {
+  min-height: 42px;
+  border: 1px solid #dce3f1;
+  border-radius: 14px;
+  background: #fff;
+  color: #566176;
+  font-weight: 700;
+}
+
+.logout-button:hover {
+  color: #1f2a44;
+  border-color: rgba(37, 99, 235, 0.34);
+  background: #eef3ff;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;

@@ -119,10 +119,14 @@ Admin selector:
 Auth readiness step:
 
 - Backend tenant/auth context now flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
+- The frontend can now initialize Supabase Auth when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured; in that mode it shows an email/password login screen before loading the inbox.
+- After Supabase login, frontend API requests include `Authorization: Bearer <access_token>` while still sending the tenant-scoped `X-Company-ID` used by the current platform-admin selector.
+- If frontend Supabase env vars are missing, the app keeps the existing mock admin behavior and opens normally without a login gate.
 - If no `Authorization: Bearer ...` token is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow.
 - If a bearer token is present, the backend can decode Supabase-style JWT payloads only to locate a matching local `users` row; real Supabase JWT signature, issuer, audience, and expiry validation is still marked with TODO comments and must be added before auth is enforced.
 - Authenticated non-platform-admin users resolve their tenant from `users.company_id`; only `platform_admin` can use `X-Company-ID` to switch companies.
 - `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` (`mock` or `auth`) for safe rollout diagnostics.
+- Next auth step: enforce real JWT validation and complete Supabase user-to-local-user/company mapping before removing the mock fallback.
 
 Webhook routing:
 
@@ -412,6 +416,8 @@ Frontend (`frontend/.env` or Vercel environment):
 | Variable | Purpose |
 | --- | --- |
 | `VITE_API_URL` | Public backend API base URL. |
+| `VITE_SUPABASE_URL` | Public Supabase project URL. When set with `VITE_SUPABASE_ANON_KEY`, the frontend shows the login screen and uses Supabase sessions. |
+| `VITE_SUPABASE_ANON_KEY` | Public Supabase anon key for browser login. This is not the backend service role key. |
 | `VITE_APP_NAME` | Public app display name. |
 
 Frontend variables must be public and prefixed with `VITE_`. Secrets belong only in backend environment variables.
@@ -449,6 +455,7 @@ GitHub:
 
 - Multi-company seed data for CPAP Express, Indusat, and Zasweb.
 - Platform-admin company selector.
+- Supabase Auth frontend login readiness with mock-admin fallback when frontend auth env vars are missing.
 - Tenant-aware `X-Company-ID` request flow.
 - Tenant filtering on backend query and frontend render paths.
 - Mercado Livre OAuth connection.
@@ -473,7 +480,7 @@ GitHub:
 
 ## Pending Roadmap
 
-- Real authentication and sessions.
+- Enforced Supabase JWT validation and user/company mapping.
 - Real authorization roles beyond the current mock `platform_admin`.
 - Per-company onboarding flow.
 - Notifications for new questions, failed syncs, and answered/blocked states.
