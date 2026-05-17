@@ -18,6 +18,9 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from zoneinfo import ZoneInfo
 
+import hmac
+from hashlib import sha256
+
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
@@ -62,6 +65,7 @@ class CurrentUserContext:
 
 
 USER_AUTH_FIELDS = ("id", "email", "name", "role", "company_id")
+SUPABASE_AUTH_AUDIENCE = "authenticated"
 MOCK_PLATFORM_ADMIN_USER = CurrentUserContext(
     id="admin",
     email=None,
@@ -106,47 +110,159 @@ def audit_user_auth_database_columns(connection) -> None:
     logger.info("AUTH_USER_TABLE_AUDIT fields=%s", list(USER_AUTH_FIELDS))
 
 
+def get_authorization_header(request: Request | None) -> str | None:
+    return request.headers.get("Authorization") if request is not None else None
+
+
 def get_bearer_token(request: Request | None) -> str | None:
-    authorization = request.headers.get("Authorization") if request is not None else None
+    authorization = get_authorization_header(request)
     if not authorization:
         return None
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
-        return None
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
     return token.strip()
 
 
-def decode_supabase_jwt_payload_unverified(token: str) -> dict[str, Any] | None:
-    # TODO auth: validate Supabase Auth JWT signature, issuer, audience, and expiry before trusting claims.
-    # This readiness step only decodes claims to find a matching local user record.
-    parts = token.split(".")
-    if len(parts) < 2:
+def get_supabase_issuer() -> str | None:
+    supabase_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    if not supabase_url:
         return None
-    payload = parts[1]
-    padded_payload = payload + "=" * (-len(payload) % 4)
+    return f"{supabase_url}/auth/v1"
+
+
+def decode_base64url_json(value: str) -> dict[str, Any] | None:
+    padded_value = value + "=" * (-len(value) % 4)
     try:
-        decoded_payload = base64.urlsafe_b64decode(padded_payload.encode("utf-8"))
-        claims = json.loads(decoded_payload.decode("utf-8"))
+        decoded = base64.urlsafe_b64decode(padded_value.encode("utf-8"))
+        parsed = json.loads(decoded.decode("utf-8"))
     except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError):
         return None
-    return claims if isinstance(claims, dict) else None
+    return parsed if isinstance(parsed, dict) else None
 
 
-def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext | None:
-    # TODO auth: replace this local lookup with validated Supabase user identity mapping.
+def decode_base64url_bytes(value: str) -> bytes | None:
+    padded_value = value + "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded_value.encode("utf-8"))
+    except binascii.Error:
+        return None
+
+
+def claim_contains(value: Any, expected: str) -> bool:
+    if isinstance(value, list):
+        return expected in {str(item) for item in value}
+    return str(value or "") == expected
+
+
+def validate_supabase_jwt(token: str) -> dict[str, Any]:
+    logger.info("AUTH_JWT_RECEIVED")
+    jwt_secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
+    issuer = get_supabase_issuer()
+    if not jwt_secret or not issuer:
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    parts = token.split(".")
+    if len(parts) != 3 or not all(parts):
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    header = decode_base64url_json(parts[0])
+    claims = decode_base64url_json(parts[1])
+    signature = decode_base64url_bytes(parts[2])
+    if header is None or claims is None or signature is None or header.get("alg") != "HS256":
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    signing_input = f"{parts[0]}.{parts[1]}".encode("utf-8")
+    expected_signature = hmac.new(jwt_secret.encode("utf-8"), signing_input, sha256).digest()
+    if not hmac.compare_digest(signature, expected_signature):
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    now = int(time.time())
+    try:
+        expires_at = int(claims.get("exp"))
+    except (TypeError, ValueError):
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+    if expires_at <= now:
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    not_before = claims.get("nbf")
+    if not_before is not None:
+        try:
+            if int(not_before) > now:
+                logger.warning("AUTH_INVALID_TOKEN")
+                raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        except (TypeError, ValueError):
+            logger.warning("AUTH_INVALID_TOKEN")
+            raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+    email = str(claims.get("email") or "").strip().lower()
+    if (
+        not email
+        or not str(claims.get("sub") or "").strip()
+        or not claim_contains(claims.get("aud"), SUPABASE_AUTH_AUDIENCE)
+        or str(claims.get("iss") or "").rstrip("/") != issuer
+    ):
+        logger.warning("AUTH_INVALID_TOKEN")
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+    logger.info("AUTH_JWT_VALIDATED email=%s", email)
+    return claims
+
+
+def user_has_auth_user_id_column(db: Session) -> bool:
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        row = db.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'users' "
+                "AND column_name = 'auth_user_id' "
+                "LIMIT 1"
+            )
+        ).first()
+        return row is not None
+    if bind.dialect.name == "sqlite":
+        rows = db.execute(text("PRAGMA table_info(users)")).fetchall()
+        return any(row[1] == "auth_user_id" for row in rows)
+    return hasattr(User, "auth_user_id")
+
+
+def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext:
     auth_user_id = str(claims.get("sub") or "").strip()
     email = str(claims.get("email") or "").strip().lower()
     db = SessionLocal()
     try:
-        user = db.get(User, auth_user_id) if auth_user_id else None
+        user = None
+        if auth_user_id and user_has_auth_user_id_column(db):
+            user = db.query(User).filter(User.auth_user_id == auth_user_id).first()
         if user is None and email:
             user = db.query(User).filter(User.email == email).first()
         if user is None:
-            logger.info("AUTH_CONTEXT_TOKEN_USER_NOT_FOUND sub=%s email_present=%s", auth_user_id, bool(email))
-            return None
+            logger.info("AUTH_USER_NOT_FOUND email=%s", email)
+            raise HTTPException(
+                status_code=403,
+                detail="User is authenticated but not linked to a company.",
+            )
         if not user.company_id or db.get(Company, user.company_id) is None:
             logger.warning("AUTH_CONTEXT_USER_COMPANY_INVALID user_id=%s company_id=%s", user.id, user.company_id)
-            return None
+            logger.info("AUTH_USER_NOT_FOUND email=%s", email)
+            raise HTTPException(
+                status_code=403,
+                detail="User is authenticated but not linked to a company.",
+            )
+        logger.info(
+            "AUTH_USER_RESOLVED user_id=%s company_id=%s role=%s",
+            user.id,
+            user.company_id,
+            user.role,
+        )
         return CurrentUserContext(
             id=user.id,
             email=user.email,
@@ -155,9 +271,11 @@ def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext | No
             company_id=user.company_id,
             source="auth",
         )
+    except HTTPException:
+        raise
     except SQLAlchemyError:
         logger.exception("AUTH_CONTEXT_USER_LOOKUP_FAILED sub=%s", auth_user_id)
-        return None
+        raise HTTPException(status_code=500, detail="Authentication user lookup failed.")
     finally:
         db.close()
 
@@ -167,20 +285,18 @@ def get_current_user(request: Request | None = None) -> CurrentUserContext:
     if isinstance(cached_user, CurrentUserContext):
         return cached_user
 
-    token = get_bearer_token(request)
-    if token:
-        claims = decode_supabase_jwt_payload_unverified(token)
-        auth_user = find_user_for_auth_claims(claims) if claims else None
-        if auth_user is not None:
-            if request is not None:
-                request.state.current_user = auth_user
-            return auth_user
-        logger.warning("AUTH_CONTEXT_TOKEN_FALLBACK_TO_MOCK reason=unvalidated_or_unmapped_token")
+    authorization = get_authorization_header(request)
+    if authorization:
+        token = get_bearer_token(request)
+        claims = validate_supabase_jwt(token)
+        auth_user = find_user_for_auth_claims(claims)
+        if request is not None:
+            request.state.current_user = auth_user
+        return auth_user
 
     if request is not None:
         request.state.current_user = MOCK_PLATFORM_ADMIN_USER
     return MOCK_PLATFORM_ADMIN_USER
-
 
 def get_current_user_id(request: Request | None = None) -> str | None:
     return get_current_user(request).id
@@ -368,6 +484,10 @@ def ensure_database_columns() -> None:
         "ai_allow_web_search": "BOOLEAN NOT NULL DEFAULT FALSE",
         "ai_absolute_restrictions": "TEXT",
     }
+
+    user_columns = {
+        "auth_user_id": "VARCHAR(128)",
+    }
     product_cache_columns = {
         "id": "INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY",
         "company_id": "VARCHAR(64) NOT NULL",
@@ -401,7 +521,7 @@ def ensure_database_columns() -> None:
                         "SELECT table_name, column_name "
                         "FROM information_schema.columns "
                         "WHERE table_schema = current_schema() "
-                        "AND table_name IN ('ai_suggestions', 'integrations', 'questions', 'company_settings')"
+                        "AND table_name IN ('ai_suggestions', 'integrations', 'questions', 'company_settings', 'users')"
                     )
                 ).fetchall()
             }
@@ -424,6 +544,11 @@ def ensure_database_columns() -> None:
                 if ("company_settings", column) not in existing_columns:
                     connection.execute(
                         text(f"ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                    )
+            for column, column_type in user_columns.items():
+                if ("users", column) not in existing_columns:
+                    connection.execute(
+                        text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {column_type}")
                     )
             connection.execute(
                 text(
@@ -513,6 +638,13 @@ def ensure_database_columns() -> None:
             for column, column_type in sqlite_settings_columns.items():
                 if column not in existing_settings:
                     connection.execute(text(f"ALTER TABLE company_settings ADD COLUMN {column} {column_type}"))
+            existing_users = {
+                row[1]
+                for row in connection.execute(text("PRAGMA table_info(users)")).fetchall()
+            }
+            for column, column_type in user_columns.items():
+                if column not in existing_users:
+                    connection.execute(text(f"ALTER TABLE users ADD COLUMN {column} {column_type}"))
             connection.execute(
                 text(
                     "CREATE TABLE IF NOT EXISTS products_cache ("
@@ -3564,9 +3696,6 @@ def root_head_health():
 
 @app.get("/me")
 def get_me(request: Request, db: Session = Depends(get_db)):
-    # TODO auth: replace /me mock with real session user
-    # TODO admin: enable company switcher for platform admin
-    # TODO permissions: hide/show areas based on role
     company_id, user_id, role = log_tenant_context(request)
     current_user = get_current_user(request)
     company = db.get(Company, company_id)
@@ -3578,6 +3707,7 @@ def get_me(request: Request, db: Session = Depends(get_db)):
             "name": current_user.name,
             "email": current_user.email,
             "role": role,
+            "source": current_user.source,
         },
         "company": {
             "id": company_id,
