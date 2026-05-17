@@ -29,6 +29,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(String(64), primary_key=True)
+    auth_user_id = Column(String(128), nullable=True, unique=True)
     email = Column(String(255), nullable=False, unique=True)
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="admin")

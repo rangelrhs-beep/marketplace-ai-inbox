@@ -69,6 +69,11 @@ AI provider:
 - Configurable model via `OPENAI_MODEL`.
 - Default in env example: `gpt-4o-mini`.
 
+Backend auth environment:
+
+- `SUPABASE_URL`: Supabase project URL used to validate JWT issuer.
+- `SUPABASE_JWT_SECRET`: Supabase JWT secret used to validate access-token signatures.
+
 Integrations:
 
 - Mercado Livre is the primary real integration.
@@ -85,7 +90,7 @@ Seeded tenant companies:
 | Indusat | `atlas_commerce` |
 | Zasweb | `nova_casa_imports` |
 
-The default company is CPAP Express. The current mock user is `admin`, and the backend keeps the mock user role as `platform_admin` until real authentication is fully enforced. The current `users` model is ready for the first authentication handoff fields: `id`, `email`, `name`, `role`, and `company_id`.
+The default company is CPAP Express. When no `Authorization` header is sent, the backend preserves the existing mock user `admin` with role `platform_admin`. When a Supabase bearer token is sent, the backend validates the JWT and resolves the local `users` row from `auth_user_id` when that column is present, otherwise by `email`. The current `users` model contains `id`, optional `auth_user_id`, `email`, `name`, `role`, and `company_id`.
 
 ## Multi-Tenant Architecture
 
@@ -106,8 +111,8 @@ Request flow:
 2. All frontend API calls go through `apiFetch`.
 3. `apiFetch` sends `X-Company-ID` when a selected company exists.
 4. The backend resolves the tenant in `get_current_company_id(request)`.
-5. The backend accepts `X-Company-ID` only for the current mock `platform_admin` role and only if the company exists.
-6. If no valid header is present, the backend falls back to `cpap_express`.
+5. The backend accepts `X-Company-ID` only for a resolved `platform_admin` role and only if the company exists.
+6. If no `Authorization` header is present and no valid company header is present, the mock context falls back to `cpap_express`; authenticated non-platform-admin users remain scoped to `users.company_id`.
 
 Admin selector:
 
@@ -116,17 +121,17 @@ Admin selector:
 - The frontend `CompanySwitcher` changes the selected company, clears tenant-scoped UI state, and reloads questions/settings/health for that company.
 - Frontend filtering additionally drops any question or conversation card whose `company_id` does not match the selected company.
 
-Auth readiness step:
+Authentication and tenant resolution:
 
-- Backend tenant/auth context now flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
-- The frontend can now initialize Supabase Auth when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured; in that mode it shows an email/password login screen before loading the inbox.
-- After Supabase login, frontend API requests include `Authorization: Bearer <access_token>` while still sending the tenant-scoped `X-Company-ID` used by the current platform-admin selector.
-- If frontend Supabase env vars are missing, the app keeps the existing mock admin behavior and opens normally without a login gate.
-- If no `Authorization: Bearer ...` token is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow.
-- If a bearer token is present, the backend can decode Supabase-style JWT payloads only to locate a matching local `users` row; real Supabase JWT signature, issuer, audience, and expiry validation is still marked with TODO comments and must be added before auth is enforced.
-- Authenticated non-platform-admin users resolve their tenant from `users.company_id`; only `platform_admin` can use `X-Company-ID` to switch companies.
-- `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` (`mock` or `auth`) for safe rollout diagnostics.
-- Next auth step: enforce real JWT validation and complete Supabase user-to-local-user/company mapping before removing the mock fallback.
+- Backend tenant/auth context flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
+- The frontend can initialize Supabase Auth when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured; in that mode it shows an email/password login screen before loading the inbox.
+- After Supabase login, frontend API requests include `Authorization: Bearer <access_token>` while still sending tenant-scoped `X-Company-ID` for platform-admin company switching.
+- Backend Supabase JWT validation requires `SUPABASE_URL` and `SUPABASE_JWT_SECRET`. With a bearer token present, the backend validates signature, issuer (`{SUPABASE_URL}/auth/v1`), audience (`authenticated`), expiry, `sub`, and `email`.
+- If no `Authorization` header is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow. This is the only mock fallback path.
+- If a bearer token is invalid, the backend returns `401` and does not fall back to mock auth.
+- If a bearer token is valid but no local `users` row matches `auth_user_id` (when present) or `email`, the backend returns `403` with `User is authenticated but not linked to a company.`
+- Authenticated users resolve their tenant from `users.company_id`; only users with role `platform_admin` can use `X-Company-ID` to switch companies. Company users/operators cannot switch into another company's tenant.
+- `GET /me` includes the resolved user `source` (`auth` or `mock`). `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` for rollout diagnostics.
 
 Webhook routing:
 
@@ -292,8 +297,8 @@ Primary files:
 Major endpoints:
 
 - `GET /` and `GET /health`: service health.
-- `GET /me`: current user context, active company, permissions, with mock fallback until real auth is enforced.
-- `GET /debug/auth-context`: auth-readiness diagnostic for resolved user, role, tenant, and `mock`/`auth` source.
+- `GET /me`: current user context, active company, permissions, and auth source; uses real Supabase JWT auth when a bearer token is present and mock admin only when no token is sent.
+- `GET /debug/auth-context`: diagnostic for resolved user, role, tenant, and `mock`/`auth` source.
 - `GET /companies`: platform-admin company list.
 - `GET /questions`: paginated local inbox source.
 - `GET /questions/{question_id}`: tenant-scoped question detail.
@@ -394,7 +399,8 @@ Backend (`backend/.env` or Render environment):
 | `DB_POOL_TIMEOUT` | SQLAlchemy pool timeout seconds. |
 | `DB_POOL_RECYCLE` | SQLAlchemy pool recycle seconds. |
 | `DB_USE_NULLPOOL` | Use SQLAlchemy `NullPool`; useful for unstable Supabase pooler scenarios. |
-| `SUPABASE_URL` | Supabase project URL for future direct Supabase use. |
+| `SUPABASE_URL` | Supabase project URL used for real Auth JWT issuer validation. Required when bearer tokens are accepted. |
+| `SUPABASE_JWT_SECRET` | Supabase JWT secret used to validate bearer access-token signatures. Required when bearer tokens are accepted. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Backend only. Never expose in frontend. |
 | `CORS_ORIGINS` | Comma-separated allowed frontend origins. |
 | `CORS_ORIGIN_REGEX` | Optional regex for Vercel previews. |
