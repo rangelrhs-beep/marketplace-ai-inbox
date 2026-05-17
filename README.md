@@ -133,6 +133,32 @@ Authentication and tenant resolution:
 - Authenticated users resolve their tenant from `users.company_id`; only users with role `platform_admin` can use `X-Company-ID` to switch companies. Company users/operators cannot switch into another company's tenant.
 - `GET /me` includes the resolved user `source` (`auth` or `mock`). `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` for rollout diagnostics.
 
+Supabase Auth user linking:
+
+1. In Supabase, open the project dashboard, go to **Authentication > Users**, create or invite the user's email/password account, and copy the new Auth user UUID.
+2. Use a platform-admin backend context to link that Supabase Auth user to an existing local company. In current mock-admin mode, omit the `Authorization` header so the existing mock `platform_admin` can perform the operation. For a real platform admin later, send that admin's bearer token.
+3. Call `POST /admin/users/link-supabase` with the Supabase Auth UUID and an existing `company_id`; this endpoint never creates companies. Example:
+
+```bash
+curl -X POST "$BACKEND_URL/admin/users/link-supabase" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "cliente@empresa.com",
+    "auth_user_id": "supabase-auth-user-uuid",
+    "name": "Client Name",
+    "company_id": "atlas_commerce",
+    "role": "company_admin"
+  }'
+```
+
+If the email already exists in `users`, the endpoint updates `auth_user_id`, `company_id`, `role`, and `name` when provided. If the email does not exist, it creates the local user. `GET /admin/users` lists `id`, `email`, `name`, `role`, `company_id`, and `auth_user_id` for debugging and does not expose secrets. Both admin user endpoints require `platform_admin`.
+
+User roles:
+
+- `platform_admin`: platform operator; can list companies, use admin user-linking endpoints, and switch active companies with `X-Company-ID`.
+- `company_admin`: company-scoped administrator; can use only their linked `users.company_id` and cannot switch companies.
+- `operator`: company-scoped operator; can use only their linked `users.company_id` and cannot switch companies.
+
 Webhook routing:
 
 - Mercado Livre webhooks arrive at `POST /integrations/mercadolivre/notifications`.
