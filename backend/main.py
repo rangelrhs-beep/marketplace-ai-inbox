@@ -66,6 +66,45 @@ class CurrentUserContext:
 
 USER_AUTH_FIELDS = ("id", "email", "name", "role", "company_id")
 SUPABASE_AUTH_AUDIENCE = "authenticated"
+
+ALLOWED_ADMIN_LINK_ROLES = {"platform_admin", "company_admin", "operator"}
+
+
+class AdminUserLinkRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    auth_user_id: str = Field(..., min_length=1, max_length=128)
+    name: str | None = Field(default=None, max_length=255)
+    company_id: str = Field(..., min_length=1, max_length=64)
+    role: str = Field(..., min_length=1, max_length=50)
+
+
+def normalize_admin_user_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def normalize_optional_admin_user_name(name: str | None) -> str | None:
+    normalized = (name or "").strip()
+    return normalized or None
+
+
+def require_platform_admin(request: Request, *, log_admin_user_link_rejection: bool = False) -> CurrentUserContext:
+    current_user = get_current_user(request)
+    if current_user.role != "platform_admin":
+        if log_admin_user_link_rejection:
+            logger.warning("ADMIN_USER_LINK_REJECTED reason=forbidden")
+        raise HTTPException(status_code=403, detail="Acesso restrito ao administrador da plataforma.")
+    return current_user
+
+
+def generate_local_user_id(db: Session) -> str:
+    for _ in range(5):
+        user_id = f"user_{secrets.token_urlsafe(12)}"
+        if db.get(User, user_id) is None:
+            return user_id
+    logger.error("ADMIN_USER_LINK_REJECTED reason=user_id_collision")
+    raise HTTPException(status_code=500, detail="Could not allocate user id.")
+
+
 MOCK_PLATFORM_ADMIN_USER = CurrentUserContext(
     id="admin",
     email=None,
@@ -3747,6 +3786,94 @@ def list_companies(request: Request, db: Session = Depends(get_db)):
     companies = db.query(Company).order_by(Company.name.asc()).all()
     logger.info("TENANT_COMPANIES company_id=%s user_id=%s role=%s count=%s", company_id, user_id, role, len(companies))
     return [{"id": company.id, "name": company.name} for company in companies]
+
+
+@app.get("/admin/users")
+def list_admin_users(request: Request, db: Session = Depends(get_db)):
+    require_platform_admin(request)
+    users = db.query(User).order_by(User.email.asc()).all()
+    return [
+        {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "role": user.role,
+            "company_id": user.company_id,
+            "auth_user_id": user.auth_user_id,
+        }
+        for user in users
+    ]
+
+
+@app.post("/admin/users/link-supabase")
+def link_supabase_user(payload: AdminUserLinkRequest, request: Request, db: Session = Depends(get_db)):
+    email = normalize_admin_user_email(payload.email)
+    name = normalize_optional_admin_user_name(payload.name)
+    auth_user_id = payload.auth_user_id.strip()
+    company_id = payload.company_id.strip()
+    role = payload.role.strip()
+    logger.info("ADMIN_USER_LINK_ATTEMPT email=%s company_id=%s role=%s", email, company_id, role)
+
+    require_platform_admin(request, log_admin_user_link_rejection=True)
+
+    if not email or "@" not in email:
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=invalid_email")
+        raise HTTPException(status_code=422, detail="Invalid email.")
+    if not auth_user_id:
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=missing_auth_user_id")
+        raise HTTPException(status_code=422, detail="auth_user_id is required.")
+    if role not in ALLOWED_ADMIN_LINK_ROLES:
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=invalid_role")
+        raise HTTPException(status_code=422, detail="Invalid role.")
+    if db.get(Company, company_id) is None:
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=company_not_found")
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    user = db.query(User).filter(User.email == email).first()
+    existing_auth_user = db.query(User).filter(User.auth_user_id == auth_user_id).first()
+    if existing_auth_user is not None and (user is None or existing_auth_user.id != user.id):
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=auth_user_id_already_linked")
+        raise HTTPException(status_code=409, detail="auth_user_id is already linked to another user.")
+
+    if user is None:
+        user = User(
+            id=generate_local_user_id(db),
+            email=email,
+            auth_user_id=auth_user_id,
+            name=name or email,
+            company_id=company_id,
+            role=role,
+        )
+        db.add(user)
+        action = "created"
+    else:
+        user.auth_user_id = auth_user_id
+        if name is not None:
+            user.name = name
+        user.company_id = company_id
+        user.role = role
+        action = "updated"
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.warning("ADMIN_USER_LINK_REJECTED reason=integrity_error")
+        raise HTTPException(status_code=409, detail="User link conflicts with an existing user.")
+
+    db.refresh(user)
+    if action == "created":
+        logger.info("ADMIN_USER_LINK_CREATED email=%s", email)
+    else:
+        logger.info("ADMIN_USER_LINK_UPDATED email=%s", email)
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "company_id": user.company_id,
+        "auth_user_id": user.auth_user_id,
+    }
 
 
 @app.on_event("startup")
