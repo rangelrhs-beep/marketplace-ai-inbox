@@ -490,6 +490,7 @@ GitHub:
 - Multi-company seed data for CPAP Express, Indusat, and Zasweb.
 - Platform-admin company selector.
 - Supabase Auth frontend login readiness with mock-admin fallback when frontend auth env vars are missing.
+- Logout through the top-left app icon user menu (shows user/company context and `Sair`).
 - Tenant-aware `X-Company-ID` request flow.
 - Tenant filtering on backend query and frontend render paths.
 - Mercado Livre OAuth connection.
