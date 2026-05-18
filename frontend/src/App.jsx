@@ -56,9 +56,9 @@ function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
   return permission === "granted" && appNotificationsEnabled !== false;
 }
 
-function formatNotificationStatus(permission, appEnabled) {
+function formatNotificationStatus(permission) {
   if (permission === "unsupported") return "Notificações: indisponível";
-  if (permission === "granted" && appEnabled !== false) return "Notificações: ativada";
+  if (permission === "granted") return "Notificações: ativada";
   return "Notificações: desativada";
 }
 
