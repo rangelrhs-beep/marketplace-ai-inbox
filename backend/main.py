@@ -5607,24 +5607,15 @@ def list_questions(
     company_id, _, _ = log_tenant_context(request)
     history_days = days if days in {15, 30} else 15
     history_cutoff = datetime.utcnow() - timedelta(days=history_days)
-    print(f"PERF_GET_QUESTIONS_START company_id={company_id}", flush=True)
-    print(f"TENANT_QUESTIONS_QUERY company_id={company_id}", flush=True)
-    print(f"HISTORY_PERIOD company_id={company_id} days={history_days}", flush=True)
+    logger.info("PERF_GET_QUESTIONS_START company_id=%s days=%s page=%s page_size=%s", company_id, history_days, page, page_size)
+    logger.info("TENANT_QUESTIONS_QUERY company_id=%s", company_id)
 
     def return_questions(source_questions: list[dict[str, Any]], total: int) -> dict[str, Any]:
         before_count = len(source_questions)
         filtered_questions = final_filter_tenant_questions(source_questions, company_id)
-        print(
-            f"TENANT_QUESTIONS_FINAL_FILTER company_id={company_id} before={before_count} after={len(filtered_questions)}",
-            flush=True,
-        )
-        print(
-            f"TENANT_QUESTIONS_SAMPLE company_id={company_id} sample={tenant_question_sample(filtered_questions)}",
-            flush=True,
-        )
+        logger.info("TENANT_QUESTIONS_FINAL_FILTER company_id=%s before=%s after=%s", company_id, before_count, len(filtered_questions))
         total_ms = (time.perf_counter() - total_start) * 1000
-        print("PERF_GROUPING_MS=0", flush=True)
-        print(f"PERF_TOTAL_GET_QUESTIONS_MS={total_ms:.2f}", flush=True)
+        logger.info("PERF_TOTAL_GET_QUESTIONS_MS=%.2f company_id=%s", total_ms, company_id)
         return {
             "items": filtered_questions,
             "total": total,
@@ -5634,8 +5625,6 @@ def list_questions(
         }
 
     try:
-        logger.info("TENANT_QUESTIONS_QUERY company_id=%s", company_id)
-        print("BUYER_ENRICHMENT_START", flush=True)
         db_start = time.perf_counter()
         base_query = (
             db.query(QuestionRecord)
@@ -5671,24 +5660,10 @@ def list_questions(
             .all()
         )
         db_ms = (time.perf_counter() - db_start) * 1000
-        print(f"PERF_DB_QUERY_MS={db_ms:.2f}", flush=True)
+        logger.info("PERF_DB_QUERY_MS=%.2f company_id=%s", db_ms, company_id)
         logger.info("TENANT_QUESTIONS_SOURCE_DB company_id=%s count=%s", company_id, len(db_questions))
-        print(f"TENANT_QUESTIONS_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
-        print(f"HISTORY_SOURCE_DB company_id={company_id} count={len(db_questions)}", flush=True)
         question_payloads = [question_to_api(question, db=db, company_id=company_id) for question in db_questions]
-        buyer_ids = list(dict.fromkeys(
-            str(question.get("external_customer_id") or "")
-            for question in question_payloads
-            if question.get("external_customer_id")
-        ))
-        print(f"BUYER_ENRICHMENT questions_count={len(question_payloads)}", flush=True)
-        print(f"BUYER_ENRICHMENT unique_buyer_ids={buyer_ids[:10]} total={len(buyer_ids)}", flush=True)
-        if not buyer_ids:
-            print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
-        print(
-            f"TENANT_QUESTIONS_BEFORE_BUYER_ENRICHMENT company_id={company_id} count={len(question_payloads)}",
-            flush=True,
-        )
+        logger.info("PERF_BUYER_ENRICHMENT_START company_id=%s questions_count=%s", company_id, len(question_payloads))
         buyer_start = time.perf_counter()
         local_questions = protect_tenant_question_payloads(
             enrich_questions_with_buyers(question_payloads, db, company_id=company_id),
@@ -5696,37 +5671,23 @@ def list_questions(
         )
         db.commit()
         buyer_ms = (time.perf_counter() - buyer_start) * 1000
-        print(f"PERF_BUYER_ENRICH_MS={buyer_ms:.2f}", flush=True)
+        logger.info("PERF_BUYER_ENRICH_MS=%.2f company_id=%s", buyer_ms, company_id)
         logger.info("TENANT_QUESTIONS_RESULT company_id=%s count=%s", company_id, len(local_questions))
-        logger.info(
-            "TENANT_QUESTIONS_SAMPLE company_id=%s sample=%s",
-            company_id,
-            tenant_question_sample(local_questions),
-        )
     except (OperationalError, SQLAlchemyError):
         logger.exception("Questions database unavailable while loading local questions")
         return {"items": [], "total": 0, "page": page, "page_size": page_size, "has_more": False}
 
     if status and normalize_db_status(status) != "responded":
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-        print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
-        print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
-        print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
+        logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=0", company_id)
         return return_questions(local_questions, total_count)
 
     if not is_ml_answered_backfill_enabled():
-        print(f"TENANT_HISTORY_BACKFILL_DISABLED company_id={company_id}", flush=True)
         logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=%s", company_id, 0)
-        print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
-        print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
-        print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
         return return_questions(local_questions, total_count)
 
-    print(f"TENANT_HISTORY_BACKFILL_ENABLED company_id={company_id}", flush=True)
     logger.warning("Answered history backfill is disabled in GET /questions; use manual import endpoint")
-    print(f"TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id={company_id} count=0", flush=True)
-    print(f"HISTORY_SOURCE_ML company_id={company_id} count=0", flush=True)
-    print(f"HISTORY_MERGED company_id={company_id} count={len(local_questions)}", flush=True)
+    logger.info("TENANT_QUESTIONS_SOURCE_LIVE_BACKFILL company_id=%s count=0", company_id)
     return return_questions(local_questions, total_count)
 
 
