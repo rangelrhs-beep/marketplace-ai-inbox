@@ -71,8 +71,8 @@ AI provider:
 
 Backend auth environment:
 
-- `SUPABASE_URL`: Supabase project URL used to validate JWT issuer.
-- `SUPABASE_JWT_SECRET`: Supabase JWT secret used to validate access-token signatures.
+- `SUPABASE_URL`: Supabase project URL used to validate JWT issuer and fetch Supabase Auth JWKS signing keys. Required for bearer-token auth.
+- `SUPABASE_JWT_SECRET`: Supabase JWT secret used only to validate legacy HS256 access-token signatures.
 
 Integrations:
 
@@ -126,7 +126,7 @@ Authentication and tenant resolution:
 - Backend tenant/auth context flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
 - The frontend can initialize Supabase Auth when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured; in that mode it shows an email/password login screen before loading the inbox.
 - After Supabase login, frontend API requests include `Authorization: Bearer <access_token>` while still sending tenant-scoped `X-Company-ID` for platform-admin company switching.
-- Backend Supabase JWT validation requires `SUPABASE_URL` and `SUPABASE_JWT_SECRET`. With a bearer token present, the backend validates signature, issuer (`{SUPABASE_URL}/auth/v1`), audience (`authenticated`), expiry, `sub`, and `email`.
+- Backend Supabase JWT validation requires `SUPABASE_URL`. Supabase may issue access tokens signed with ES256; the backend validates those tokens by fetching JWKS from `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`, selecting the public key by JWT header `kid`, and caching the JWKS in memory for 10 minutes. `SUPABASE_JWT_SECRET` is only needed for legacy HS256 tokens. With a bearer token present, the backend validates signature, issuer (`{SUPABASE_URL}/auth/v1`), audience (`authenticated`), expiry, `sub`, and `email`.
 - If no `Authorization` header is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow. This is the only mock fallback path.
 - If a bearer token is invalid, the backend returns `401` and does not fall back to mock auth.
 - If a bearer token is valid but no local `users` row matches `auth_user_id` (when present) or `email`, the backend returns `403` with `User is authenticated but not linked to a company.`
@@ -426,8 +426,8 @@ Backend (`backend/.env` or Render environment):
 | `DB_POOL_TIMEOUT` | SQLAlchemy pool timeout seconds. |
 | `DB_POOL_RECYCLE` | SQLAlchemy pool recycle seconds. |
 | `DB_USE_NULLPOOL` | Use SQLAlchemy `NullPool`; useful for unstable Supabase pooler scenarios. |
-| `SUPABASE_URL` | Supabase project URL used for real Auth JWT issuer validation. Required when bearer tokens are accepted. |
-| `SUPABASE_JWT_SECRET` | Supabase JWT secret used to validate bearer access-token signatures. Required when bearer tokens are accepted. |
+| `SUPABASE_URL` | Supabase project URL used for real Auth JWT issuer validation and ES256 JWKS lookup. Required when bearer tokens are accepted. |
+| `SUPABASE_JWT_SECRET` | Supabase JWT secret used only to validate legacy HS256 bearer access-token signatures. Not required for current ES256 Supabase signing keys. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Backend only. Never expose in frontend. |
 | `CORS_ORIGINS` | Comma-separated allowed frontend origins. |
 | `CORS_ORIGIN_REGEX` | Optional regex for Vercel previews. |
@@ -569,8 +569,9 @@ These rules are important:
 
 If the frontend login succeeds but backend API calls return `401` with `AUTH_INVALID_TOKEN`:
 
-- Check that Render has the correct `SUPABASE_JWT_SECRET` for the Supabase project. A wrong secret must fail signature validation and still return `401`.
-- Check the token header `alg`; Supabase access tokens for this backend must validate as `HS256`.
+- For ES256 tokens, check that Render has the correct `SUPABASE_URL`; the backend fetches signing keys from `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` and logs `AUTH_JWKS_FETCHED`, `AUTH_JWKS_CACHE_HIT`, or `AUTH_JWT_KID_NOT_FOUND` without exposing tokens or secrets.
+- For legacy HS256 tokens, check that Render has the correct `SUPABASE_JWT_SECRET` for the Supabase project. A wrong secret must fail signature validation and still return `401`.
+- Check the token header `alg`; the backend accepts current Supabase ES256 tokens through JWKS and legacy HS256 tokens through `SUPABASE_JWT_SECRET`.
 - Check the token payload `aud`; valid Supabase user access tokens commonly use `authenticated`, and the backend accepts that audience rather than requiring the project URL.
 - Check the token payload `iss`; it should match `SUPABASE_URL + "/auth/v1"` after normalizing trailing slashes.
 - Use `GET /debug/auth-token` with the same `Authorization: Bearer <token>` header to inspect only safe decoded diagnostics. This endpoint never returns the token or backend secrets.

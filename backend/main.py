@@ -66,6 +66,16 @@ class CurrentUserContext:
 
 USER_AUTH_FIELDS = ("id", "email", "name", "role", "company_id")
 SUPABASE_AUTH_AUDIENCE = "authenticated"
+SUPABASE_JWKS_CACHE_TTL_SECONDS = 600
+SUPABASE_JWKS_CACHE: dict[str, Any] = {"url": None, "fetched_at": 0.0, "jwks": None}
+SUPABASE_JWKS_CACHE_LOCK = threading.Lock()
+P256_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+P256_A = -3
+P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+P256_GX = 0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296
+P256_GY = 0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5
+P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+P256_POINT_INFINITY: tuple[int, int] | None = None
 
 ALLOWED_ADMIN_LINK_ROLES = {"platform_admin", "company_admin", "operator"}
 
@@ -254,37 +264,132 @@ def reject_invalid_supabase_jwt(error: AuthTokenValidationError, token: str | No
     raise HTTPException(status_code=401, detail="Invalid authentication token.")
 
 
-def validate_supabase_jwt(token: str) -> dict[str, Any]:
-    logger.info("AUTH_JWT_RECEIVED")
-    jwt_secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
-    issuer = get_supabase_issuer()
-    if not jwt_secret or not issuer:
-        reject_invalid_supabase_jwt(
-            AuthTokenValidationError("Supabase JWT validation is not configured."),
-            token,
-        )
+def base64url_uint(value: str) -> int | None:
+    decoded = decode_base64url_bytes(value)
+    if decoded is None:
+        return None
+    return int.from_bytes(decoded, "big")
 
-    parts = token.split(".")
-    header = decode_base64url_json(parts[0]) if len(parts) >= 1 else None
-    claims = decode_base64url_json(parts[1]) if len(parts) >= 2 else None
-    if len(parts) != 3 or not all(parts):
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT must contain header, payload, and signature."), token)
 
-    signature = decode_base64url_bytes(parts[2])
-    if header is None:
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT header is malformed."), token)
-    if claims is None:
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT payload is malformed."), token)
-    if signature is None:
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature is malformed."), token)
-    if header.get("alg") != "HS256":
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT alg must be HS256."), token)
+def get_supabase_jwks_url() -> str | None:
+    supabase_url = normalize_url_without_trailing_slash(os.getenv("SUPABASE_URL", ""))
+    if not supabase_url:
+        return None
+    return f"{supabase_url}/auth/v1/.well-known/jwks.json"
 
-    signing_input = f"{parts[0]}.{parts[1]}".encode("utf-8")
-    expected_signature = hmac.new(jwt_secret.encode("utf-8"), signing_input, sha256).digest()
-    if not hmac.compare_digest(signature, expected_signature):
-        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature verification failed."), token)
 
+def get_supabase_jwks() -> dict[str, Any]:
+    jwks_url = get_supabase_jwks_url()
+    if not jwks_url:
+        raise AuthTokenValidationError("SUPABASE_URL is required for ES256 JWT validation.")
+
+    now = time.time()
+    with SUPABASE_JWKS_CACHE_LOCK:
+        cached_jwks = SUPABASE_JWKS_CACHE.get("jwks")
+        cached_url = SUPABASE_JWKS_CACHE.get("url")
+        fetched_at = float(SUPABASE_JWKS_CACHE.get("fetched_at") or 0)
+        if cached_jwks and cached_url == jwks_url and now - fetched_at < SUPABASE_JWKS_CACHE_TTL_SECONDS:
+            logger.info("AUTH_JWKS_CACHE_HIT")
+            return cached_jwks
+
+    request = UrlRequest(jwks_url, headers={"Accept": "application/json"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            jwks = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise AuthTokenValidationError("Supabase JWKS fetch failed.") from exc
+
+    if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
+        raise AuthTokenValidationError("Supabase JWKS response is malformed.")
+
+    key_ids = [str(key.get("kid")) for key in jwks["keys"] if isinstance(key, dict) and key.get("kid")]
+    with SUPABASE_JWKS_CACHE_LOCK:
+        SUPABASE_JWKS_CACHE.update({"url": jwks_url, "fetched_at": now, "jwks": jwks})
+    logger.info("AUTH_JWKS_FETCHED keys=%s", key_ids)
+    return jwks
+
+
+def find_jwks_key(jwks: dict[str, Any], kid: str) -> dict[str, Any] | None:
+    for key in jwks.get("keys", []):
+        if isinstance(key, dict) and key.get("kid") == kid:
+            return key
+    return None
+
+
+def p256_is_on_curve(point: tuple[int, int] | None) -> bool:
+    if point is None:
+        return True
+    x, y = point
+    if not (0 <= x < P256_P and 0 <= y < P256_P):
+        return False
+    return (y * y - (x * x * x + P256_A * x + P256_B)) % P256_P == 0
+
+
+def p256_point_add(
+    point_a: tuple[int, int] | None,
+    point_b: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    if point_a is None:
+        return point_b
+    if point_b is None:
+        return point_a
+    x1, y1 = point_a
+    x2, y2 = point_b
+    if x1 == x2 and (y1 + y2) % P256_P == 0:
+        return P256_POINT_INFINITY
+    if point_a == point_b:
+        if y1 == 0:
+            return P256_POINT_INFINITY
+        slope = ((3 * x1 * x1 + P256_A) * pow(2 * y1, -1, P256_P)) % P256_P
+    else:
+        slope = ((y2 - y1) * pow(x2 - x1, -1, P256_P)) % P256_P
+    x3 = (slope * slope - x1 - x2) % P256_P
+    y3 = (slope * (x1 - x3) - y1) % P256_P
+    return (x3, y3)
+
+
+def p256_scalar_mult(scalar: int, point: tuple[int, int] | None) -> tuple[int, int] | None:
+    result = P256_POINT_INFINITY
+    addend = point
+    while scalar:
+        if scalar & 1:
+            result = p256_point_add(result, addend)
+        addend = p256_point_add(addend, addend)
+        scalar >>= 1
+    return result
+
+
+def verify_es256_signature(signing_input: bytes, signature: bytes, jwk: dict[str, Any]) -> bool:
+    if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
+        raise AuthTokenValidationError("JWT ES256 key must be an EC P-256 key.")
+    x = base64url_uint(str(jwk.get("x") or ""))
+    y = base64url_uint(str(jwk.get("y") or ""))
+    if x is None or y is None:
+        raise AuthTokenValidationError("JWT ES256 key coordinates are malformed.")
+    public_key = (x, y)
+    if not p256_is_on_curve(public_key):
+        raise AuthTokenValidationError("JWT ES256 public key is invalid.")
+    if len(signature) != 64:
+        raise AuthTokenValidationError("JWT ES256 signature length is invalid.")
+    r = int.from_bytes(signature[:32], "big")
+    s = int.from_bytes(signature[32:], "big")
+    if not (1 <= r < P256_N and 1 <= s < P256_N):
+        return False
+    digest = sha256(signing_input).digest()
+    z = int.from_bytes(digest, "big")
+    w = pow(s, -1, P256_N)
+    u1 = (z * w) % P256_N
+    u2 = (r * w) % P256_N
+    verification_point = p256_point_add(
+        p256_scalar_mult(u1, (P256_GX, P256_GY)),
+        p256_scalar_mult(u2, public_key),
+    )
+    if verification_point is None:
+        return False
+    return verification_point[0] % P256_N == r
+
+
+def validate_supabase_jwt_claims(claims: dict[str, Any], issuer: str, token: str) -> None:
     now = int(time.time())
     try:
         expires_at = int(claims.get("exp"))
@@ -319,7 +424,67 @@ def validate_supabase_jwt(token: str) -> dict[str, Any]:
             ),
             token,
         )
-    logger.info("AUTH_JWT_VALIDATED")
+
+
+def validate_supabase_jwt(token: str) -> dict[str, Any]:
+    logger.info("AUTH_JWT_RECEIVED")
+    issuer = get_supabase_issuer()
+    if not issuer:
+        reject_invalid_supabase_jwt(
+            AuthTokenValidationError("SUPABASE_URL is required for JWT validation."),
+            token,
+        )
+
+    parts = token.split(".")
+    header = decode_base64url_json(parts[0]) if len(parts) >= 1 else None
+    claims = decode_base64url_json(parts[1]) if len(parts) >= 2 else None
+    if len(parts) != 3 or not all(parts):
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT must contain header, payload, and signature."), token)
+
+    signature = decode_base64url_bytes(parts[2])
+    if header is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT header is malformed."), token)
+    if claims is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT payload is malformed."), token)
+    if signature is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature is malformed."), token)
+
+    alg = str(header.get("alg") or "")
+    signing_input = f"{parts[0]}.{parts[1]}".encode("utf-8")
+    if alg == "HS256":
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
+        if not jwt_secret:
+            reject_invalid_supabase_jwt(
+                AuthTokenValidationError("SUPABASE_JWT_SECRET is required for HS256 JWT validation."),
+                token,
+            )
+        expected_signature = hmac.new(jwt_secret.encode("utf-8"), signing_input, sha256).digest()
+        if not hmac.compare_digest(signature, expected_signature):
+            reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature verification failed."), token)
+    elif alg == "ES256":
+        kid = str(header.get("kid") or "").strip()
+        if not kid:
+            reject_invalid_supabase_jwt(AuthTokenValidationError("JWT ES256 kid header is missing."), token)
+        try:
+            jwks = get_supabase_jwks()
+        except AuthTokenValidationError as exc:
+            reject_invalid_supabase_jwt(exc, token)
+        jwk = find_jwks_key(jwks, kid)
+        if jwk is None:
+            logger.warning("AUTH_JWT_KID_NOT_FOUND kid=%s", kid)
+            reject_invalid_supabase_jwt(AuthTokenValidationError("JWT kid was not found in Supabase JWKS."), token)
+        try:
+            signature_is_valid = verify_es256_signature(signing_input, signature, jwk)
+        except AuthTokenValidationError as exc:
+            reject_invalid_supabase_jwt(exc, token)
+        if not signature_is_valid:
+            reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature verification failed."), token)
+    else:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT alg must be HS256 or ES256."), token)
+
+    validate_supabase_jwt_claims(claims, issuer, token)
+    email = str(claims.get("email") or "").strip().lower()
+    logger.info("AUTH_JWT_VALIDATED alg=%s email=%s", alg, email)
     return claims
 
 
