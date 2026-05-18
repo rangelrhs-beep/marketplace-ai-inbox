@@ -30,6 +30,18 @@ const supabase = isSupabaseAuthConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
 
+const AUTH_REQUEST_TIMEOUT_MS = 15000;
+
+function withTimeout(promise, timeoutMs, timeoutMessage) {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) clearTimeout(timeoutId);
+  });
+}
+
 
 function getBrowserNotificationPermission() {
   if (typeof Notification === "undefined") return "unsupported";
@@ -2387,7 +2399,7 @@ export default function App() {
   });
   const [pendingBadgeCount, setPendingBadgeCount] = useState(0);
   const [lastPendingCount, setLastPendingCount] = useState(0);
-  const [notificationPermission, setNotificationPermission] = useState(getBrowserNotificationPermission());
+  const [notificationPermission, setNotificationPermission] = useState("unsupported");
   const [appNotificationsEnabled, setAppNotificationsEnabled] = useState(getStoredNotificationPreference);
   const [notificationHelpText, setNotificationHelpText] = useState("");
   const notificationDebounceRef = useRef(null);
@@ -2396,12 +2408,15 @@ export default function App() {
   const integrations = appData.integrations;
 
   useEffect(() => {
+    if (isSupabaseAuthConfigured && !authSession) return undefined;
+
     let permissionStatus = null;
 
     function refreshNotificationPermission() {
       setNotificationPermission(getBrowserNotificationPermission());
     }
 
+    refreshNotificationPermission();
     window.addEventListener("focus", refreshNotificationPermission);
 
     if (navigator.permissions?.query) {
@@ -2420,7 +2435,7 @@ export default function App() {
       window.removeEventListener("focus", refreshNotificationPermission);
       if (permissionStatus) permissionStatus.onchange = null;
     };
-  }, []);
+  }, [authSession?.access_token]);
 
   function setQuestions(nextQuestions) {
     setAppData((current) => ({
@@ -2573,6 +2588,32 @@ export default function App() {
   }
 
 
+  async function loadMeForSession(session, requestCompanyId = getStoredCompanyId()) {
+    console.log("ME_LOAD_START", { companyId: requestCompanyId });
+    try {
+      const headers = new Headers();
+      if (requestCompanyId) headers.set("X-Company-ID", requestCompanyId);
+      if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
+      const response = await withTimeout(
+        fetch(`${API_URL}/me`, { headers }),
+        AUTH_REQUEST_TIMEOUT_MS,
+        "Tempo esgotado ao carregar dados do usuário."
+      );
+      const tenant = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(tenant.detail || "Não foi possível carregar dados do usuário.");
+      }
+      console.log("ME_LOAD_SUCCESS", {
+        companyId: tenant?.company?.id || requestCompanyId,
+        role: tenant?.user?.role || "unknown",
+      });
+      return tenant;
+    } catch (error) {
+      console.error("ME_LOAD_ERROR", { message: error.message });
+      throw error;
+    }
+  }
+
   useEffect(() => {
     if (!supabase) {
       setIsAuthLoading(false);
@@ -2580,13 +2621,28 @@ export default function App() {
     }
 
     let isMounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!isMounted) return;
-      setAuthSession(data.session || null);
-      setIsAuthLoading(false);
-    });
+    withTimeout(
+      supabase.auth.getSession(),
+      AUTH_REQUEST_TIMEOUT_MS,
+      "Tempo esgotado ao restaurar sessão."
+    )
+      .then(({ data }) => {
+        if (!isMounted) return;
+        console.log("AUTH_SESSION_LOADED", { hasSession: Boolean(data.session) });
+        setAuthSession(data.session || null);
+      })
+      .catch((error) => {
+        if (!isMounted) return;
+        console.error("LOGIN_ERROR", { message: error.message });
+        setAuthSession(null);
+        setLoginError("Não foi possível restaurar sua sessão. Tente entrar novamente.");
+      })
+      .finally(() => {
+        if (isMounted) setIsAuthLoading(false);
+      });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log("AUTH_SESSION_LOADED", { hasSession: Boolean(session) });
       setAuthSession(session || null);
       setIsAuthLoading(false);
     });
@@ -2600,14 +2656,32 @@ export default function App() {
   async function handleLogin(event) {
     event.preventDefault();
     if (!supabase) return;
+    console.log("LOGIN_START");
     setLoginError("");
     setIsAuthLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: loginEmail.trim(),
-      password: loginPassword,
-    });
-    if (error) {
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email: loginEmail.trim(),
+          password: loginPassword,
+        }),
+        AUTH_REQUEST_TIMEOUT_MS,
+        "Tempo esgotado ao entrar. Tente novamente."
+      );
+      if (error) throw error;
+      const session = data?.session;
+      if (!session?.access_token) {
+        throw new Error("Sessão não retornada pelo Supabase.");
+      }
+      console.log("LOGIN_SUCCESS");
+      await loadMeForSession(session);
+      setAuthSession(session);
+    } catch (error) {
+      console.error("LOGIN_ERROR", { message: error.message });
+      setAuthSession(null);
       setLoginError(error.message || "Não foi possível entrar.");
+      await supabase.auth.signOut().catch(() => {});
+    } finally {
       setIsAuthLoading(false);
     }
   }
@@ -2791,10 +2865,7 @@ export default function App() {
 
     async function loadTenantContext() {
       try {
-        const response = await apiFetch(`${API_URL}/me`);
-        const tenant = await response.json();
-        console.log("/me response", tenant);
-        if (!response.ok) throw new Error("Tenant context unavailable");
+        const tenant = await loadMeForSession(authSession, requestCompanyId);
         if (requestCompanyId !== getStoredCompanyId()) {
           console.log("/me response ignored stale company response", {
             requested: requestCompanyId,
