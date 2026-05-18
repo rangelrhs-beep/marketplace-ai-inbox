@@ -2197,6 +2197,36 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
   );
 }
 
+
+function InstallAppHint() {
+  const [installPrompt, setInstallPrompt] = useState(null);
+
+  useEffect(() => {
+    function handleBeforeInstallPrompt(event) {
+      event.preventDefault();
+      setInstallPrompt(event);
+    }
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+  }, []);
+
+  if (!installPrompt) return null;
+
+  return (
+    <button
+      type="button"
+      className="install-app-hint"
+      onClick={async () => {
+        installPrompt.prompt();
+        await installPrompt.userChoice;
+        setInstallPrompt(null);
+      }}
+    >
+      Instalar app
+    </button>
+  );
+}
+
 export default function App() {
   const inFlightQuestionsRequestsRef = useRef(new Set());
   const lastQuestionsLoadKeyRef = useRef("");
@@ -3643,6 +3673,7 @@ export default function App() {
           </>
         )}
       </main>
+      <InstallAppHint />
     </div>
   );
 }
