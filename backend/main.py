@@ -153,19 +153,28 @@ def get_authorization_header(request: Request | None) -> str | None:
     return request.headers.get("Authorization") if request is not None else None
 
 
+class AuthTokenValidationError(Exception):
+    pass
+
+
 def get_bearer_token(request: Request | None) -> str | None:
     authorization = get_authorization_header(request)
     if not authorization:
         return None
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
-        logger.warning("AUTH_INVALID_TOKEN")
+        error = AuthTokenValidationError("Authorization header must use the Bearer scheme.")
+        log_auth_invalid_token(error)
         raise HTTPException(status_code=401, detail="Invalid authentication token.")
     return token.strip()
 
 
+def normalize_url_without_trailing_slash(value: str) -> str:
+    return value.strip().rstrip("/")
+
+
 def get_supabase_issuer() -> str | None:
-    supabase_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    supabase_url = normalize_url_without_trailing_slash(os.getenv("SUPABASE_URL", ""))
     if not supabase_url:
         return None
     return f"{supabase_url}/auth/v1"
@@ -195,62 +204,122 @@ def claim_contains(value: Any, expected: str) -> bool:
     return str(value or "") == expected
 
 
+def build_auth_token_diagnostics(token: str | None) -> dict[str, Any]:
+    header: dict[str, Any] | None = None
+    payload: dict[str, Any] | None = None
+    if token:
+        parts = token.split(".")
+        if len(parts) >= 1:
+            header = decode_base64url_json(parts[0])
+        if len(parts) >= 2:
+            payload = decode_base64url_json(parts[1])
+
+    return {
+        "has_authorization": bool(token),
+        "header": {
+            "alg": header.get("alg") if header else None,
+            "typ": header.get("typ") if header else None,
+        },
+        "payload": {
+            "iss": payload.get("iss") if payload else None,
+            "aud": payload.get("aud") if payload else None,
+            "sub_exists": bool(str(payload.get("sub") or "").strip()) if payload else False,
+            "email_exists": bool(str(payload.get("email") or "").strip()) if payload else False,
+            "exp": payload.get("exp") if payload else None,
+        },
+    }
+
+
+def log_auth_invalid_token(error: Exception, token: str | None = None) -> None:
+    diagnostics = build_auth_token_diagnostics(token)
+    logger.warning(
+        "AUTH_INVALID_TOKEN exception_type=%s exception_message=%s "
+        "token_header_alg=%s token_header_typ=%s token_payload_iss=%s "
+        "token_payload_aud=%s token_payload_exp=%s token_payload_sub_exists=%s "
+        "token_payload_email_exists=%s",
+        type(error).__name__,
+        str(error),
+        diagnostics["header"]["alg"],
+        diagnostics["header"]["typ"],
+        diagnostics["payload"]["iss"],
+        diagnostics["payload"]["aud"],
+        diagnostics["payload"]["exp"],
+        diagnostics["payload"]["sub_exists"],
+        diagnostics["payload"]["email_exists"],
+    )
+
+
+def reject_invalid_supabase_jwt(error: AuthTokenValidationError, token: str | None = None) -> None:
+    log_auth_invalid_token(error, token)
+    raise HTTPException(status_code=401, detail="Invalid authentication token.")
+
+
 def validate_supabase_jwt(token: str) -> dict[str, Any]:
     logger.info("AUTH_JWT_RECEIVED")
     jwt_secret = os.getenv("SUPABASE_JWT_SECRET", "").strip()
     issuer = get_supabase_issuer()
     if not jwt_secret or not issuer:
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        reject_invalid_supabase_jwt(
+            AuthTokenValidationError("Supabase JWT validation is not configured."),
+            token,
+        )
 
     parts = token.split(".")
+    header = decode_base64url_json(parts[0]) if len(parts) >= 1 else None
+    claims = decode_base64url_json(parts[1]) if len(parts) >= 2 else None
     if len(parts) != 3 or not all(parts):
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT must contain header, payload, and signature."), token)
 
-    header = decode_base64url_json(parts[0])
-    claims = decode_base64url_json(parts[1])
     signature = decode_base64url_bytes(parts[2])
-    if header is None or claims is None or signature is None or header.get("alg") != "HS256":
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+    if header is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT header is malformed."), token)
+    if claims is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT payload is malformed."), token)
+    if signature is None:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature is malformed."), token)
+    if header.get("alg") != "HS256":
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT alg must be HS256."), token)
 
     signing_input = f"{parts[0]}.{parts[1]}".encode("utf-8")
     expected_signature = hmac.new(jwt_secret.encode("utf-8"), signing_input, sha256).digest()
     if not hmac.compare_digest(signature, expected_signature):
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT signature verification failed."), token)
 
     now = int(time.time())
     try:
         expires_at = int(claims.get("exp"))
     except (TypeError, ValueError):
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT exp claim is missing or invalid."), token)
     if expires_at <= now:
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT is expired."), token)
 
     not_before = claims.get("nbf")
     if not_before is not None:
         try:
             if int(not_before) > now:
-                logger.warning("AUTH_INVALID_TOKEN")
-                raise HTTPException(status_code=401, detail="Invalid authentication token.")
+                reject_invalid_supabase_jwt(AuthTokenValidationError("JWT nbf claim is in the future."), token)
         except (TypeError, ValueError):
-            logger.warning("AUTH_INVALID_TOKEN")
-            raise HTTPException(status_code=401, detail="Invalid authentication token.")
+            reject_invalid_supabase_jwt(AuthTokenValidationError("JWT nbf claim is invalid."), token)
 
     email = str(claims.get("email") or "").strip().lower()
-    if (
-        not email
-        or not str(claims.get("sub") or "").strip()
-        or not claim_contains(claims.get("aud"), SUPABASE_AUTH_AUDIENCE)
-        or str(claims.get("iss") or "").rstrip("/") != issuer
-    ):
-        logger.warning("AUTH_INVALID_TOKEN")
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
-    logger.info("AUTH_JWT_VALIDATED email=%s", email)
+    if not email:
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT email claim is missing."), token)
+    if not str(claims.get("sub") or "").strip():
+        reject_invalid_supabase_jwt(AuthTokenValidationError("JWT sub claim is missing."), token)
+    if not claim_contains(claims.get("aud"), SUPABASE_AUTH_AUDIENCE):
+        reject_invalid_supabase_jwt(
+            AuthTokenValidationError("JWT aud claim must include authenticated."),
+            token,
+        )
+    token_issuer = normalize_url_without_trailing_slash(str(claims.get("iss") or ""))
+    if token_issuer != issuer:
+        reject_invalid_supabase_jwt(
+            AuthTokenValidationError(
+                "JWT iss claim does not match SUPABASE_URL/auth/v1 after trailing slash normalization."
+            ),
+            token,
+        )
+    logger.info("AUTH_JWT_VALIDATED")
     return claims
 
 
@@ -3776,6 +3845,14 @@ def debug_auth_context(request: Request):
         "company_id": company_id,
         "source": current_user.source,
     }
+
+
+@app.get("/debug/auth-token")
+def debug_auth_token(request: Request):
+    if not get_authorization_header(request):
+        raise HTTPException(status_code=401, detail="Authorization header is required.")
+    token = get_bearer_token(request)
+    return build_auth_token_diagnostics(token)
 
 
 @app.get("/companies")

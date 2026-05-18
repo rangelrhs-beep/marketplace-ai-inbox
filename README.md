@@ -131,7 +131,7 @@ Authentication and tenant resolution:
 - If a bearer token is invalid, the backend returns `401` and does not fall back to mock auth.
 - If a bearer token is valid but no local `users` row matches `auth_user_id` (when present) or `email`, the backend returns `403` with `User is authenticated but not linked to a company.`
 - Authenticated users resolve their tenant from `users.company_id`; only users with role `platform_admin` can use `X-Company-ID` to switch companies. Company users/operators cannot switch into another company's tenant.
-- `GET /me` includes the resolved user `source` (`auth` or `mock`). `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` for rollout diagnostics.
+- `GET /me` includes the resolved user `source` (`auth` or `mock`). `GET /debug/auth-context` returns the resolved `user_id`, `role`, `company_id`, and context `source` for rollout diagnostics. `GET /debug/auth-token` requires a bearer token and returns only safe decoded JWT header/payload diagnostics without returning the token.
 
 Supabase Auth user linking:
 
@@ -325,6 +325,7 @@ Major endpoints:
 - `GET /` and `GET /health`: service health.
 - `GET /me`: current user context, active company, permissions, and auth source; uses real Supabase JWT auth when a bearer token is present and mock admin only when no token is sent.
 - `GET /debug/auth-context`: diagnostic for resolved user, role, tenant, and `mock`/`auth` source.
+- `GET /debug/auth-token`: diagnostic for bearer-token JWT metadata. It requires `Authorization: Bearer <token>` and returns only safe decoded fields (`alg`, `typ`, `iss`, `aud`, `exp`, and whether `sub`/`email` exist).
 - `GET /companies`: platform-admin company list.
 - `GET /questions`: paginated local inbox source.
 - `GET /questions/{question_id}`: tenant-scoped question detail.
@@ -561,6 +562,18 @@ These rules are important:
 - Keep app answers and portal answers distinct through `answered_source`.
 - Do not overwrite existing AI suggestions unless the user explicitly regenerates or edits them.
 - Keep product data cached locally and use cache lookups for UI and AI context.
+
+## Troubleshooting
+
+### `AUTH_INVALID_TOKEN` on authenticated API calls
+
+If the frontend login succeeds but backend API calls return `401` with `AUTH_INVALID_TOKEN`:
+
+- Check that Render has the correct `SUPABASE_JWT_SECRET` for the Supabase project. A wrong secret must fail signature validation and still return `401`.
+- Check the token header `alg`; Supabase access tokens for this backend must validate as `HS256`.
+- Check the token payload `aud`; valid Supabase user access tokens commonly use `authenticated`, and the backend accepts that audience rather than requiring the project URL.
+- Check the token payload `iss`; it should match `SUPABASE_URL + "/auth/v1"` after normalizing trailing slashes.
+- Use `GET /debug/auth-token` with the same `Authorization: Bearer <token>` header to inspect only safe decoded diagnostics. This endpoint never returns the token or backend secrets.
 
 ## Local Development
 
