@@ -162,10 +162,18 @@ User roles:
 
 Frontend role-based UI behavior:
 
-- `platform_admin`: sees company selector, can switch tenant context, and sees Inbox/Pendentes/Respondidas/Integrações/Analytics/Configurações menus.
+- `platform_admin`: sees company selector, can switch tenant context, and sees Inbox/Pendentes/Respondidas/Integrações/Analytics/Configurações/Usuários menus.
 - `company_admin`: never sees company selector, frontend forces tenant context to backend `/me.company.id`, and sees Inbox/Pendentes/Respondidas/Integrações/Configurações menus.
 - `operator`: never sees company selector, frontend forces tenant context to backend `/me.company.id`, and sees only Inbox/Pendentes/Respondidas menus.
 - Frontend menu visibility is UX-only; backend route authorization remains the source of truth and must enforce role permissions server-side for admin/debug routes.
+
+Admin user management UI:
+
+- `platform_admin` has an admin-only **Usuários** screen in the app UI.
+- The page calls `GET /admin/users` to list local users and displays `name`, `email`, `role`, `company_id` (and company name when available on the frontend company list), and `auth_user_id`.
+- The page includes a local linking form that calls `POST /admin/users/link-supabase` with `email`, `auth_user_id`, `name`, `company_id`, and `role` (`platform_admin`, `company_admin`, `operator`).
+- The UI explicitly keeps Supabase Auth user creation manual in this phase: create user in Supabase Auth first, copy UID, then link locally in **Usuários**.
+- If backend returns `403`, the page shows a friendly access message and keeps backend as permission source of truth.
 
 Webhook routing:
 

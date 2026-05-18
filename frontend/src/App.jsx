@@ -15,6 +15,7 @@ import {
   Sparkles,
   Store,
   ThumbsDown,
+  Users,
   X,
 } from "lucide-react";
 
@@ -73,15 +74,152 @@ const navItems = [
   { label: "Integrações", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
   { label: "Configurações", icon: Settings },
+  { label: "Usuários", icon: Users },
 ];
 
 const navItemsByRole = {
   platform_admin: navItems,
-  company_admin: navItems.filter((item) => item.label !== "Analytics"),
+  company_admin: navItems.filter((item) => !["Analytics", "Usuários"].includes(item.label)),
   operator: navItems.filter(
-    (item) => !["Integrações", "Configurações", "Analytics"].includes(item.label)
+    (item) => !["Integrações", "Configurações", "Analytics", "Usuários"].includes(item.label)
   ),
 };
+
+function UsersAdminPage({
+  companies,
+  currentCompany,
+  currentUser,
+  permissions,
+  onCompanyChange,
+  isAuthenticated,
+  onLogout,
+}) {
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [submitMessage, setSubmitMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [form, setForm] = useState({ email: "", auth_user_id: "", name: "", company_id: "", role: "operator" });
+
+  useEffect(() => {
+    const defaultCompanyId = currentCompany?.id || companies[0]?.id || "";
+    setForm((current) => ({ ...current, company_id: current.company_id || defaultCompanyId }));
+  }, [companies, currentCompany?.id]);
+
+  async function loadAdminUsers() {
+    setLoadingUsers(true);
+    setErrorMessage("");
+    try {
+      const response = await apiFetch(`${API_URL}/admin/users`);
+      const data = await response.json().catch(() => []);
+      if (response.status === 403) {
+        setErrorMessage("Acesso negado. Esta área é permitida apenas para administrador da plataforma.");
+        setUsers([]);
+        return;
+      }
+      if (!response.ok || !Array.isArray(data)) {
+        throw new Error("Não foi possível carregar usuários.");
+      }
+      setUsers(data);
+    } catch (error) {
+      setErrorMessage(error.message || "Não foi possível carregar usuários.");
+      setUsers([]);
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAdminUsers();
+  }, []);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitMessage("");
+    setIsSubmitting(true);
+    try {
+      const response = await apiFetch(`${API_URL}/admin/users/link-supabase`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 403) {
+        setSubmitMessage("Acesso negado. Apenas platform_admin pode vincular usuários.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(data.detail || "Não foi possível vincular usuário.");
+      }
+      setSubmitMessage(`Usuário ${data.email} vinculado com sucesso.`);
+      setForm((current) => ({ ...current, email: "", auth_user_id: "", name: "" }));
+      await loadAdminUsers();
+    } catch (error) {
+      setSubmitMessage(error.message || "Não foi possível vincular usuário.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const companyNameById = new Map(companies.map((company) => [company.id, company.name]));
+
+  return (
+    <section className="settings-page">
+      <ScreenHeader
+        title="Usuários"
+        subtitle="Gestão local de vínculos"
+        companies={companies}
+        currentCompany={currentCompany}
+        currentUser={currentUser}
+        permissions={permissions}
+        onCompanyChange={onCompanyChange}
+        isAuthenticated={isAuthenticated}
+        onLogout={onLogout}
+      />
+      <div className="settings-card users-admin-card">
+        <p className="settings-warning">Crie primeiro o usuário no Supabase Auth, copie o UID e vincule aqui à empresa.</p>
+        <form className="settings-form users-admin-form" onSubmit={handleSubmit}>
+          <label>Email<input value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} required /></label>
+          <label>Auth User ID<input value={form.auth_user_id} onChange={(event) => setForm((current) => ({ ...current, auth_user_id: event.target.value }))} required /></label>
+          <label>Nome<input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+          <label>Empresa
+            <select value={form.company_id} onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))} required>
+              {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+            </select>
+          </label>
+          <label>Role
+            <select value={form.role} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} required>
+              <option value="platform_admin">platform_admin</option>
+              <option value="company_admin">company_admin</option>
+              <option value="operator">operator</option>
+            </select>
+          </label>
+          <div className="settings-actions">
+            <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Vinculando..." : "Vincular usuário"}</button>
+          </div>
+        </form>
+        {submitMessage ? <p className="settings-message">{submitMessage}</p> : null}
+        {errorMessage ? <p className="settings-warning">{errorMessage}</p> : null}
+        <div className="users-admin-table-wrap">
+          <table className="users-admin-table">
+            <thead><tr><th>Nome</th><th>Email</th><th>Role</th><th>Empresa</th><th>Auth User ID</th></tr></thead>
+            <tbody>
+              {loadingUsers ? <tr><td colSpan={5}>Carregando usuários...</td></tr> : users.map((user) => (
+                <tr key={user.id}>
+                  <td>{user.name || "-"}</td>
+                  <td>{user.email || "-"}</td>
+                  <td>{user.role || "-"}</td>
+                  <td>{user.company_id ? `${companyNameById.get(user.company_id) || user.company_id} (${user.company_id})` : "-"}</td>
+                  <td>{user.auth_user_id || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 // TODO security: backend must enforce role access for platform/admin/debug routes regardless of frontend menu visibility.
 function getRoleAwareNavItems(role) {
@@ -3116,6 +3254,7 @@ export default function App() {
   const isIntegrations = active === "Integrações";
   const isSettings = active === "Configurações";
   const isAnalytics = active === "Analytics";
+  const isUsersAdmin = active === "Usuários";
   useEffect(() => {
     if (!allowedNavItems.some((item) => item.label === active)) {
       setActive("Inbox");
@@ -3151,7 +3290,7 @@ export default function App() {
         navItems={allowedNavItems}
       />
 
-      <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
+      <main className={`workspace ${isIntegrations || isSettings || isAnalytics || isUsersAdmin ? "single-view" : ""}`}>
         {isIntegrations ? (
           <IntegrationsPage
             companies={companies}
@@ -3222,6 +3361,16 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onCompanyChange={switchCompany}
+          />
+        ) : isUsersAdmin ? (
+          <UsersAdminPage
+            companies={companies}
+            currentCompany={currentCompany}
+            currentUser={currentUser}
+            permissions={currentPermissions}
+            onCompanyChange={switchCompany}
+            isAuthenticated={Boolean(authSession)}
+            onLogout={handleLogout}
           />
         ) : (
           <>
