@@ -160,6 +160,13 @@ User roles:
 - `company_admin`: company-scoped administrator; can use only their linked `users.company_id` and cannot switch companies.
 - `operator`: company-scoped operator; can use only their linked `users.company_id` and cannot switch companies.
 
+Frontend role-based UI behavior:
+
+- `platform_admin`: sees company selector, can switch tenant context, and sees Inbox/Pendentes/Respondidas/Integrações/Analytics/Configurações menus.
+- `company_admin`: never sees company selector, frontend forces tenant context to backend `/me.company.id`, and sees Inbox/Pendentes/Respondidas/Integrações/Configurações menus.
+- `operator`: never sees company selector, frontend forces tenant context to backend `/me.company.id`, and sees only Inbox/Pendentes/Respondidas menus.
+- Frontend menu visibility is UX-only; backend route authorization remains the source of truth and must enforce role permissions server-side for admin/debug routes.
+
 Webhook routing:
 
 - Mercado Livre webhooks arrive at `POST /integrations/mercadolivre/notifications`.

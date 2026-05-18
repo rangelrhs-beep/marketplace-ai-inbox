@@ -75,6 +75,19 @@ const navItems = [
   { label: "Configurações", icon: Settings },
 ];
 
+const navItemsByRole = {
+  platform_admin: navItems,
+  company_admin: navItems.filter((item) => item.label !== "Analytics"),
+  operator: navItems.filter(
+    (item) => !["Integrações", "Configurações", "Analytics"].includes(item.label)
+  ),
+};
+
+// TODO security: backend must enforce role access for platform/admin/debug routes regardless of frontend menu visibility.
+function getRoleAwareNavItems(role) {
+  return navItemsByRole[role] || navItemsByRole.operator;
+}
+
 const initialIntegrations = [
   {
     id: "mercado-livre",
@@ -434,7 +447,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
   });
 }
 
-function Sidebar({ active, onNavigate }) {
+function Sidebar({ active, onNavigate, navItems }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -520,8 +533,8 @@ function LoginScreen({ email, password, error, isLoading, onEmailChange, onPassw
   );
 }
 
-function CompanySwitcher({ companies, currentCompany, permissions, onChange }) {
-  const canSwitch = permissions?.can_switch_company;
+function CompanySwitcher({ companies, currentCompany, permissions, currentUserRole, onChange }) {
+  const canSwitch = permissions?.can_switch_company && currentUserRole === "platform_admin";
   if (!canSwitch || companies.length <= 1) {
     if (canSwitch) console.log("Company selector fallback", { companiesCount: companies.length, companies });
     return (
@@ -617,6 +630,7 @@ function ScreenHeader({
           companies={companies}
           currentCompany={currentCompany}
           permissions={permissions}
+          currentUserRole={currentUser?.role}
           onChange={onCompanyChange}
         />
         {subtitle ? <span>{subtitle}</span> : null}
@@ -2301,14 +2315,30 @@ export default function App() {
           });
           return;
         }
-        if (tenant?.company?.id && tenant.company.id !== requestCompanyId) {
+        const resolvedRole = tenant?.user?.role || "";
+        const backendCompanyId = tenant?.company?.id || "";
+        if (resolvedRole !== "platform_admin" && backendCompanyId) {
+          // TODO security: enforce role-based tenant lock server-side for all admin-only routes.
+          if (requestCompanyId !== backendCompanyId) {
+            console.log("/me response forced non-platform tenant", {
+              requested: requestCompanyId,
+              forced: backendCompanyId,
+              role: resolvedRole,
+            });
+            localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, backendCompanyId);
+            clearTenantQuestionStorage();
+            setSelectedCompanyId(backendCompanyId);
+            return;
+          }
+        }
+        if (backendCompanyId && backendCompanyId !== requestCompanyId) {
           console.log("/me response selected authenticated company", {
             requested: requestCompanyId,
-            found: tenant.company.id,
+            found: backendCompanyId,
           });
-          localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, tenant.company.id);
+          localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, backendCompanyId);
           clearTenantQuestionStorage();
-          setSelectedCompanyId(tenant.company.id);
+          setSelectedCompanyId(backendCompanyId);
           return;
         }
         setTenantContext({
@@ -3066,9 +3096,16 @@ export default function App() {
     }
   }
 
+  const allowedNavItems = getRoleAwareNavItems(currentUser?.role);
   const isIntegrations = active === "Integrações";
   const isSettings = active === "Configurações";
   const isAnalytics = active === "Analytics";
+  useEffect(() => {
+    if (!allowedNavItems.some((item) => item.label === active)) {
+      setActive("Inbox");
+    }
+  }, [active, allowedNavItems]);
+
   const emptyQuestionTitle =
     active === "Pendentes"
       ? "Nenhuma pergunta pendente encontrada."
@@ -3095,6 +3132,7 @@ export default function App() {
       <Sidebar
         active={active}
         onNavigate={changeSection}
+        navItems={allowedNavItems}
       />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
