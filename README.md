@@ -175,6 +175,22 @@ Admin user management UI:
 - The UI explicitly keeps Supabase Auth user creation manual in this phase: create user in Supabase Auth first, copy UID, then link locally in **Usuários**.
 - If backend returns `403`, the page shows a friendly access message and keeps backend as permission source of truth.
 
+Admin company onboarding:
+
+- `platform_admin` can create companies from the app UI in **Empresas** (no manual SQL required).
+- Backend endpoint `POST /admin/companies` requires `platform_admin` and validates:
+  - `id` required
+  - `name` required
+  - `id` format: lowercase slug with letters, numbers, and underscores only (example: `minha_loja`)
+  - duplicate `id` is rejected and existing companies are never overwritten
+- On creation, backend inserts:
+  - new row in `companies`
+  - empty `company_settings` row for the new `company_id`
+  - disconnected Mercado Livre `integrations` row (`provider=mercado_livre`, `token_status=missing`)
+- Company onboarding never copies data from other tenants and never creates products/questions automatically.
+- After creating, `GET /companies` includes the new tenant for `platform_admin`, so it becomes selectable in the company selector.
+- Next steps after creating a company: link users in **Usuários** and connect Mercado Livre in **Integrações**.
+
 Webhook routing:
 
 - Mercado Livre webhooks arrive at `POST /integrations/mercadolivre/notifications`.

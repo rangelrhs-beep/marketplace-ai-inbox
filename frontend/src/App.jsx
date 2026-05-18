@@ -74,16 +74,96 @@ const navItems = [
   { label: "Integrações", icon: PlugZap },
   { label: "Analytics", icon: BarChart3 },
   { label: "Configurações", icon: Settings },
+  { label: "Empresas", icon: Store },
   { label: "Usuários", icon: Users },
 ];
 
 const navItemsByRole = {
   platform_admin: navItems,
-  company_admin: navItems.filter((item) => !["Analytics", "Usuários"].includes(item.label)),
+  company_admin: navItems.filter((item) => !["Analytics", "Empresas", "Usuários"].includes(item.label)),
   operator: navItems.filter(
-    (item) => !["Integrações", "Configurações", "Analytics", "Usuários"].includes(item.label)
+    (item) => !["Integrações", "Configurações", "Analytics", "Empresas", "Usuários"].includes(item.label)
   ),
 };
+
+function CompaniesAdminPage({
+  companies,
+  currentCompany,
+  currentUser,
+  permissions,
+  onCompanyChange,
+  isAuthenticated,
+  onLogout,
+  onCompanyCreated,
+}) {
+  const [form, setForm] = useState({ id: "", name: "" });
+  const [submitMessage, setSubmitMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitMessage("");
+    setIsSubmitting(true);
+    try {
+      const response = await apiFetch(`${API_URL}/admin/companies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || "Não foi possível criar a empresa.");
+      }
+      setSubmitMessage(`Empresa ${data.name} criada com sucesso.`);
+      setForm({ id: "", name: "" });
+      await onCompanyCreated(data.id);
+    } catch (error) {
+      setSubmitMessage(error.message || "Não foi possível criar a empresa.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="settings-page">
+      <ScreenHeader
+        title="Empresas"
+        subtitle="Onboarding de empresas"
+        companies={companies}
+        currentCompany={currentCompany}
+        currentUser={currentUser}
+        permissions={permissions}
+        onCompanyChange={onCompanyChange}
+        isAuthenticated={isAuthenticated}
+        onLogout={onLogout}
+      />
+      <div className="settings-card users-admin-card">
+        <form className="settings-form users-admin-form" onSubmit={handleSubmit}>
+          <label>ID da empresa<input value={form.id} onChange={(event) => setForm((current) => ({ ...current, id: event.target.value }))} required /></label>
+          <label>Nome da empresa<input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required /></label>
+          <p className="settings-warning">Use um ID curto em minúsculas, sem espaços. Ex: minha_loja</p>
+          <div className="settings-actions">
+            <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Criando..." : "Criar empresa"}</button>
+          </div>
+        </form>
+        {submitMessage ? <p className="settings-message">{submitMessage}</p> : null}
+        <div className="users-admin-table-wrap">
+          <table className="users-admin-table">
+            <thead><tr><th>ID</th><th>Nome</th></tr></thead>
+            <tbody>
+              {companies.map((company) => (
+                <tr key={company.id}>
+                  <td>{company.id}</td>
+                  <td>{company.name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function UsersAdminPage({
   companies,
@@ -2228,6 +2308,21 @@ export default function App() {
     setSelectedCompanyId(companyId);
   }
 
+  async function fetchCompanies() {
+    try {
+      const response = await apiFetch(`${API_URL}/companies`);
+      const data = await response.json();
+      console.log("/companies response", data);
+      if (response.ok && Array.isArray(data)) {
+        if (data.length <= 1) console.log("/companies returned one or zero companies", data);
+        setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
+      }
+    } catch {
+      console.log("/companies request failed; using fallback company");
+      setCompanies([FALLBACK_TENANT_CONTEXT.company]);
+    }
+  }
+
   function changeHistoryDays(days) {
     const nextDays = Number(days) === 30 ? 30 : 15;
     resetTenantScopedUi();
@@ -2517,20 +2612,6 @@ export default function App() {
       }
     }
 
-    async function loadCompanies() {
-      try {
-        const response = await apiFetch(`${API_URL}/companies`);
-        const data = await response.json();
-        console.log("/companies response", data);
-        if (response.ok && Array.isArray(data)) {
-          if (data.length <= 1) console.log("/companies returned one or zero companies", data);
-          setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
-        }
-      } catch {
-        console.log("/companies request failed; using fallback company");
-        setCompanies([FALLBACK_TENANT_CONTEXT.company]);
-      }
-    }
 
     async function loadPersistedQuestions() {
       try {
@@ -2562,7 +2643,7 @@ export default function App() {
       }
     }
 
-    loadTenantContext().then(loadCompanies);
+    loadTenantContext().then(fetchCompanies);
     const initialLoadKey = `${selectedCompanyId}|${historyDays}|${authSession?.access_token || "no-token"}`;
     if (lastQuestionsLoadKeyRef.current !== initialLoadKey) {
       lastQuestionsLoadKeyRef.current = initialLoadKey;
@@ -3254,6 +3335,7 @@ export default function App() {
   const isIntegrations = active === "Integrações";
   const isSettings = active === "Configurações";
   const isAnalytics = active === "Analytics";
+  const isCompaniesAdmin = active === "Empresas";
   const isUsersAdmin = active === "Usuários";
   useEffect(() => {
     if (!allowedNavItems.some((item) => item.label === active)) {
@@ -3290,7 +3372,7 @@ export default function App() {
         navItems={allowedNavItems}
       />
 
-      <main className={`workspace ${isIntegrations || isSettings || isAnalytics || isUsersAdmin ? "single-view" : ""}`}>
+      <main className={`workspace ${isIntegrations || isSettings || isAnalytics || isCompaniesAdmin || isUsersAdmin ? "single-view" : ""}`}>
         {isIntegrations ? (
           <IntegrationsPage
             companies={companies}
@@ -3361,6 +3443,20 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onCompanyChange={switchCompany}
+          />
+        ) : isCompaniesAdmin ? (
+          <CompaniesAdminPage
+            companies={companies}
+            currentCompany={currentCompany}
+            currentUser={currentUser}
+            permissions={currentPermissions}
+            onCompanyChange={switchCompany}
+            isAuthenticated={Boolean(authSession)}
+            onLogout={handleLogout}
+            onCompanyCreated={async (newCompanyId) => {
+              await fetchCompanies();
+              await switchCompany(newCompanyId);
+            }}
           />
         ) : isUsersAdmin ? (
           <UsersAdminPage

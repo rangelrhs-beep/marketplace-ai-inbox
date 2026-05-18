@@ -78,6 +78,7 @@ P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 P256_POINT_INFINITY: tuple[int, int] | None = None
 
 ALLOWED_ADMIN_LINK_ROLES = {"platform_admin", "company_admin", "operator"}
+COMPANY_ID_SLUG_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
 class AdminUserLinkRequest(BaseModel):
@@ -86,6 +87,11 @@ class AdminUserLinkRequest(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     company_id: str = Field(..., min_length=1, max_length=64)
     role: str = Field(..., min_length=1, max_length=50)
+
+
+class AdminCompanyCreateRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=255)
 
 
 def normalize_admin_user_email(email: str) -> str:
@@ -4062,6 +4068,41 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
     ]
 
 
+@app.post("/admin/companies")
+def create_admin_company(payload: AdminCompanyCreateRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = require_platform_admin(request)
+    company_id = payload.id.strip()
+    company_name = payload.name.strip()
+    logger.info("ADMIN_COMPANY_CREATE_ATTEMPT user_id=%s company_id=%s", current_user.id, company_id)
+
+    if not company_id:
+        logger.warning("ADMIN_COMPANY_CREATE_REJECTED reason=missing_id")
+        raise HTTPException(status_code=422, detail="id is required.")
+    if not company_name:
+        logger.warning("ADMIN_COMPANY_CREATE_REJECTED reason=missing_name company_id=%s", company_id)
+        raise HTTPException(status_code=422, detail="name is required.")
+    if not COMPANY_ID_SLUG_PATTERN.fullmatch(company_id):
+        logger.warning("ADMIN_COMPANY_CREATE_REJECTED reason=invalid_id_format company_id=%s", company_id)
+        raise HTTPException(status_code=422, detail="id must use lowercase letters, numbers, and underscores only.")
+    if db.get(Company, company_id) is not None:
+        logger.warning("ADMIN_COMPANY_CREATE_REJECTED reason=duplicate_id company_id=%s", company_id)
+        raise HTTPException(status_code=409, detail="Company id already exists.")
+
+    company = Company(id=company_id, name=company_name)
+    db.add(company)
+    db.add(CompanySettings(company_id=company_id))
+    db.add(Integration(company_id=company_id, provider=DEFAULT_PROVIDER, token_status="missing"))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.warning("ADMIN_COMPANY_CREATE_REJECTED reason=integrity_error company_id=%s", company_id)
+        raise HTTPException(status_code=409, detail="Company could not be created due to a conflict.")
+
+    logger.info("ADMIN_COMPANY_CREATE_SUCCESS user_id=%s company_id=%s", current_user.id, company_id)
+    return {"id": company.id, "name": company.name}
+
+
 @app.post("/admin/users/link-supabase")
 def link_supabase_user(payload: AdminUserLinkRequest, request: Request, db: Session = Depends(get_db)):
     email = normalize_admin_user_email(payload.email)
@@ -5984,4 +6025,3 @@ def approve_question(question_id: int, payload: ApprovePayload, request: Request
     db.commit()
     db.refresh(question)
     return question_to_api(question, db=db, company_id=company_id)
-
