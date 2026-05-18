@@ -1612,6 +1612,34 @@ button:disabled {
   min-height: calc(100vh - 48px);
 }
 
+.users-admin-card {
+  margin-top: 22px;
+}
+
+.users-admin-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.users-admin-table-wrap {
+  margin-top: 16px;
+  overflow: auto;
+}
+
+.users-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.users-admin-table th,
+.users-admin-table td {
+  border-bottom: 1px solid #e8edf5;
+  text-align: left;
+  padding: 10px;
+  vertical-align: top;
+}
+
 .integration-hero {
   margin: 22px 0;
   border-radius: 24px;
