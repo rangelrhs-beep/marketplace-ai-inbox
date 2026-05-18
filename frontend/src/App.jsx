@@ -56,9 +56,9 @@ function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
   return permission === "granted" && appNotificationsEnabled !== false;
 }
 
-function getFriendlyNotificationStatus(permission) {
-  if (permission === "granted") return "Notificações: ativada";
+function formatNotificationStatus(permission, appEnabled) {
   if (permission === "unsupported") return "Notificações: indisponível";
+  if (permission === "granted" && appEnabled !== false) return "Notificações: ativada";
   return "Notificações: desativada";
 }
 
@@ -3674,7 +3674,7 @@ export default function App() {
         ? "Nenhuma pergunta respondida encontrada."
         : "Nenhuma pergunta encontrada.";
 
-  const notificationStatusText = getFriendlyNotificationStatus(notificationPermission);
+  const notificationStatusText = formatNotificationStatus(notificationPermission, appNotificationsEnabled);
   const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, appNotificationsEnabled);
 
   if (isSupabaseAuthConfigured && !authSession) {
