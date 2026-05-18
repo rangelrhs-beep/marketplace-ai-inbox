@@ -332,6 +332,18 @@ button:disabled {
   padding: 0 4px 8px;
 }
 
+.header-user-menu-help {
+  max-width: 260px;
+  margin: 0 4px 8px;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #44506a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  padding: 8px;
+}
+
 .header-user-menu-logout {
   width: 100%;
   min-height: 38px;

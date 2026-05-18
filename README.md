@@ -678,8 +678,9 @@ Add tests whenever changing tenant isolation, question listing, Mercado Livre sy
 
 - Frontend now tracks tenant-scoped pending-question increases from `GET /questions` responses and shows an in-app Inbox badge/count without changing Mercado Livre answered/read state.
 - When pending count increases while app is open, frontend shows a grouped/debounced notice: `Nova pergunta recebida` (with product title when available).
-- Users can enable browser notifications from the app menu (`Ativar notificações`), which requests `Notification` permission and provides a friendly denial message.
-- Browsers do not allow apps to programmatically revoke denied notification permission; when permission is blocked, the app shows guidance to re-enable it in the browser/site/app settings.
+- Users can enable browser notifications from the app menu (`Ativar notificações`), which requests `Notification` permission only while browser permission is still undecided.
+- Browsers do not allow apps to re-trigger the permission popup after notification permission is denied; this is expected browser behavior, especially on Android Chrome and installed PWAs.
+- When permission is blocked, the app follows the same settings/help flow used by native apps: the menu shows friendly notification status, an `Abrir configurações` action, and compact guidance to re-enable notifications in browser site permissions or installed app settings.
 - When browser permission is granted, the app supports local enable/disable with the `notifications_enabled=true/false` preference without trying to revoke browser permission.
 - If browser permission is granted and the local app preference is enabled, the app emits local browser notifications while open (`Nova pergunta no Marketplace`) using product title or question preview in the body.
 - Backend groundwork added: `push_subscriptions` table and protected placeholder endpoints:

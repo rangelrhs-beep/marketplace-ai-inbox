@@ -44,7 +44,7 @@ function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
   return permission === "granted" && appNotificationsEnabled !== false;
 }
 
-function getNotificationStatusText(permission, appNotificationsEnabled) {
+function getFriendlyNotificationStatus(permission, appNotificationsEnabled) {
   if (permission === "unsupported") return "Notificações: indisponível";
   return isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)
     ? "Notificações: ativada"
@@ -52,15 +52,21 @@ function getNotificationStatusText(permission, appNotificationsEnabled) {
 }
 
 function getNotificationButtonLabel(permission, appNotificationsEnabled) {
-  return isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)
-    ? "Desativar notificações"
-    : "Ativar notificações";
+  if (isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)) {
+    return "Desativar notificações";
+  }
+  if (permission === "denied") return "Abrir configurações";
+  return "Ativar notificações";
 }
 
 function getBlockedNotificationMessage() {
+  return "As notificações estão bloqueadas no navegador.";
+}
+
+function getBlockedNotificationHelpText() {
   return (
-    "As notificações estão bloqueadas no navegador. Ative nas configurações do site/app para receber alertas. " +
-    "Toque no cadeado/ícone de permissões do navegador > Notificações > Permitir."
+    "Android Chrome: 1. Toque no ícone ao lado do endereço/site. 2. Permissões. 3. Notificações. 4. Permitir. " +
+    "Você também pode ativar nas configurações do aplicativo instalado."
   );
 }
 
@@ -151,6 +157,7 @@ function CompaniesAdminPage({
   onEnableNotifications,
   notificationStatusText,
   notificationButtonLabel,
+  notificationHelpText,
   onCompanyCreated,
 }) {
   const [form, setForm] = useState({ id: "", name: "" });
@@ -196,6 +203,7 @@ function CompaniesAdminPage({
         onEnableNotifications={onEnableNotifications}
         notificationStatusText={notificationStatusText}
         notificationButtonLabel={notificationButtonLabel}
+        notificationHelpText={notificationHelpText}
       />
       <div className="settings-card users-admin-card">
         <form className="settings-form users-admin-form" onSubmit={handleSubmit}>
@@ -236,6 +244,7 @@ function UsersAdminPage({
   onEnableNotifications,
   notificationStatusText,
   notificationButtonLabel,
+  notificationHelpText,
 }) {
   const [users, setUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
@@ -321,6 +330,7 @@ function UsersAdminPage({
         onEnableNotifications={onEnableNotifications}
         notificationStatusText={notificationStatusText}
         notificationButtonLabel={notificationButtonLabel}
+        notificationHelpText={notificationHelpText}
       />
       <div className="settings-card users-admin-card">
         <p className="settings-warning">Crie primeiro o usuário no Supabase Auth, copie o UID e vincule aqui à empresa.</p>
@@ -860,6 +870,7 @@ function ScreenHeader({
   onEnableNotifications = () => {},
   notificationStatusText = "",
   notificationButtonLabel = "Ativar notificações",
+  notificationHelpText = "",
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userName = currentUser?.name || "";
@@ -914,6 +925,7 @@ function ScreenHeader({
                   {notificationButtonLabel}
                 </button>
                 {notificationStatusText ? <div className="header-user-menu-meta">{notificationStatusText}</div> : null}
+                {notificationHelpText ? <div className="header-user-menu-help">{notificationHelpText}</div> : null}
               </div>
             ) : null}
           </div>
@@ -1169,6 +1181,7 @@ function IntegrationsPage({
   onEnableNotifications,
   notificationStatusText,
   notificationButtonLabel,
+  notificationHelpText,
 }) {
   const tenantIntegrations = integrations.filter((item) => !item.company_id || item.company_id === selectedCompanyId);
   const connectedCount = isIntegrationHealthLoading ? 0 : tenantIntegrations.filter((item) => item.status === "Conectado").length;
@@ -1191,6 +1204,7 @@ function IntegrationsPage({
         onEnableNotifications={onEnableNotifications}
         notificationStatusText={notificationStatusText}
         notificationButtonLabel={notificationButtonLabel}
+        notificationHelpText={notificationHelpText}
       />
 
       <div className="integration-hero">
@@ -1302,6 +1316,7 @@ function SettingsPage({
   onEnableNotifications,
   notificationStatusText,
   notificationButtonLabel,
+  notificationHelpText,
 }) {
   const savedSettings = {
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
@@ -1558,6 +1573,7 @@ function SettingsPage({
         onEnableNotifications={onEnableNotifications}
         notificationStatusText={notificationStatusText}
         notificationButtonLabel={notificationButtonLabel}
+        notificationHelpText={notificationHelpText}
       />
 
       <section className="settings-layout ai-config-layout">
@@ -1652,6 +1668,7 @@ function AnalyticsPage({
   onEnableNotifications,
   notificationStatusText,
   notificationButtonLabel,
+  notificationHelpText,
 }) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
@@ -1672,6 +1689,7 @@ function AnalyticsPage({
         onEnableNotifications={onEnableNotifications}
         notificationStatusText={notificationStatusText}
         notificationButtonLabel={notificationButtonLabel}
+        notificationHelpText={notificationHelpText}
       />
 
       <div className="settings-grid">
@@ -2371,18 +2389,37 @@ export default function App() {
   const [lastPendingCount, setLastPendingCount] = useState(0);
   const [notificationPermission, setNotificationPermission] = useState(getBrowserNotificationPermission());
   const [appNotificationsEnabled, setAppNotificationsEnabled] = useState(getStoredNotificationPreference);
+  const [notificationHelpText, setNotificationHelpText] = useState("");
   const notificationDebounceRef = useRef(null);
 
   const questions = appData.questions;
   const integrations = appData.integrations;
 
   useEffect(() => {
+    let permissionStatus = null;
+
     function refreshNotificationPermission() {
       setNotificationPermission(getBrowserNotificationPermission());
     }
 
     window.addEventListener("focus", refreshNotificationPermission);
-    return () => window.removeEventListener("focus", refreshNotificationPermission);
+
+    if (navigator.permissions?.query) {
+      navigator.permissions
+        .query({ name: "notifications" })
+        .then((status) => {
+          permissionStatus = status;
+          status.onchange = refreshNotificationPermission;
+        })
+        .catch(() => {
+          permissionStatus = null;
+        });
+    }
+
+    return () => {
+      window.removeEventListener("focus", refreshNotificationPermission);
+      if (permissionStatus) permissionStatus.onchange = null;
+    };
   }, []);
 
   function setQuestions(nextQuestions) {
@@ -2457,6 +2494,7 @@ export default function App() {
     setNotificationPermission(permission);
 
     if (permission === "unsupported") {
+      setNotificationHelpText("");
       setQuestionNotice("Seu navegador não suporta notificações.");
       return;
     }
@@ -2464,6 +2502,7 @@ export default function App() {
     if (isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)) {
       localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
       setAppNotificationsEnabled(false);
+      setNotificationHelpText("");
       setQuestionNotice("Notificações desativadas neste app.");
       return;
     }
@@ -2471,31 +2510,33 @@ export default function App() {
     if (permission === "granted") {
       localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "true");
       setAppNotificationsEnabled(true);
+      setNotificationHelpText("");
       setQuestionNotice("Notificações ativadas neste app.");
       return;
     }
 
     if (permission === "denied") {
-      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
-      setAppNotificationsEnabled(false);
+      setNotificationHelpText(getBlockedNotificationHelpText());
       setQuestionNotice(getBlockedNotificationMessage());
       return;
     }
 
+    setNotificationHelpText("");
     const requestedPermission = await Notification.requestPermission();
     setNotificationPermission(requestedPermission);
     if (requestedPermission === "granted") {
       localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "true");
       setAppNotificationsEnabled(true);
+      setNotificationHelpText("");
       setQuestionNotice("Notificações ativadas neste app.");
     } else {
-      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
-      setAppNotificationsEnabled(false);
-      setQuestionNotice(
-        requestedPermission === "denied"
-          ? getBlockedNotificationMessage()
-          : "Notificações não ativadas. Você pode tentar novamente pelo menu."
-      );
+      if (requestedPermission === "denied") {
+        setNotificationHelpText(getBlockedNotificationHelpText());
+        setQuestionNotice(getBlockedNotificationMessage());
+      } else {
+        setNotificationHelpText("");
+        setQuestionNotice("Notificações não ativadas. Você pode tentar novamente pelo menu.");
+      }
     }
   }
 
@@ -3563,7 +3604,7 @@ export default function App() {
         ? "Nenhuma pergunta respondida encontrada."
         : "Nenhuma pergunta encontrada.";
 
-  const notificationStatusText = getNotificationStatusText(notificationPermission, appNotificationsEnabled);
+  const notificationStatusText = getFriendlyNotificationStatus(notificationPermission, appNotificationsEnabled);
   const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, appNotificationsEnabled);
 
   if (isSupabaseAuthConfigured && !authSession) {
@@ -3604,6 +3645,7 @@ export default function App() {
             onEnableNotifications={handleEnableNotifications}
             notificationStatusText={notificationStatusText}
             notificationButtonLabel={notificationButtonLabel}
+            notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
@@ -3639,6 +3681,7 @@ export default function App() {
             onEnableNotifications={handleEnableNotifications}
             notificationStatusText={notificationStatusText}
             notificationButtonLabel={notificationButtonLabel}
+            notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
             onSettingsSaved={(settings) =>
               setAppData((current) => ({
@@ -3667,6 +3710,7 @@ export default function App() {
             onEnableNotifications={handleEnableNotifications}
             notificationStatusText={notificationStatusText}
             notificationButtonLabel={notificationButtonLabel}
+            notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
           />
         ) : isCompaniesAdmin ? (
@@ -3681,6 +3725,7 @@ export default function App() {
             onEnableNotifications={handleEnableNotifications}
             notificationStatusText={notificationStatusText}
             notificationButtonLabel={notificationButtonLabel}
+            notificationHelpText={notificationHelpText}
             onCompanyCreated={async (newCompanyId) => {
               await fetchCompanies();
               await switchCompany(newCompanyId);
@@ -3698,6 +3743,7 @@ export default function App() {
             onEnableNotifications={handleEnableNotifications}
             notificationStatusText={notificationStatusText}
             notificationButtonLabel={notificationButtonLabel}
+            notificationHelpText={notificationHelpText}
           />
         ) : (
           <>
@@ -3717,6 +3763,7 @@ export default function App() {
                 onEnableNotifications={handleEnableNotifications}
                 notificationStatusText={notificationStatusText}
                 notificationButtonLabel={notificationButtonLabel}
+                notificationHelpText={notificationHelpText}
               />
 
               <div className="metrics">
