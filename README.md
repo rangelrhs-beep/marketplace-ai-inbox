@@ -69,6 +69,14 @@ AI provider:
 - Configurable model via `OPENAI_MODEL`.
 - Default in env example: `gpt-4o-mini`.
 
+## Performance Notes
+
+- Render free-tier cold starts can add latency on the first backend hit; frontend keeps lightweight loading states and avoids duplicate fetch storms during tenant/tab switches.
+- `GET /questions` is local-DB only and paginated; backend does not merge live Mercado Livre history in this path and keeps tenant-scoped buyer enrichment cached locally.
+- Frontend request stabilization includes per-tenant request de-duplication, stale request cancellation on company switches, and a small debounce before initial question reloads.
+- API retries should be friendly and bounded (short retry for temporary `5xx`, no infinite retry loops); manual user actions remain available for explicit retry.
+- Future scaling recommendation: add Redis for cross-instance caches (buyer/profile + short-lived question payload cache), move heavy sync/import jobs to queue workers, and keep webhook-driven writes as the real-time source.
+
 Backend auth environment:
 
 - `SUPABASE_URL`: Supabase project URL used to validate JWT issuer and fetch Supabase Auth JWKS signing keys. Required for bearer-token auth.

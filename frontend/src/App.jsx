@@ -50,6 +50,25 @@ async function apiFetch(url, options = {}) {
   return fetch(url, { ...options, headers });
 }
 
+async function apiFetchWithRetry(url, options = {}, { retries = 1, retryDelayMs = 500 } = {}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      const response = await apiFetch(url, options);
+      if (response.status >= 500 && attempt < retries) {
+        attempt += 1;
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      if (attempt >= retries) throw error;
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+    }
+  }
+}
+
 function clearTenantQuestionStorage() {
   const keys = [
     "questions",
@@ -2237,6 +2256,8 @@ function InstallAppHint() {
 export default function App() {
   const inFlightQuestionsRequestsRef = useRef(new Set());
   const lastQuestionsLoadKeyRef = useRef("");
+  const questionsAbortControllersRef = useRef(new Map());
+  const debouncedQuestionsLoadRef = useRef(null);
   const [authSession, setAuthSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseAuthConfigured);
   const [loginEmail, setLoginEmail] = useState("");
@@ -2368,6 +2389,9 @@ export default function App() {
   function switchCompany(companyId) {
     const previousCompanyId = getStoredCompanyId();
     console.log(`FRONTEND_TENANT_SWITCH from=${previousCompanyId} to=${companyId}`);
+    questionsAbortControllersRef.current.forEach((controller) => controller.abort());
+    questionsAbortControllersRef.current.clear();
+    inFlightQuestionsRequestsRef.current.clear();
     localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, companyId);
     resetTenantScopedUi();
     setSelectedCompanyId(companyId);
@@ -2462,46 +2486,37 @@ export default function App() {
     const pageSize = questionsPageInfo.page_size || 20;
     const requestKey = `${requestCompanyId}|${historyDays}|${page}`;
     if (inFlightQuestionsRequestsRef.current.has(requestKey)) {
-      console.log(`FRONTEND_QUESTIONS_FETCH_SKIPPED_DUPLICATE key=${requestKey}`);
       return [];
     }
+    const previousController = questionsAbortControllersRef.current.get(requestKey);
+    if (previousController) {
+      previousController.abort();
+    }
+    const controller = new AbortController();
+    questionsAbortControllersRef.current.set(requestKey, controller);
     inFlightQuestionsRequestsRef.current.add(requestKey);
-    console.log(`FRONTEND_QUESTIONS_FETCH_START key=${requestKey} append=${append}`);
     if (append) {
       setIsLoadingMoreQuestions(true);
     } else {
       setIsQuestionsLoading(true);
     }
     try {
-      const response = await apiFetch(`${API_URL}/questions?days=${historyDays}&page=${page}&page_size=${pageSize}`);
+      const response = await apiFetchWithRetry(
+        `${API_URL}/questions?days=${historyDays}&page=${page}&page_size=${pageSize}`,
+        { signal: controller.signal },
+        { retries: 1, retryDelayMs: 600 }
+      );
       const data = await response.json();
       const responseItems = Array.isArray(data) ? data : data.items;
       if (!response.ok || !Array.isArray(responseItems)) {
         throw new Error("Não foi possível carregar perguntas do banco.");
       }
-      const responseSample = responseItems.slice(0, 5).map((question) => [
-        question.external_id,
-        question.company_id,
-        question.product_title || question.product,
-      ]);
-      console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${responseItems.length}`, responseSample);
       if (requestCompanyId !== getStoredCompanyId()) {
-        console.log("QUESTIONS_RESPONSE ignored stale company response", {
-          requested: requestCompanyId,
-          current: getStoredCompanyId(),
-        });
         return [];
       }
       const tenantQuestions = responseItems.filter((question) => {
-        if (!question.company_id || question.company_id !== requestCompanyId) {
-          console.log(
-            `FRONTEND_DROPPED_WRONG_TENANT expected=${requestCompanyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
-          );
-          return false;
-        }
-        return true;
+        return question.company_id && question.company_id === requestCompanyId;
       });
-      console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
       const pendingCount = tenantQuestions.filter((question) => question.status === "Pendente").length;
       setPendingBadgeCount((current) => (active === "Inbox" ? 0 : pendingCount));
       if (pendingCount > lastPendingCount) {
@@ -2529,11 +2544,16 @@ export default function App() {
           : tenantQuestions[0]?.id || null
       );
       return tenantQuestions;
+    } catch (error) {
+      if (error?.name === "AbortError") return [];
+      throw error;
     } finally {
       inFlightQuestionsRequestsRef.current.delete(requestKey);
+      if (questionsAbortControllersRef.current.get(requestKey) === controller) {
+        questionsAbortControllersRef.current.delete(requestKey);
+      }
       setIsQuestionsLoading(false);
       setIsLoadingMoreQuestions(false);
-      console.log(`FRONTEND_QUESTIONS_FETCH_FINISH key=${requestKey}`);
     }
   }
 
@@ -2718,12 +2738,17 @@ export default function App() {
     const initialLoadKey = `${selectedCompanyId}|${historyDays}|${authSession?.access_token || "no-token"}`;
     if (lastQuestionsLoadKeyRef.current !== initialLoadKey) {
       lastQuestionsLoadKeyRef.current = initialLoadKey;
-      loadPersistedQuestions();
-    } else {
-      console.log(`FRONTEND_QUESTIONS_FETCH_SKIPPED_DUPLICATE key=${initialLoadKey}`);
+      if (debouncedQuestionsLoadRef.current) window.clearTimeout(debouncedQuestionsLoadRef.current);
+      debouncedQuestionsLoadRef.current = window.setTimeout(loadPersistedQuestions, 180);
     }
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
+    return () => {
+      if (debouncedQuestionsLoadRef.current) {
+        window.clearTimeout(debouncedQuestionsLoadRef.current);
+        debouncedQuestionsLoadRef.current = null;
+      }
+    };
   }, [selectedCompanyId, historyDays, authSession?.access_token]);
 
   useEffect(() => {
