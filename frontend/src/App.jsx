@@ -689,6 +689,7 @@ function Sidebar({ active, onNavigate, navItems }) {
             >
               <Icon size={19} />
               <span>{item.label}</span>
+              {item.badgeCount > 0 ? <span className="nav-badge">{item.badgeCount}</span> : null}
             </button>
           );
         })}
@@ -790,6 +791,8 @@ function ScreenHeader({
   onCompanyChange,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationPermission,
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userName = currentUser?.name || "";
@@ -840,6 +843,10 @@ function ScreenHeader({
                 >
                   Sair
                 </button>
+                <button type="button" className="header-user-menu-logout" onClick={onEnableNotifications} role="menuitem">
+                  Ativar notificações
+                </button>
+                {notificationPermission ? <div className="header-user-menu-meta">Notificações: {notificationPermission}</div> : null}
               </div>
             ) : null}
           </div>
@@ -2273,6 +2280,10 @@ export default function App() {
     page_size: 20,
     has_more: false,
   });
+  const [pendingBadgeCount, setPendingBadgeCount] = useState(0);
+  const [lastPendingCount, setLastPendingCount] = useState(0);
+  const [notificationPermission, setNotificationPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+  const notificationDebounceRef = useRef(null);
 
   const questions = appData.questions;
   const integrations = appData.integrations;
@@ -2328,6 +2339,30 @@ export default function App() {
     setPendingHistoryImport(null);
     setConnectError("");
     setTestingIntegrationId(null);
+    setPendingBadgeCount(0);
+    setLastPendingCount(0);
+  }
+
+  function queueNewQuestionNotification(nextCount, sampleQuestion) {
+    if (notificationDebounceRef.current) return;
+    notificationDebounceRef.current = window.setTimeout(() => {
+      const productTitle = sampleQuestion?.product_title || sampleQuestion?.product || "";
+      setQuestionNotice(productTitle ? `Nova pergunta recebida: ${productTitle}` : "Nova pergunta recebida");
+      if (notificationPermission === "granted" && typeof Notification !== "undefined") {
+        new Notification("Nova pergunta no Marketplace", { body: productTitle || sampleQuestion?.question || "Nova pergunta pendente" });
+      }
+      notificationDebounceRef.current = null;
+    }, 1200);
+  }
+
+  async function handleEnableNotifications() {
+    if (typeof Notification === "undefined") {
+      setQuestionNotice("Seu navegador não suporta notificações.");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+    if (permission === "denied") setQuestionNotice("Permissão de notificações negada.");
   }
 
   function switchCompany(companyId) {
@@ -2467,6 +2502,12 @@ export default function App() {
         return true;
       });
       console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
+      const pendingCount = tenantQuestions.filter((question) => question.status === "Pendente").length;
+      setPendingBadgeCount((current) => (active === "Inbox" ? 0 : pendingCount));
+      if (pendingCount > lastPendingCount) {
+        queueNewQuestionNotification(pendingCount, tenantQuestions.find((question) => question.status === "Pendente"));
+      }
+      setLastPendingCount(pendingCount);
       const nextPageInfo = Array.isArray(data)
         ? { total: tenantQuestions.length, page, page_size: pageSize, has_more: false }
         : {
@@ -3362,6 +3403,10 @@ export default function App() {
   }
 
   const allowedNavItems = getRoleAwareNavItems(currentUser?.role);
+  const navItemsWithBadge = allowedNavItems.map((item) => item.label === "Inbox" ? { ...item, badgeCount: pendingBadgeCount } : item);
+  useEffect(() => {
+    if (active === "Inbox") setPendingBadgeCount(0);
+  }, [active]);
   const isIntegrations = active === "Integrações";
   const isSettings = active === "Configurações";
   const isAnalytics = active === "Analytics";
@@ -3399,7 +3444,7 @@ export default function App() {
       <Sidebar
         active={active}
         onNavigate={changeSection}
-        navItems={allowedNavItems}
+        navItems={navItemsWithBadge}
       />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics || isCompaniesAdmin || isUsersAdmin ? "single-view" : ""}`}>
@@ -3513,6 +3558,8 @@ export default function App() {
                 onCompanyChange={switchCompany}
                 isAuthenticated={Boolean(authSession)}
                 onLogout={handleLogout}
+                onEnableNotifications={handleEnableNotifications}
+                notificationPermission={notificationPermission}
               />
 
               <div className="metrics">

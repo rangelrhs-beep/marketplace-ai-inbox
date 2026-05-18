@@ -665,3 +665,18 @@ Add tests whenever changing tenant isolation, question listing, Mercado Livre sy
 5. Verify it opens in standalone/fullscreen mode and uses the same backend/auth session.
 6. In DevTools Application tab, validate `manifest.webmanifest` and active service worker.
 7. Confirm question/API refresh still comes from network (no stale API cache from SW).
+
+## Notification readiness (safe first version)
+
+- Frontend now tracks tenant-scoped pending-question increases from `GET /questions` responses and shows an in-app Inbox badge/count without changing Mercado Livre answered/read state.
+- When pending count increases while app is open, frontend shows a grouped/debounced notice: `Nova pergunta recebida` (with product title when available).
+- Users can enable browser notifications from the app menu (`Ativar notificações`), which requests `Notification` permission and provides a friendly denial message.
+- If permission is granted, the app emits local browser notifications while open (`Nova pergunta no Marketplace`) using product title or question preview in the body.
+- Backend groundwork added: `push_subscriptions` table and protected placeholder endpoints:
+  - `POST /notifications/push/subscribe`
+  - `DELETE /notifications/push/unsubscribe`
+- Subscription endpoints are auth-protected and tenant-scoped:
+  - `platform_admin` may subscribe/unsubscribe per selected `company_id`
+  - company-scoped users are limited to their own `company_id`
+- Web Push delivery from Mercado Livre webhook is intentionally not enabled yet.
+  - TODO kept in webhook flow: send Web Push for subscribed users per `company_id` only when full Web Push sending is implemented safely.
