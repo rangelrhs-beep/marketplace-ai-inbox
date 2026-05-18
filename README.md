@@ -646,3 +646,22 @@ python -m pytest tests/test_tenant_isolation_simple.py
 ```
 
 Add tests whenever changing tenant isolation, question listing, Mercado Livre sync/import, webhook routing, or grouped conversation behavior.
+
+
+## PWA install support (mobile)
+
+- The frontend now ships a web app manifest at `frontend/public/manifest.webmanifest` with standalone display mode and app metadata for install prompts.
+- A minimal service worker at `frontend/public/sw.js` caches only the app shell/static assets and explicitly uses network/no-store behavior for API-related requests.
+- API responses, Mercado Livre data, and Supabase auth responses are not stored in the service worker cache.
+- Frontend service worker registration happens only in production after `window.load` to avoid development interference.
+- An optional `Instalar app` hint appears only when `beforeinstallprompt` is available and is hidden after interaction.
+
+### Android/Chrome install test checklist
+
+1. Build and deploy the frontend with HTTPS.
+2. Open the app in Chrome on Android and log in normally.
+3. Confirm Chrome shows install affordance (or use menu > "Install app").
+4. Install the app and open it from launcher.
+5. Verify it opens in standalone/fullscreen mode and uses the same backend/auth session.
+6. In DevTools Application tab, validate `manifest.webmanifest` and active service worker.
+7. Confirm question/API refresh still comes from network (no stale API cache from SW).
