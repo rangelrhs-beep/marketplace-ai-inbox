@@ -37,6 +37,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     company = relationship("Company", back_populates="users")
+    push_subscriptions = relationship("PushSubscription", back_populates="user")
 
 
 class Integration(Base):
@@ -160,3 +161,16 @@ class CompanySettings(Base):
 
     company = relationship("Company", back_populates="settings")
 
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
+    company_id = Column(String(64), ForeignKey("companies.id"), nullable=False)
+    endpoint = Column(Text, nullable=False)
+    keys_json = Column(JsonType, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="push_subscriptions")
