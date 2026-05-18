@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   BarChart3,
@@ -1980,6 +1980,8 @@ function Conversation({ question, onBack, onApprove, onGenerate, onReject, readO
 }
 
 export default function App() {
+  const inFlightQuestionsRequestsRef = useRef(new Set());
+  const lastQuestionsLoadKeyRef = useRef("");
   const [authSession, setAuthSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseAuthConfigured);
   const [loginEmail, setLoginEmail] = useState("");
@@ -2159,68 +2161,76 @@ export default function App() {
 
   async function loadQuestionsFromDatabase({ page = 1, append = false } = {}) {
     const requestCompanyId = getStoredCompanyId();
+    const pageSize = questionsPageInfo.page_size || 20;
+    const requestKey = `${requestCompanyId}|${historyDays}|${page}`;
+    if (inFlightQuestionsRequestsRef.current.has(requestKey)) {
+      console.log(`FRONTEND_QUESTIONS_FETCH_SKIPPED_DUPLICATE key=${requestKey}`);
+      return [];
+    }
+    inFlightQuestionsRequestsRef.current.add(requestKey);
+    console.log(`FRONTEND_QUESTIONS_FETCH_START key=${requestKey} append=${append}`);
     if (append) {
       setIsLoadingMoreQuestions(true);
     } else {
       setIsQuestionsLoading(true);
     }
-    const pageSize = questionsPageInfo.page_size || 20;
-    const response = await apiFetch(`${API_URL}/questions?days=${historyDays}&page=${page}&page_size=${pageSize}`);
-    const data = await response.json();
-    const responseItems = Array.isArray(data) ? data : data.items;
-    if (!response.ok || !Array.isArray(responseItems)) {
-      setIsQuestionsLoading(false);
-      setIsLoadingMoreQuestions(false);
-      throw new Error("Não foi possível carregar perguntas do banco.");
-    }
-    const responseSample = responseItems.slice(0, 5).map((question) => [
-      question.external_id,
-      question.company_id,
-      question.product_title || question.product,
-    ]);
-    console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${responseItems.length}`, responseSample);
-    if (requestCompanyId !== getStoredCompanyId()) {
-      console.log("QUESTIONS_RESPONSE ignored stale company response", {
-        requested: requestCompanyId,
-        current: getStoredCompanyId(),
-      });
-      setIsQuestionsLoading(false);
-      setIsLoadingMoreQuestions(false);
-      return [];
-    }
-    const tenantQuestions = responseItems.filter((question) => {
-      if (!question.company_id || question.company_id !== requestCompanyId) {
-        console.log(
-          `FRONTEND_DROPPED_WRONG_TENANT expected=${requestCompanyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
-        );
-        return false;
+    try {
+      const response = await apiFetch(`${API_URL}/questions?days=${historyDays}&page=${page}&page_size=${pageSize}`);
+      const data = await response.json();
+      const responseItems = Array.isArray(data) ? data : data.items;
+      if (!response.ok || !Array.isArray(responseItems)) {
+        throw new Error("Não foi possível carregar perguntas do banco.");
       }
-      return true;
-    });
-    console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
-    const nextPageInfo = Array.isArray(data)
-      ? { total: tenantQuestions.length, page, page_size: pageSize, has_more: false }
-      : {
-          total: data.total || tenantQuestions.length,
-          page: data.page || page,
-          page_size: data.page_size || pageSize,
-          has_more: Boolean(data.has_more),
-        };
-    setQuestionsPageInfo(nextPageInfo);
-    setQuestions((current) => {
-      if (!append) return tenantQuestions;
-      const byKey = new Map(current.map((question) => [question.id || question.external_id, question]));
-      tenantQuestions.forEach((question) => byKey.set(question.id || question.external_id, question));
-      return Array.from(byKey.values());
-    });
-    setSelectedId((current) =>
-      current && (append || tenantQuestions.some((question) => question.id === current))
-        ? current
-        : tenantQuestions[0]?.id || null
-    );
-    setIsQuestionsLoading(false);
-    setIsLoadingMoreQuestions(false);
-    return tenantQuestions;
+      const responseSample = responseItems.slice(0, 5).map((question) => [
+        question.external_id,
+        question.company_id,
+        question.product_title || question.product,
+      ]);
+      console.log(`QUESTIONS_RESPONSE selectedCompany=${requestCompanyId} days=${historyDays} count=${responseItems.length}`, responseSample);
+      if (requestCompanyId !== getStoredCompanyId()) {
+        console.log("QUESTIONS_RESPONSE ignored stale company response", {
+          requested: requestCompanyId,
+          current: getStoredCompanyId(),
+        });
+        return [];
+      }
+      const tenantQuestions = responseItems.filter((question) => {
+        if (!question.company_id || question.company_id !== requestCompanyId) {
+          console.log(
+            `FRONTEND_DROPPED_WRONG_TENANT expected=${requestCompanyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
+          );
+          return false;
+        }
+        return true;
+      });
+      console.log(`FRONTEND_QUESTIONS_SET company=${requestCompanyId} count=${tenantQuestions.length}`);
+      const nextPageInfo = Array.isArray(data)
+        ? { total: tenantQuestions.length, page, page_size: pageSize, has_more: false }
+        : {
+            total: data.total || tenantQuestions.length,
+            page: data.page || page,
+            page_size: data.page_size || pageSize,
+            has_more: Boolean(data.has_more),
+          };
+      setQuestionsPageInfo(nextPageInfo);
+      setQuestions((current) => {
+        if (!append) return tenantQuestions;
+        const byKey = new Map(current.map((question) => [question.id || question.external_id, question]));
+        tenantQuestions.forEach((question) => byKey.set(question.id || question.external_id, question));
+        return Array.from(byKey.values());
+      });
+      setSelectedId((current) =>
+        current && (append || tenantQuestions.some((question) => question.id === current))
+          ? current
+          : tenantQuestions[0]?.id || null
+      );
+      return tenantQuestions;
+    } finally {
+      inFlightQuestionsRequestsRef.current.delete(requestKey);
+      setIsQuestionsLoading(false);
+      setIsLoadingMoreQuestions(false);
+      console.log(`FRONTEND_QUESTIONS_FETCH_FINISH key=${requestKey}`);
+    }
   }
 
   async function loadProductsSummary() {
@@ -2415,7 +2425,13 @@ export default function App() {
     }
 
     loadTenantContext().then(loadCompanies);
-    loadPersistedQuestions();
+    const initialLoadKey = `${selectedCompanyId}|${historyDays}|${authSession?.access_token || "no-token"}`;
+    if (lastQuestionsLoadKeyRef.current !== initialLoadKey) {
+      lastQuestionsLoadKeyRef.current = initialLoadKey;
+      loadPersistedQuestions();
+    } else {
+      console.log(`FRONTEND_QUESTIONS_FETCH_SKIPPED_DUPLICATE key=${initialLoadKey}`);
+    }
     loadCompanySettings();
     loadProductsSummary().catch(() => {});
   }, [selectedCompanyId, historyDays, authSession?.access_token]);

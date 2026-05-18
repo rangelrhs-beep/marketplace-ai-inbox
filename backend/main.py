@@ -1205,10 +1205,20 @@ def enrich_questions_with_buyers(
     db: Session,
     company_id: str | None = None,
 ) -> list[dict[str, Any]]:
+    already_enriched_buyer_ids = {
+        str((question.get("buyer") or {}).get("id") or "")
+        for question in questions
+        if (question.get("buyer") or {}).get("id")
+        and (
+            (question.get("buyer") or {}).get("nickname")
+            or (question.get("buyer") or {}).get("first_name")
+        )
+    }
     buyer_ids = [
         str(question.get("external_customer_id") or "")
         for question in questions
         if question.get("external_customer_id")
+        and str(question.get("external_customer_id") or "") not in already_enriched_buyer_ids
         and not (question.get("buyer") or {}).get("nickname")
         and not (question.get("buyer") or {}).get("first_name")
     ]
@@ -1222,6 +1232,11 @@ def enrich_questions_with_buyers(
     print("BUYER_ENRICHMENT_START", flush=True)
     print(f"BUYER_ENRICHMENT questions_count={len(questions)}", flush=True)
     print(f"BUYER_ENRICHMENT unique_buyer_ids={unique_buyer_ids[:10]} total={len(unique_buyer_ids)}", flush=True)
+    if already_enriched_buyer_ids:
+        print(
+            f"BUYER_ENRICHMENT_SKIPPED_ALREADY_ENRICHED ids={list(already_enriched_buyer_ids)[:10]} total={len(already_enriched_buyer_ids)}",
+            flush=True,
+        )
     if not buyer_ids:
         print("BUYER_ENRICHMENT_SKIPPED_FROM_CACHE", flush=True)
         print("BUYER_ENRICHMENT_NO_BUYER_IDS_FOUND", flush=True)
@@ -5969,6 +5984,4 @@ def approve_question(question_id: int, payload: ApprovePayload, request: Request
     db.commit()
     db.refresh(question)
     return question_to_api(question, db=db, company_id=company_id)
-
-
 
