@@ -434,7 +434,7 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
   });
 }
 
-function Sidebar({ active, onNavigate, isAuthenticated, onLogout }) {
+function Sidebar({ active, onNavigate }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -469,11 +469,6 @@ function Sidebar({ active, onNavigate, isAuthenticated, onLogout }) {
         <p>Perguntas salvas no banco, revisadas com IA e enviadas ao Mercado Livre.</p>
       </div>
 
-      {isAuthenticated ? (
-        <button className="logout-button" type="button" onClick={onLogout}>
-          Sair
-        </button>
-      ) : null}
     </aside>
   );
 }
@@ -566,7 +561,10 @@ function ScreenHeader({
   onLogout,
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const userLabel = currentUser?.name || currentUser?.email || "Usuário";
+  const userName = currentUser?.name || "";
+  const userEmail = currentUser?.email || "";
+  const companyName = currentCompany?.name || "";
+  const userRole = currentUser?.role || "";
 
   useEffect(() => {
     function handleDocumentClick(event) {
@@ -596,8 +594,19 @@ function ScreenHeader({
             </button>
             {isUserMenuOpen ? (
               <div className="header-user-menu-dropdown" role="menu">
-                <div className="header-user-menu-user">{userLabel}</div>
-                <button type="button" className="header-user-menu-logout" onClick={onLogout} role="menuitem">
+                {userName ? <div className="header-user-menu-user">{userName}</div> : null}
+                {userEmail ? <div className="header-user-menu-meta">{userEmail}</div> : null}
+                {companyName ? <div className="header-user-menu-meta">{companyName}</div> : null}
+                {userRole ? <div className="header-user-menu-meta">{userRole}</div> : null}
+                <button
+                  type="button"
+                  className="header-user-menu-logout"
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    onLogout();
+                  }}
+                  role="menuitem"
+                >
                   Sair
                 </button>
               </div>
@@ -3086,8 +3095,6 @@ export default function App() {
       <Sidebar
         active={active}
         onNavigate={changeSection}
-        isAuthenticated={Boolean(authSession)}
-        onLogout={handleLogout}
       />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>

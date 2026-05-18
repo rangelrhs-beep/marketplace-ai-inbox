@@ -325,6 +325,13 @@ button:disabled {
   padding: 2px 4px 10px;
 }
 
+.header-user-menu-meta {
+  color: #647189;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 4px 8px;
+}
+
 .header-user-menu-logout {
   width: 100%;
   min-height: 38px;
