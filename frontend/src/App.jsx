@@ -562,10 +562,48 @@ function ScreenHeader({
   currentUser,
   permissions,
   onCompanyChange,
+  isAuthenticated,
+  onLogout,
 }) {
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userLabel = currentUser?.name || currentUser?.email || "Usuário";
+
+  useEffect(() => {
+    function handleDocumentClick(event) {
+      if (!event.target.closest(".header-user-menu")) {
+        setIsUserMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, []);
+
   return (
     <header className="topbar">
       <div>
+        {isAuthenticated ? (
+          <div className="header-user-menu">
+            <button
+              type="button"
+              className="header-user-menu-trigger"
+              onClick={() => setIsUserMenuOpen((current) => !current)}
+              aria-haspopup="menu"
+              aria-expanded={isUserMenuOpen}
+            >
+              <Sparkles size={16} />
+              <span>Marketplace AI</span>
+            </button>
+            {isUserMenuOpen ? (
+              <div className="header-user-menu-dropdown" role="menu">
+                <div className="header-user-menu-user">{userLabel}</div>
+                <button type="button" className="header-user-menu-logout" onClick={onLogout} role="menuitem">
+                  Sair
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <CompanySwitcher
           companies={companies}
           currentCompany={currentCompany}
@@ -811,6 +849,8 @@ function IntegrationsPage({
   onConfirmHistoryImport,
   isIntegrationHealthLoading,
   selectedCompanyId,
+  isAuthenticated,
+  onLogout,
 }) {
   const tenantIntegrations = integrations.filter((item) => !item.company_id || item.company_id === selectedCompanyId);
   const connectedCount = isIntegrationHealthLoading ? 0 : tenantIntegrations.filter((item) => item.status === "Conectado").length;
@@ -828,6 +868,8 @@ function IntegrationsPage({
         currentUser={currentUser}
         permissions={permissions}
         onCompanyChange={onCompanyChange}
+        isAuthenticated={isAuthenticated}
+        onLogout={onLogout}
       />
 
       <div className="integration-hero">
@@ -934,6 +976,8 @@ function SettingsPage({
   permissions,
   onCompanyChange,
   onSettingsSaved,
+  isAuthenticated,
+  onLogout,
 }) {
   const savedSettings = {
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
@@ -1185,6 +1229,8 @@ function SettingsPage({
         currentUser={currentUser}
         permissions={permissions}
         onCompanyChange={onCompanyChange}
+        isAuthenticated={isAuthenticated}
+        onLogout={onLogout}
       />
 
       <section className="settings-layout ai-config-layout">
@@ -1274,6 +1320,8 @@ function AnalyticsPage({
   currentUser,
   permissions,
   onCompanyChange,
+  isAuthenticated,
+  onLogout,
 }) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
@@ -1289,6 +1337,8 @@ function AnalyticsPage({
         currentUser={currentUser}
         permissions={permissions}
         onCompanyChange={onCompanyChange}
+        isAuthenticated={isAuthenticated}
+        onLogout={onLogout}
       />
 
       <div className="settings-grid">
@@ -3051,6 +3101,8 @@ export default function App() {
             integrationHealth={integrationHealth}
             isIntegrationHealthLoading={isIntegrationHealthLoading}
             selectedCompanyId={selectedCompanyId}
+            isAuthenticated={Boolean(authSession)}
+            onLogout={handleLogout}
             onCompanyChange={switchCompany}
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
@@ -3081,6 +3133,8 @@ export default function App() {
             currentCompany={currentCompany}
             currentUser={currentUser}
             permissions={currentPermissions}
+            isAuthenticated={Boolean(authSession)}
+            onLogout={handleLogout}
             onCompanyChange={switchCompany}
             onSettingsSaved={(settings) =>
               setAppData((current) => ({
@@ -3104,6 +3158,8 @@ export default function App() {
             currentCompany={currentCompany}
             currentUser={currentUser}
             permissions={currentPermissions}
+            isAuthenticated={Boolean(authSession)}
+            onLogout={handleLogout}
             onCompanyChange={switchCompany}
           />
         ) : (
@@ -3119,6 +3175,8 @@ export default function App() {
                 currentUser={currentUser}
                 permissions={currentPermissions}
                 onCompanyChange={switchCompany}
+                isAuthenticated={Boolean(authSession)}
+                onLogout={handleLogout}
               />
 
               <div className="metrics">
@@ -3282,5 +3340,3 @@ export default function App() {
     </div>
   );
 }
-
-

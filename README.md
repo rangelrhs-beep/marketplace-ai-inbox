@@ -126,6 +126,7 @@ Authentication and tenant resolution:
 - Backend tenant/auth context flows through `get_current_user(request)`, `get_current_company_id(request)`, and `get_current_user_role(request)`.
 - The frontend can initialize Supabase Auth when `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are configured; in that mode it shows an email/password login screen before loading the inbox.
 - After Supabase login, frontend API requests include `Authorization: Bearer <access_token>` while still sending tenant-scoped `X-Company-ID` for platform-admin company switching.
+- Logout is available from the top-left header app menu (Marketplace AI button) on both mobile and desktop; the menu shows the current user and a `Sair` action.
 - Backend Supabase JWT validation requires `SUPABASE_URL`. Supabase may issue access tokens signed with ES256; the backend validates those tokens by fetching JWKS from `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`, selecting the public key by JWT header `kid`, and caching the JWKS in memory for 10 minutes. `SUPABASE_JWT_SECRET` is only needed for legacy HS256 tokens. With a bearer token present, the backend validates signature, issuer (`{SUPABASE_URL}/auth/v1`), audience (`authenticated`), expiry, `sub`, and `email`.
 - If no `Authorization` header is present, the backend intentionally preserves the existing mock `platform_admin` behavior and `X-Company-ID` selector workflow. This is the only mock fallback path.
 - If a bearer token is invalid, the backend returns `401` and does not fall back to mock auth.
