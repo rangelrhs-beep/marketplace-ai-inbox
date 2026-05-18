@@ -22,12 +22,47 @@ import {
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
 const SELECTED_COMPANY_STORAGE_KEY = "marketplace_ai_selected_company_id";
+const NOTIFICATION_PREFERENCE_STORAGE_KEY = "notifications_enabled";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const isSupabaseAuthConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 const supabase = isSupabaseAuthConfigured
   ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
+
+
+function getBrowserNotificationPermission() {
+  if (typeof Notification === "undefined") return "unsupported";
+  return Notification.permission;
+}
+
+function getStoredNotificationPreference() {
+  return localStorage.getItem(NOTIFICATION_PREFERENCE_STORAGE_KEY) !== "false";
+}
+
+function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
+  return permission === "granted" && appNotificationsEnabled !== false;
+}
+
+function getNotificationStatusText(permission, appNotificationsEnabled) {
+  if (permission === "unsupported") return "Notificações: indisponível";
+  return isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)
+    ? "Notificações: ativada"
+    : "Notificações: desativada";
+}
+
+function getNotificationButtonLabel(permission, appNotificationsEnabled) {
+  return isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)
+    ? "Desativar notificações"
+    : "Ativar notificações";
+}
+
+function getBlockedNotificationMessage() {
+  return (
+    "As notificações estão bloqueadas no navegador. Ative nas configurações do site/app para receber alertas. " +
+    "Toque no cadeado/ícone de permissões do navegador > Notificações > Permitir."
+  );
+}
 
 function getStoredCompanyId() {
   return localStorage.getItem(SELECTED_COMPANY_STORAGE_KEY) || "cpap_express";
@@ -113,6 +148,9 @@ function CompaniesAdminPage({
   onCompanyChange,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationStatusText,
+  notificationButtonLabel,
   onCompanyCreated,
 }) {
   const [form, setForm] = useState({ id: "", name: "" });
@@ -155,6 +193,9 @@ function CompaniesAdminPage({
         onCompanyChange={onCompanyChange}
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
+        onEnableNotifications={onEnableNotifications}
+        notificationStatusText={notificationStatusText}
+        notificationButtonLabel={notificationButtonLabel}
       />
       <div className="settings-card users-admin-card">
         <form className="settings-form users-admin-form" onSubmit={handleSubmit}>
@@ -192,6 +233,9 @@ function UsersAdminPage({
   onCompanyChange,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationStatusText,
+  notificationButtonLabel,
 }) {
   const [users, setUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
@@ -274,6 +318,9 @@ function UsersAdminPage({
         onCompanyChange={onCompanyChange}
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
+        onEnableNotifications={onEnableNotifications}
+        notificationStatusText={notificationStatusText}
+        notificationButtonLabel={notificationButtonLabel}
       />
       <div className="settings-card users-admin-card">
         <p className="settings-warning">Crie primeiro o usuário no Supabase Auth, copie o UID e vincule aqui à empresa.</p>
@@ -810,8 +857,9 @@ function ScreenHeader({
   onCompanyChange,
   isAuthenticated,
   onLogout,
-  onEnableNotifications,
-  notificationPermission,
+  onEnableNotifications = () => {},
+  notificationStatusText = "",
+  notificationButtonLabel = "Ativar notificações",
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userName = currentUser?.name || "";
@@ -863,9 +911,9 @@ function ScreenHeader({
                   Sair
                 </button>
                 <button type="button" className="header-user-menu-logout" onClick={onEnableNotifications} role="menuitem">
-                  Ativar notificações
+                  {notificationButtonLabel}
                 </button>
-                {notificationPermission ? <div className="header-user-menu-meta">Notificações: {notificationPermission}</div> : null}
+                {notificationStatusText ? <div className="header-user-menu-meta">{notificationStatusText}</div> : null}
               </div>
             ) : null}
           </div>
@@ -1118,6 +1166,9 @@ function IntegrationsPage({
   selectedCompanyId,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationStatusText,
+  notificationButtonLabel,
 }) {
   const tenantIntegrations = integrations.filter((item) => !item.company_id || item.company_id === selectedCompanyId);
   const connectedCount = isIntegrationHealthLoading ? 0 : tenantIntegrations.filter((item) => item.status === "Conectado").length;
@@ -1137,6 +1188,9 @@ function IntegrationsPage({
         onCompanyChange={onCompanyChange}
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
+        onEnableNotifications={onEnableNotifications}
+        notificationStatusText={notificationStatusText}
+        notificationButtonLabel={notificationButtonLabel}
       />
 
       <div className="integration-hero">
@@ -1245,6 +1299,9 @@ function SettingsPage({
   onSettingsSaved,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationStatusText,
+  notificationButtonLabel,
 }) {
   const savedSettings = {
     ai_general_rules: appData.aiSettings.ai_general_rules || "",
@@ -1498,6 +1555,9 @@ function SettingsPage({
         onCompanyChange={onCompanyChange}
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
+        onEnableNotifications={onEnableNotifications}
+        notificationStatusText={notificationStatusText}
+        notificationButtonLabel={notificationButtonLabel}
       />
 
       <section className="settings-layout ai-config-layout">
@@ -1589,6 +1649,9 @@ function AnalyticsPage({
   onCompanyChange,
   isAuthenticated,
   onLogout,
+  onEnableNotifications,
+  notificationStatusText,
+  notificationButtonLabel,
 }) {
   const pending = questions.filter((question) => question.status === "Pendente").length;
   const answered = questions.filter((question) => question.status === "Respondida").length;
@@ -1606,6 +1669,9 @@ function AnalyticsPage({
         onCompanyChange={onCompanyChange}
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
+        onEnableNotifications={onEnableNotifications}
+        notificationStatusText={notificationStatusText}
+        notificationButtonLabel={notificationButtonLabel}
       />
 
       <div className="settings-grid">
@@ -2303,11 +2369,21 @@ export default function App() {
   });
   const [pendingBadgeCount, setPendingBadgeCount] = useState(0);
   const [lastPendingCount, setLastPendingCount] = useState(0);
-  const [notificationPermission, setNotificationPermission] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+  const [notificationPermission, setNotificationPermission] = useState(getBrowserNotificationPermission());
+  const [appNotificationsEnabled, setAppNotificationsEnabled] = useState(getStoredNotificationPreference);
   const notificationDebounceRef = useRef(null);
 
   const questions = appData.questions;
   const integrations = appData.integrations;
+
+  useEffect(() => {
+    function refreshNotificationPermission() {
+      setNotificationPermission(getBrowserNotificationPermission());
+    }
+
+    window.addEventListener("focus", refreshNotificationPermission);
+    return () => window.removeEventListener("focus", refreshNotificationPermission);
+  }, []);
 
   function setQuestions(nextQuestions) {
     setAppData((current) => ({
@@ -2369,7 +2445,7 @@ export default function App() {
     notificationDebounceRef.current = window.setTimeout(() => {
       const productTitle = sampleQuestion?.product_title || sampleQuestion?.product || "";
       setQuestionNotice(productTitle ? `Nova pergunta recebida: ${productTitle}` : "Nova pergunta recebida");
-      if (notificationPermission === "granted" && typeof Notification !== "undefined") {
+      if (isNotificationEffectivelyEnabled(notificationPermission, appNotificationsEnabled) && typeof Notification !== "undefined") {
         new Notification("Nova pergunta no Marketplace", { body: productTitle || sampleQuestion?.question || "Nova pergunta pendente" });
       }
       notificationDebounceRef.current = null;
@@ -2377,13 +2453,50 @@ export default function App() {
   }
 
   async function handleEnableNotifications() {
-    if (typeof Notification === "undefined") {
+    const permission = getBrowserNotificationPermission();
+    setNotificationPermission(permission);
+
+    if (permission === "unsupported") {
       setQuestionNotice("Seu navegador não suporta notificações.");
       return;
     }
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-    if (permission === "denied") setQuestionNotice("Permissão de notificações negada.");
+
+    if (isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)) {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
+      setAppNotificationsEnabled(false);
+      setQuestionNotice("Notificações desativadas neste app.");
+      return;
+    }
+
+    if (permission === "granted") {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "true");
+      setAppNotificationsEnabled(true);
+      setQuestionNotice("Notificações ativadas neste app.");
+      return;
+    }
+
+    if (permission === "denied") {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
+      setAppNotificationsEnabled(false);
+      setQuestionNotice(getBlockedNotificationMessage());
+      return;
+    }
+
+    const requestedPermission = await Notification.requestPermission();
+    setNotificationPermission(requestedPermission);
+    if (requestedPermission === "granted") {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "true");
+      setAppNotificationsEnabled(true);
+      setQuestionNotice("Notificações ativadas neste app.");
+    } else {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
+      setAppNotificationsEnabled(false);
+      setQuestionNotice(
+        requestedPermission === "denied"
+          ? getBlockedNotificationMessage()
+          : "Notificações não ativadas. Você pode tentar novamente pelo menu."
+      );
+    }
   }
 
   function switchCompany(companyId) {
@@ -3450,6 +3563,9 @@ export default function App() {
         ? "Nenhuma pergunta respondida encontrada."
         : "Nenhuma pergunta encontrada.";
 
+  const notificationStatusText = getNotificationStatusText(notificationPermission, appNotificationsEnabled);
+  const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, appNotificationsEnabled);
+
   if (isSupabaseAuthConfigured && !authSession) {
     return (
       <LoginScreen
@@ -3485,6 +3601,9 @@ export default function App() {
             selectedCompanyId={selectedCompanyId}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
+            onEnableNotifications={handleEnableNotifications}
+            notificationStatusText={notificationStatusText}
+            notificationButtonLabel={notificationButtonLabel}
             onCompanyChange={switchCompany}
             onConnect={openConnectModal}
             onDisconnect={disconnectMercadoLivre}
@@ -3517,6 +3636,9 @@ export default function App() {
             permissions={currentPermissions}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
+            onEnableNotifications={handleEnableNotifications}
+            notificationStatusText={notificationStatusText}
+            notificationButtonLabel={notificationButtonLabel}
             onCompanyChange={switchCompany}
             onSettingsSaved={(settings) =>
               setAppData((current) => ({
@@ -3542,6 +3664,9 @@ export default function App() {
             permissions={currentPermissions}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
+            onEnableNotifications={handleEnableNotifications}
+            notificationStatusText={notificationStatusText}
+            notificationButtonLabel={notificationButtonLabel}
             onCompanyChange={switchCompany}
           />
         ) : isCompaniesAdmin ? (
@@ -3553,6 +3678,9 @@ export default function App() {
             onCompanyChange={switchCompany}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
+            onEnableNotifications={handleEnableNotifications}
+            notificationStatusText={notificationStatusText}
+            notificationButtonLabel={notificationButtonLabel}
             onCompanyCreated={async (newCompanyId) => {
               await fetchCompanies();
               await switchCompany(newCompanyId);
@@ -3567,6 +3695,9 @@ export default function App() {
             onCompanyChange={switchCompany}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
+            onEnableNotifications={handleEnableNotifications}
+            notificationStatusText={notificationStatusText}
+            notificationButtonLabel={notificationButtonLabel}
           />
         ) : (
           <>
@@ -3584,7 +3715,8 @@ export default function App() {
                 isAuthenticated={Boolean(authSession)}
                 onLogout={handleLogout}
                 onEnableNotifications={handleEnableNotifications}
-                notificationPermission={notificationPermission}
+                notificationStatusText={notificationStatusText}
+                notificationButtonLabel={notificationButtonLabel}
               />
 
               <div className="metrics">
