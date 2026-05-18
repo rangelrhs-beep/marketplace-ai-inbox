@@ -17,6 +17,7 @@ import {
   ThumbsDown,
   X,
 } from "lucide-react";
+import appLogo from "./assets/app-logo.svg";
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
@@ -434,17 +435,42 @@ function applyBackendHealthToIntegrations(integrations, healthItems, companyId, 
   });
 }
 
-function Sidebar({ active, onNavigate, isAuthenticated, onLogout }) {
+function Sidebar({ active, onNavigate, isAuthenticated, onLogout, currentUser }) {
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userLabel = currentUser?.name || currentUser?.email || "Usuário";
+
+  useEffect(() => {
+    function handleDocumentClick(event) {
+      if (!event.target.closest(".brand-menu")) setIsUserMenuOpen(false);
+    }
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, []);
+
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">
-          <Sparkles size={22} />
-        </div>
+      <div className="brand brand-menu">
+        <button
+          type="button"
+          className="brand-mark brand-menu-trigger"
+          onClick={() => setIsUserMenuOpen((current) => !current)}
+          aria-haspopup="menu"
+          aria-expanded={isUserMenuOpen}
+        >
+          <img src={appLogo} alt="Marketplace AI" className="brand-logo-image" />
+        </button>
         <div>
           <strong>Marketplace AI</strong>
           <span>Inbox</span>
         </div>
+        {isAuthenticated && isUserMenuOpen ? (
+          <div className="brand-menu-dropdown" role="menu">
+            <div className="brand-menu-user">{userLabel}</div>
+            <button type="button" className="brand-menu-logout" onClick={onLogout} role="menuitem">
+              Sair
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <nav className="nav">
@@ -469,11 +495,6 @@ function Sidebar({ active, onNavigate, isAuthenticated, onLogout }) {
         <p>Perguntas salvas no banco, revisadas com IA e enviadas ao Mercado Livre.</p>
       </div>
 
-      {isAuthenticated ? (
-        <button className="logout-button" type="button" onClick={onLogout}>
-          Sair
-        </button>
-      ) : null}
     </aside>
   );
 }
@@ -565,45 +586,9 @@ function ScreenHeader({
   isAuthenticated,
   onLogout,
 }) {
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const userLabel = currentUser?.name || currentUser?.email || "Usuário";
-
-  useEffect(() => {
-    function handleDocumentClick(event) {
-      if (!event.target.closest(".header-user-menu")) {
-        setIsUserMenuOpen(false);
-      }
-    }
-
-    document.addEventListener("click", handleDocumentClick);
-    return () => document.removeEventListener("click", handleDocumentClick);
-  }, []);
-
   return (
     <header className="topbar">
       <div>
-        {isAuthenticated ? (
-          <div className="header-user-menu">
-            <button
-              type="button"
-              className="header-user-menu-trigger"
-              onClick={() => setIsUserMenuOpen((current) => !current)}
-              aria-haspopup="menu"
-              aria-expanded={isUserMenuOpen}
-            >
-              <Sparkles size={16} />
-              <span>Marketplace AI</span>
-            </button>
-            {isUserMenuOpen ? (
-              <div className="header-user-menu-dropdown" role="menu">
-                <div className="header-user-menu-user">{userLabel}</div>
-                <button type="button" className="header-user-menu-logout" onClick={onLogout} role="menuitem">
-                  Sair
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         <CompanySwitcher
           companies={companies}
           currentCompany={currentCompany}
@@ -3088,6 +3073,7 @@ export default function App() {
         onNavigate={changeSection}
         isAuthenticated={Boolean(authSession)}
         onLogout={handleLogout}
+        currentUser={currentUser}
       />
 
       <main className={`workspace ${isIntegrations || isSettings || isAnalytics ? "single-view" : ""}`}>
