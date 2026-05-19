@@ -883,7 +883,7 @@ function ScreenHeader({
   const userEmail = currentUser?.email || "";
   const companyName = currentCompany?.name || "";
   const userRole = currentUser?.role || "";
-  const notificationStatusLabel = getNotificationStatusLabel(notificationPermission, notificationsEnabled);
+  const isNotificationsActive = notificationPermission === "granted" && notificationsEnabled !== false;
 
   useEffect(() => {
     function handleDocumentClick(event) {
@@ -898,9 +898,9 @@ function ScreenHeader({
 
   useEffect(() => {
     if (isUserMenuOpen) {
-      console.log(`NOTIFICATION_MENU_RENDER rawPermission=${notificationPermission} label=${notificationStatusLabel}`);
+      console.log(`NOTIFICATION_MENU_RENDER rawPermission=${notificationPermission} active=${isNotificationsActive}`);
     }
-  }, [isUserMenuOpen, notificationPermission, notificationStatusLabel]);
+  }, [isUserMenuOpen, notificationPermission, isNotificationsActive]);
 
   return (
     <header className="topbar">
@@ -923,19 +923,20 @@ function ScreenHeader({
                 {userEmail ? <div className="header-user-menu-meta">{userEmail}</div> : null}
                 {companyName ? <div className="header-user-menu-meta">{companyName}</div> : null}
                 {userRole ? <div className="header-user-menu-meta">{userRole}</div> : null}
-                <div className="header-user-menu-notification-row notification-toggle-row">
-                  <span>{getNotificationStatusLabel(notificationPermission, notificationsEnabled)}</span>
+                <div className="header-user-menu-meta">Notif UI v2</div>
+                <label className="notification-toggle-row">
+                  <span className="notification-toggle-label">
+                    {isNotificationsActive ? "Notificações Ativas" : "Notificações Inativas"}
+                  </span>
                   <button
                     type="button"
-                    className={`toggle-switch ${isNotificationEffectivelyEnabled(notificationPermission, notificationsEnabled) ? "active" : ""}`}
+                    className={`notification-toggle ${isNotificationsActive ? "active" : ""}`}
                     onClick={onEnableNotifications}
-                    aria-label="Alternar notificações"
-                    role="switch"
-                    aria-checked={isNotificationEffectivelyEnabled(notificationPermission, notificationsEnabled)}
+                    aria-pressed={isNotificationsActive}
                   >
                     <span />
                   </button>
-                </div>
+                </label>
                 <button
                   type="button"
                   className="header-user-menu-logout"
@@ -2520,7 +2521,7 @@ export default function App() {
     }, 1200);
   }
 
-  async function handleEnableNotifications() {
+async function handleEnableNotifications() {
     const permission = getBrowserNotificationPermission();
     setNotificationPermission(permission);
 
@@ -2549,7 +2550,7 @@ export default function App() {
     if (permission === "denied") {
       localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
       setAppNotificationsEnabled(false);
-      setNotificationHelpText(getBlockedNotificationHelpText());
+      setNotificationHelpText("Notificações bloqueadas. Ative nas permissões do site/app no Android.");
       setQuestionNotice(getBlockedNotificationMessage());
       return;
     }
@@ -2566,7 +2567,7 @@ export default function App() {
       localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
       setAppNotificationsEnabled(false);
       if (requestedPermission === "denied") {
-        setNotificationHelpText(getBlockedNotificationHelpText());
+        setNotificationHelpText("Notificações bloqueadas. Ative nas permissões do site/app no Android.");
         setQuestionNotice(getBlockedNotificationMessage());
       } else {
         setNotificationHelpText("");
