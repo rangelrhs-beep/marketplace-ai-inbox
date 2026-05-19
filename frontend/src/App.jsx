@@ -321,7 +321,7 @@ function UsersAdminPage({
       setForm((current) => ({ ...current, email: "", name: "" }));
       await loadAdminUsers();
     } catch (error) {
-      setSubmitMessage(error?.message === "Failed to fetch" ? "Não foi possível conectar ao servidor. Verifique o deploy/backend." : (error.message || "Não foi possível convidar usuário."));
+      setSubmitMessage(error.message || "Não foi possível convidar usuário.");
     } finally {
       setIsSubmitting(false);
     }
@@ -384,7 +384,7 @@ function UsersAdminPage({
       if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível enviar redefinição.");
       setSubmitMessage(data.message || "Redefinição enviada.");
     } catch (error) {
-      setSubmitMessage(error?.message === "Failed to fetch" ? "Não foi possível conectar ao servidor. Verifique o deploy/backend." : (error.message || "Não foi possível enviar redefinição."));
+      setSubmitMessage(error.message || "Não foi possível enviar redefinição.");
     } finally { setIsResettingEmail(""); }
   }
 
