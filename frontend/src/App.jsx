@@ -56,10 +56,16 @@ function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
   return permission === "granted" && appNotificationsEnabled !== false;
 }
 
-function formatNotificationStatus(permission) {
-  if (permission === "unsupported") return "Notificações: indisponível";
-  if (permission === "granted") return "Notificações: ativada";
-  return "Notificações: desativada";
+function getNotificationStatusLabel(permission, appEnabled) {
+  if (typeof window === "undefined" || !("Notification" in window)) {
+    return "indisponível";
+  }
+
+  if (permission === "granted" && appEnabled !== false) {
+    return "ativada";
+  }
+
+  return "desativada";
 }
 
 function getNotificationButtonLabel(permission, appNotificationsEnabled) {
@@ -166,7 +172,8 @@ function CompaniesAdminPage({
   isAuthenticated,
   onLogout,
   onEnableNotifications,
-  notificationStatusText,
+  notificationPermission,
+  notificationsEnabled,
   notificationButtonLabel,
   notificationHelpText,
   onCompanyCreated,
@@ -212,7 +219,8 @@ function CompaniesAdminPage({
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
         onEnableNotifications={onEnableNotifications}
-        notificationStatusText={notificationStatusText}
+        notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         notificationButtonLabel={notificationButtonLabel}
         notificationHelpText={notificationHelpText}
       />
@@ -253,7 +261,8 @@ function UsersAdminPage({
   isAuthenticated,
   onLogout,
   onEnableNotifications,
-  notificationStatusText,
+  notificationPermission,
+  notificationsEnabled,
   notificationButtonLabel,
   notificationHelpText,
 }) {
@@ -339,7 +348,8 @@ function UsersAdminPage({
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
         onEnableNotifications={onEnableNotifications}
-        notificationStatusText={notificationStatusText}
+        notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         notificationButtonLabel={notificationButtonLabel}
         notificationHelpText={notificationHelpText}
       />
@@ -879,7 +889,8 @@ function ScreenHeader({
   isAuthenticated,
   onLogout,
   onEnableNotifications = () => {},
-  notificationStatusText = "",
+  notificationPermission = "unsupported",
+  notificationsEnabled = false,
   notificationButtonLabel = "Ativar notificações",
   notificationHelpText = "",
 }) {
@@ -888,6 +899,7 @@ function ScreenHeader({
   const userEmail = currentUser?.email || "";
   const companyName = currentCompany?.name || "";
   const userRole = currentUser?.role || "";
+  const notificationStatusLabel = getNotificationStatusLabel(notificationPermission, notificationsEnabled);
 
   useEffect(() => {
     function handleDocumentClick(event) {
@@ -899,6 +911,12 @@ function ScreenHeader({
     document.addEventListener("click", handleDocumentClick);
     return () => document.removeEventListener("click", handleDocumentClick);
   }, []);
+
+  useEffect(() => {
+    if (isUserMenuOpen) {
+      console.log(`NOTIFICATION_MENU_RENDER rawPermission=${notificationPermission} label=${notificationStatusLabel}`);
+    }
+  }, [isUserMenuOpen, notificationPermission, notificationStatusLabel]);
 
   return (
     <header className="topbar">
@@ -935,7 +953,11 @@ function ScreenHeader({
                 <button type="button" className="header-user-menu-logout" onClick={onEnableNotifications} role="menuitem">
                   {notificationButtonLabel}
                 </button>
-                {notificationStatusText ? <div className="header-user-menu-meta">{notificationStatusText}</div> : null}
+                {notificationPermission ? (
+                  <div className="header-user-menu-meta">
+                    Notificações: {getNotificationStatusLabel(notificationPermission, notificationsEnabled)}
+                  </div>
+                ) : null}
                 {notificationHelpText ? <div className="header-user-menu-help">{notificationHelpText}</div> : null}
               </div>
             ) : null}
@@ -1190,7 +1212,8 @@ function IntegrationsPage({
   isAuthenticated,
   onLogout,
   onEnableNotifications,
-  notificationStatusText,
+  notificationPermission,
+  notificationsEnabled,
   notificationButtonLabel,
   notificationHelpText,
 }) {
@@ -1213,7 +1236,8 @@ function IntegrationsPage({
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
         onEnableNotifications={onEnableNotifications}
-        notificationStatusText={notificationStatusText}
+        notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         notificationButtonLabel={notificationButtonLabel}
         notificationHelpText={notificationHelpText}
       />
@@ -1325,7 +1349,8 @@ function SettingsPage({
   isAuthenticated,
   onLogout,
   onEnableNotifications,
-  notificationStatusText,
+  notificationPermission,
+  notificationsEnabled,
   notificationButtonLabel,
   notificationHelpText,
 }) {
@@ -1582,7 +1607,8 @@ function SettingsPage({
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
         onEnableNotifications={onEnableNotifications}
-        notificationStatusText={notificationStatusText}
+        notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         notificationButtonLabel={notificationButtonLabel}
         notificationHelpText={notificationHelpText}
       />
@@ -1677,7 +1703,8 @@ function AnalyticsPage({
   isAuthenticated,
   onLogout,
   onEnableNotifications,
-  notificationStatusText,
+  notificationPermission,
+  notificationsEnabled,
   notificationButtonLabel,
   notificationHelpText,
 }) {
@@ -1698,7 +1725,8 @@ function AnalyticsPage({
         isAuthenticated={isAuthenticated}
         onLogout={onLogout}
         onEnableNotifications={onEnableNotifications}
-        notificationStatusText={notificationStatusText}
+        notificationPermission={notificationPermission}
+        notificationsEnabled={notificationsEnabled}
         notificationButtonLabel={notificationButtonLabel}
         notificationHelpText={notificationHelpText}
       />
@@ -3674,8 +3702,8 @@ export default function App() {
         ? "Nenhuma pergunta respondida encontrada."
         : "Nenhuma pergunta encontrada.";
 
-  const notificationStatusText = formatNotificationStatus(notificationPermission, appNotificationsEnabled);
-  const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, appNotificationsEnabled);
+  const notificationsEnabled = appNotificationsEnabled;
+  const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, notificationsEnabled);
 
   if (isSupabaseAuthConfigured && !authSession) {
     return (
@@ -3713,7 +3741,8 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onEnableNotifications={handleEnableNotifications}
-            notificationStatusText={notificationStatusText}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
             notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
@@ -3749,7 +3778,8 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onEnableNotifications={handleEnableNotifications}
-            notificationStatusText={notificationStatusText}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
             notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
@@ -3778,7 +3808,8 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onEnableNotifications={handleEnableNotifications}
-            notificationStatusText={notificationStatusText}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
             notificationHelpText={notificationHelpText}
             onCompanyChange={switchCompany}
@@ -3793,7 +3824,8 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onEnableNotifications={handleEnableNotifications}
-            notificationStatusText={notificationStatusText}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
             notificationHelpText={notificationHelpText}
             onCompanyCreated={async (newCompanyId) => {
@@ -3811,7 +3843,8 @@ export default function App() {
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
             onEnableNotifications={handleEnableNotifications}
-            notificationStatusText={notificationStatusText}
+            notificationPermission={notificationPermission}
+            notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
             notificationHelpText={notificationHelpText}
           />
@@ -3831,7 +3864,8 @@ export default function App() {
                 isAuthenticated={Boolean(authSession)}
                 onLogout={handleLogout}
                 onEnableNotifications={handleEnableNotifications}
-                notificationStatusText={notificationStatusText}
+                notificationPermission={notificationPermission}
+                notificationsEnabled={notificationsEnabled}
                 notificationButtonLabel={notificationButtonLabel}
                 notificationHelpText={notificationHelpText}
               />
