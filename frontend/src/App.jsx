@@ -57,34 +57,19 @@ function isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) {
 }
 
 function getNotificationStatusLabel(permission, appEnabled) {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return "indisponível";
-  }
-
-  if (permission === "granted" && appEnabled !== false) {
-    return "ativada";
-  }
-
-  return "desativada";
+  return isNotificationEffectivelyEnabled(permission, appEnabled) ? "Notificações Ativas" : "Notificações Inativas";
 }
 
 function getNotificationButtonLabel(permission, appNotificationsEnabled) {
-  if (isNotificationEffectivelyEnabled(permission, appNotificationsEnabled)) {
-    return "Desativar notificações";
-  }
-  if (permission === "denied") return "Abrir configurações";
-  return "Ativar notificações";
+  return isNotificationEffectivelyEnabled(permission, appNotificationsEnabled) ? "Desativar notificações" : "Ativar notificações";
 }
 
 function getBlockedNotificationMessage() {
-  return "As notificações estão bloqueadas no navegador.";
+  return "As notificações estão bloqueadas no navegador. Ative nas permissões do site/app para receber alertas.";
 }
 
 function getBlockedNotificationHelpText() {
-  return (
-    "Android Chrome: 1. Toque no ícone ao lado do endereço/site. 2. Permissões. 3. Notificações. 4. Permitir. " +
-    "Você também pode ativar nas configurações do aplicativo instalado."
-  );
+  return "Para ativar novamente, abra as permissões do site/app no Android e permita notificações.";
 }
 
 function getStoredCompanyId() {
@@ -891,7 +876,6 @@ function ScreenHeader({
   onEnableNotifications = () => {},
   notificationPermission = "unsupported",
   notificationsEnabled = false,
-  notificationButtonLabel = "Ativar notificações",
   notificationHelpText = "",
 }) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -939,6 +923,19 @@ function ScreenHeader({
                 {userEmail ? <div className="header-user-menu-meta">{userEmail}</div> : null}
                 {companyName ? <div className="header-user-menu-meta">{companyName}</div> : null}
                 {userRole ? <div className="header-user-menu-meta">{userRole}</div> : null}
+                <div className="header-user-menu-notification-row">
+                  <span>{getNotificationStatusLabel(notificationPermission, notificationsEnabled)}</span>
+                  <button
+                    type="button"
+                    className={`toggle-switch ${isNotificationEffectivelyEnabled(notificationPermission, notificationsEnabled) ? "active" : ""}`}
+                    onClick={onEnableNotifications}
+                    aria-label="Alternar notificações"
+                    role="switch"
+                    aria-checked={isNotificationEffectivelyEnabled(notificationPermission, notificationsEnabled)}
+                  >
+                    <span />
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="header-user-menu-logout"
@@ -950,14 +947,6 @@ function ScreenHeader({
                 >
                   Sair
                 </button>
-                <button type="button" className="header-user-menu-logout" onClick={onEnableNotifications} role="menuitem">
-                  {notificationButtonLabel}
-                </button>
-                {notificationPermission ? (
-                  <div className="header-user-menu-meta">
-                    Notificações: {getNotificationStatusLabel(notificationPermission, notificationsEnabled)}
-                  </div>
-                ) : null}
                 {notificationHelpText ? <div className="header-user-menu-help">{notificationHelpText}</div> : null}
               </div>
             ) : null}
@@ -2558,6 +2547,8 @@ export default function App() {
     }
 
     if (permission === "denied") {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
+      setAppNotificationsEnabled(false);
       setNotificationHelpText(getBlockedNotificationHelpText());
       setQuestionNotice(getBlockedNotificationMessage());
       return;
@@ -2572,6 +2563,8 @@ export default function App() {
       setNotificationHelpText("");
       setQuestionNotice("Notificações ativadas neste app.");
     } else {
+      localStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, "false");
+      setAppNotificationsEnabled(false);
       if (requestedPermission === "denied") {
         setNotificationHelpText(getBlockedNotificationHelpText());
         setQuestionNotice(getBlockedNotificationMessage());
