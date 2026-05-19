@@ -181,18 +181,26 @@ def get_supabase_service_role_key() -> str:
     return service_role_key
 
 
+def get_supabase_auth_base_url() -> str:
+    base_url = (SUPABASE_URL or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured.")
+    return f"{base_url}/auth/v1"
+
+
 def supabase_admin_request(path: str, *, method: str = "POST", payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
     auth_base_url = get_supabase_auth_base_url()
     service_role_key = get_supabase_service_role_key()
     url = f"{auth_base_url}{path}"
     body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    logger.info("ADMIN_SUPABASE_REQUEST path=%s", path)
     request = UrlRequest(
         url,
         data=body,
         method=method,
         headers={
             "Accept": "application/json",
-            "Content-Type": "application/json; charset=utf-8",
+            "Content-Type": "application/json",
             "apikey": service_role_key,
             "Authorization": f"Bearer {service_role_key}",
         },
@@ -210,11 +218,13 @@ def supabase_admin_request(path: str, *, method: str = "POST", payload: dict[str
                 details = json.loads(details_text)
             except json.JSONDecodeError:
                 details = {"message": details_text}
-        logger.warning("SUPABASE_ADMIN_HTTP_ERROR status=%s body=%s", error.code, details)
-        raise HTTPException(status_code=502, detail="Supabase admin operation failed.") from error
+        safe_message = str(details.get("msg") or details.get("message") or details.get("error_description") or details.get("error") or "Supabase admin operation failed.")
+        logger.warning("ADMIN_SUPABASE_ERROR status=%s message=%s", error.code, safe_message)
+        return error.code, {"error": safe_message}
     except URLError as error:
-        logger.warning("SUPABASE_ADMIN_UNAVAILABLE error=%s", error)
-        raise HTTPException(status_code=502, detail="Supabase admin service unavailable.") from error
+        safe_message = "Supabase admin service unavailable."
+        logger.warning("ADMIN_SUPABASE_ERROR status=%s message=%s", 502, safe_message)
+        return 502, {"error": safe_message}
 
 
 MOCK_PLATFORM_ADMIN_USER = CurrentUserContext(
@@ -4376,10 +4386,18 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
         if item_company_id and db.get(Company, item_company_id) is None:
             raise HTTPException(status_code=404, detail=f"Company not found: {item_company_id}")
 
-    status, response_body = supabase_admin_request(
-        "/admin/generate_link",
-        payload={"type": "invite", "email": email, "data": {"name": name or email}},
-    )
+    try:
+        status, response_body = supabase_admin_request(
+            "/admin/generate_link",
+            payload={"type": "invite", "email": email, "data": {"name": name or email}},
+        )
+    except HTTPException as error:
+        logger.error("ADMIN_INVITE_ERROR type=%s message=%s", type(error).__name__, error.detail)
+        raise
+    if status >= 400:
+        safe_detail = str(response_body.get("error") or "Erro desconhecido")
+        logger.error("ADMIN_INVITE_ERROR type=SupabaseAdminError message=%s", safe_detail)
+        raise HTTPException(status_code=502, detail=f"Não foi possível criar o convite no Supabase: {safe_detail}")
     logger.info("ADMIN_INVITE_SUPABASE_SUCCESS email=%s", email)
     auth_user_id = ((response_body.get("user") or {}).get("id") or "").strip() or None
     action_link = (response_body.get("action_link") or "").strip()
@@ -4434,9 +4452,18 @@ def send_admin_password_reset(user_id: str, request: Request, db: Session = Depe
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="User not found.")
     logger.info("ADMIN_PASSWORD_RESET_ATTEMPT requester=%s email=%s", current_user.id, user.email)
-    supabase_admin_request("/recover", payload={"email": user.email})
+    try:
+        status, response_body = supabase_admin_request("/recover", payload={"email": user.email})
+    except HTTPException as error:
+        logger.error("ADMIN_PASSWORD_RESET_ERROR type=%s message=%s", type(error).__name__, error.detail)
+        raise
+    if status >= 400:
+        safe_detail = str(response_body.get("error") or "Erro desconhecido")
+        logger.error("ADMIN_PASSWORD_RESET_ERROR type=SupabaseAdminError message=%s", safe_detail)
+        raise HTTPException(status_code=502, detail=f"Não foi possível enviar redefinição de senha: {safe_detail}")
+    action_link = (response_body.get("action_link") or "").strip()
     logger.info("ADMIN_PASSWORD_RESET_SENT email=%s", user.email)
-    return {"success": True, "message": f"Redefinição enviada para {user.email}.", "email": user.email}
+    return {"success": True, "message": ("Link de redefinição gerado com sucesso." if action_link else f"Redefinição enviada para {user.email}."), "email": user.email, "recovery_link": action_link or None}
 
 
 @app.put("/admin/users/{user_id}")
@@ -4465,6 +4492,15 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
         logger.info("ADMIN_USER_UPDATE_AUTH_EMAIL requester=%s user_id=%s", current_user.id, user.id)
         supabase_admin_request(f"/admin/users/{user.auth_user_id}", payload={"email": email}, method="PUT")
 
+    will_be_inactive = not payload.active
+    if (user.role == "platform_admin" or role == "platform_admin") and will_be_inactive:
+        active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
+        other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
+        if not other_active_admins:
+            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
+        if current_user.id == user.id and not other_active_admins:
+            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
+
     user.email = email
     user.name = name or user.email
     user.company_id = company_id
@@ -4492,10 +4528,17 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
 
 @app.delete("/admin/users/{user_id}")
 def delete_admin_user(user_id: str, request: Request, db: Session = Depends(get_db)):
-    require_platform_admin(request)
+    current_user = require_platform_admin(request)
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
+    if user.role == "platform_admin":
+        active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
+        other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
+        if not other_active_admins:
+            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
+        if current_user.id == user.id and not other_active_admins:
+            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
     user.deleted_at = datetime.utcnow()
     db.commit()
     return {"success": True, "message": "Usuário excluído. O histórico foi preservado."}
