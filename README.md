@@ -144,23 +144,9 @@ Authentication and tenant resolution:
 
 Supabase Auth user linking:
 
-1. In Supabase, open the project dashboard, go to **Authentication > Users**, create or invite the user's email/password account, and copy the new Auth user UUID.
-2. Use a platform-admin backend context to link that Supabase Auth user to an existing local company. In current mock-admin mode, omit the `Authorization` header so the existing mock `platform_admin` can perform the operation. For a real platform admin later, send that admin's bearer token.
-3. Call `POST /admin/users/link-supabase` with the Supabase Auth UUID and an existing `company_id`; this endpoint never creates companies. Example:
-
-```bash
-curl -X POST "$BACKEND_URL/admin/users/link-supabase" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "cliente@empresa.com",
-    "auth_user_id": "supabase-auth-user-uuid",
-    "name": "Client Name",
-    "company_id": "atlas_commerce",
-    "role": "company_admin"
-  }'
-```
-
-If the email already exists in `users`, the endpoint updates `auth_user_id`, `company_id`, `role`, and `name` when provided. If the email does not exist, it creates the local user. `GET /admin/users` lists `id`, `email`, `name`, `role`, `company_id`, and `auth_user_id` for debugging and does not expose secrets. Both admin user endpoints require `platform_admin`.
+- Manual `POST /admin/users/link-supabase` still exists for exceptional support/debug workflows.
+- Normal onboarding now happens in-app from **Usuários** using `POST /admin/users/invite` with `email`, `name`, `company_id`, and `role` only (no manual Auth User ID in UI).
+- Backend uses `SUPABASE_SERVICE_ROLE_KEY` server-side to create/invite in Supabase Auth and upsert local `users`, linking `auth_user_id` automatically when Supabase returns it.
 
 User roles:
 
@@ -182,9 +168,11 @@ Admin user onboarding and password management:
 - The page includes an invite form that calls `POST /admin/users/invite` with `email`, `name`, `company_id`, and `role` (`platform_admin`, `company_admin`, `operator`).
 - Backend invite flow requires `platform_admin`, validates `company_id` and role, and uses Supabase Admin Auth API with `SUPABASE_SERVICE_ROLE_KEY` (backend-only secret) to generate/send invite links.
 - Backend upserts the local `users` row (`email`, `name`, `role`, `company_id`) and links `auth_user_id` when returned by Supabase.
-- If invite email delivery is not configured, backend returns `invite_link`; frontend shows **Copiar link** so admins can share it manually.
+- If invite email delivery is not configured, backend returns `invite_link`; frontend shows **Copiar link de convite** so admins can share it manually. If Supabase email delivery is active, frontend shows **Convite enviado por e-mail**.
+- The users table/mobile cards include **Editar** and save changes with `PUT /admin/users/{user_id}` (`platform_admin` only), validating role/company and updating local user mapping; if `email` changes and `auth_user_id` exists, backend updates Supabase Auth email too.
 - The users table includes an action **Enviar redefinição de senha** that calls `POST /admin/users/send-password-reset` (`platform_admin` only), triggering Supabase recovery email flow without exposing tokens/secrets.
 - If backend returns `403`, the page shows a friendly access message and keeps backend as permission source of truth.
+- Optional **Desativar usuário** is still TODO (not implemented yet) to avoid risky schema change during this fix-only increment.
 
 Password change flow:
 

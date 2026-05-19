@@ -1709,6 +1709,40 @@ button:disabled {
   vertical-align: top;
 }
 
+.users-admin-mobile-list {
+  display: none;
+  margin-top: 14px;
+  gap: 10px;
+}
+
+.users-admin-mobile-card {
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+}
+
+.users-admin-mobile-meta {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.users-admin-edit-grid {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 840px) {
+  .users-admin-mobile-list {
+    display: grid;
+  }
+
+  .users-admin-table-wrap {
+    display: none;
+  }
+}
+
 .integration-hero {
   margin: 22px 0;
   border-radius: 24px;

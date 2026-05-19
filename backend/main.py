@@ -116,6 +116,13 @@ class AdminSendPasswordResetRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
 
 
+class AdminUserUpdateRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str | None = Field(default=None, max_length=255)
+    company_id: str = Field(..., min_length=1, max_length=64)
+    role: str = Field(..., min_length=1, max_length=50)
+
+
 def normalize_admin_user_email(email: str) -> str:
     return email.strip().lower()
 
@@ -4368,6 +4375,48 @@ def send_admin_password_reset(payload: AdminSendPasswordResetRequest, request: R
     supabase_admin_request("/recover", payload={"email": email})
     logger.info("ADMIN_PASSWORD_RESET_SENT email=%s", email)
     return {"ok": True, "email": email}
+
+
+@app.put("/admin/users/{user_id}")
+def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = require_platform_admin(request)
+    email = normalize_admin_user_email(payload.email)
+    name = normalize_optional_admin_user_name(payload.name)
+    company_id = payload.company_id.strip()
+    role = payload.role.strip()
+    logger.info("ADMIN_USER_UPDATE_ATTEMPT requester=%s user_id=%s company_id=%s role=%s", current_user.id, user_id, company_id, role)
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Invalid email.")
+    if role not in ALLOWED_ADMIN_LINK_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid role.")
+    if db.get(Company, company_id) is None:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    email_owner = db.query(User).filter(User.email == email).first()
+    if email_owner is not None and email_owner.id != user.id:
+        raise HTTPException(status_code=409, detail="Email already linked to another user.")
+
+    if user.auth_user_id and email != user.email:
+        logger.info("ADMIN_USER_UPDATE_AUTH_EMAIL requester=%s user_id=%s", current_user.id, user.id)
+        supabase_admin_request(f"/admin/users/{user.auth_user_id}", payload={"email": email}, method="PUT")
+
+    user.email = email
+    user.name = name or user.email
+    user.company_id = company_id
+    user.role = role
+    db.commit()
+    db.refresh(user)
+    logger.info("ADMIN_USER_UPDATE_SUCCESS requester=%s user_id=%s", current_user.id, user.id)
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "company_id": user.company_id,
+        "auth_user_id": user.auth_user_id,
+    }
 
 
 @app.on_event("startup")
