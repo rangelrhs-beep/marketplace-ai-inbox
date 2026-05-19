@@ -34,7 +34,7 @@ class User(Base):
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="admin")
     company_id = Column(String(64), ForeignKey("companies.id"), nullable=False)
-    access_scope = Column(String(16), nullable=False, default="selected")
+    access_scope = Column(String(16), nullable=False, default="all")
     disabled_at = Column(DateTime, nullable=True)
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

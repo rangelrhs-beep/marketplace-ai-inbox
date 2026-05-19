@@ -140,12 +140,14 @@ def normalize_optional_admin_user_name(name: str | None) -> str | None:
 def normalize_company_access(role: str, company_id: str | None, company_ids: list[str], access_scope: str | None) -> tuple[str, list[str], str]:
     normalized_company_id = (company_id or "").strip()
     normalized_company_ids = sorted({(item or "").strip() for item in (company_ids or []) if (item or "").strip()})
-    normalized_scope = (access_scope or "").strip().lower() or "selected"
+    normalized_scope = (access_scope or "").strip().lower() or ("all" if role == "platform_admin" else "selected")
     if role == "platform_admin":
         if normalized_scope not in {"all", "selected"}:
             raise HTTPException(status_code=422, detail="Invalid access_scope.")
         if normalized_scope == "selected" and not normalized_company_ids and normalized_company_id:
             normalized_company_ids = [normalized_company_id]
+        if normalized_scope == "selected" and not normalized_company_ids:
+            raise HTTPException(status_code=422, detail="company_ids is required when access_scope is selected.")
     else:
         normalized_scope = "selected"
         if not normalized_company_id:
@@ -716,7 +718,7 @@ def get_allowed_company_ids_for_user(user: CurrentUserContext) -> list[str]:
             local_user = db.get(User, user.id)
             if local_user is None:
                 return []
-            if (local_user.access_scope or "selected") == "all":
+            if (local_user.access_scope or "all") == "all":
                 return [company.id for company in db.query(Company).order_by(Company.name.asc()).all()]
             selected_ids = [
                 row.company_id
@@ -736,18 +738,21 @@ def get_current_company_id(request: Request | None = None) -> str:
         if header_company_id:
             requested_company_id = header_company_id.strip()
             if requested_company_id in allowed_company_ids:
+                logger.info("AUTH_COMPANY_ACCESS_ALLOWED user_id=%s company_id=%s", current_user.id, requested_company_id)
                 if request is not None:
                     request.state.tenant_company_source = "header"
                 return requested_company_id
             if requested_company_id:
                 logger.warning("AUTH_COMPANY_ACCESS_DENIED user_id=%s company_id=%s", current_user.id, requested_company_id)
-        if current_user.source == "auth" and allowed_company_ids:
+        if allowed_company_ids:
             fallback_company_id = allowed_company_ids[0]
             if header_company_id and header_company_id.strip() and header_company_id.strip() != fallback_company_id:
                 logger.warning("AUTH_COMPANY_ACCESS_FALLBACK user_id=%s from=%s to=%s", current_user.id, header_company_id.strip(), fallback_company_id)
+            logger.info("AUTH_COMPANY_ACCESS_ALLOWED user_id=%s company_id=%s", current_user.id, fallback_company_id)
             if request is not None:
-                request.state.tenant_company_source = "auth_allowed_fallback"
+                request.state.tenant_company_source = "allowed_fallback"
             return fallback_company_id
+        raise HTTPException(status_code=403, detail="Nenhuma empresa permitida para o usuário atual.")
     if current_user.source == "auth" and current_user.company_id and company_exists(current_user.company_id):
         if request is not None:
             request.state.tenant_company_source = "auth_user"
@@ -907,7 +912,7 @@ def ensure_database_columns() -> None:
 
     user_columns = {
         "auth_user_id": "VARCHAR(128)",
-        "access_scope": "VARCHAR(16) NOT NULL DEFAULT 'selected'",
+        "access_scope": "VARCHAR(16) NOT NULL DEFAULT 'all'",
         "disabled_at": "TIMESTAMP",
         "deleted_at": "TIMESTAMP",
     }
@@ -4198,6 +4203,33 @@ def debug_auth_context(request: Request):
     }
 
 
+@app.get("/debug/auth/company-access")
+def debug_auth_company_access(request: Request, db: Session = Depends(get_db)):
+    current_user = get_current_user(request)
+    requested_company_id = (request.headers.get("X-Company-ID") or "").strip() or None
+    if current_user.source == "auth":
+        local_user = db.get(User, current_user.id)
+        selected_rows = []
+        if local_user is not None:
+            selected_rows = [
+                row.company_id
+                for row in db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == local_user.id).order_by(UserCompanyAccess.company_id.asc()).all()
+            ]
+        access_scope = (local_user.access_scope if local_user is not None else None) or ("all" if current_user.role == "platform_admin" else "selected")
+    else:
+        selected_rows = []
+        access_scope = "all" if current_user.role == "platform_admin" else "selected"
+    return {
+        "user_id": current_user.id,
+        "role": current_user.role,
+        "access_scope": access_scope,
+        "company_id": current_user.company_id,
+        "allowed_company_ids": get_allowed_company_ids_for_user(current_user),
+        "selected_access_rows": selected_rows,
+        "requested_company_id": requested_company_id,
+    }
+
+
 @app.get("/debug/auth-token")
 def debug_auth_token(request: Request):
     if not get_authorization_header(request):
@@ -4298,7 +4330,7 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
             "name": user.name,
             "role": user.role,
             "company_id": user.company_id,
-            "access_scope": user.access_scope or "selected",
+            "access_scope": user.access_scope or ("all" if user.role == "platform_admin" else "selected"),
             "company_ids": company_ids,
             "active": user.disabled_at is None,
         })
@@ -4465,6 +4497,7 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
     db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).delete()
     for selected_company_id in company_ids:
         db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
+    logger.info("ADMIN_USER_ACCESS_SAVE user_id=%s access_scope=%s company_ids=%s", user.id, access_scope, company_ids)
     db.commit()
     db.refresh(user)
     return {
@@ -4478,7 +4511,7 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
             "role": user.role,
             "company_id": user.company_id,
             "auth_user_id": user.auth_user_id,
-            "access_scope": user.access_scope or "selected",
+            "access_scope": user.access_scope or ("all" if user.role == "platform_admin" else "selected"),
             "company_ids": company_ids,
             "active": user.disabled_at is None,
         },
@@ -4557,6 +4590,7 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
         db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).delete()
         for selected_company_id in company_ids:
             db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
+        logger.info("ADMIN_USER_ACCESS_SAVE user_id=%s access_scope=%s company_ids=%s", user.id, access_scope, company_ids)
         db.commit()
         db.refresh(user)
         if payload.active is not None:
@@ -4569,7 +4603,7 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
             "role": user.role,
             "company_id": user.company_id,
             "auth_user_id": user.auth_user_id,
-            "access_scope": user.access_scope or "selected",
+            "access_scope": user.access_scope or ("all" if user.role == "platform_admin" else "selected"),
             "company_ids": company_ids,
             "active": user.disabled_at is None,
         }
