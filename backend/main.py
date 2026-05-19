@@ -177,14 +177,18 @@ def get_supabase_service_role_key() -> str:
     service_role_key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
     if not service_role_key:
         logger.error("SUPABASE_ADMIN_REJECTED reason=missing_service_role_key")
-        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY is required.")
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY is not configured.")
     return service_role_key
 
 
 def get_supabase_auth_base_url() -> str:
-    base_url = (SUPABASE_URL or "").rstrip("/")
+    base_url = (
+        os.getenv("SUPABASE_URL")
+        or os.getenv("SUPABASE_PROJECT_URL")
+        or ""
+    ).rstrip("/")
     if not base_url:
-        raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured.")
+        raise HTTPException(status_code=500, detail="SUPABASE_URL is not configured in backend environment.")
     return f"{base_url}/auth/v1"
 
 
@@ -635,6 +639,8 @@ def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext:
                 status_code=403,
                 detail="User is authenticated but not linked to a company.",
             )
+        if user.disabled_at is not None:
+            raise HTTPException(status_code=403, detail="Usuário desativado. Entre em contato com o administrador.")
         if not user.company_id or db.get(Company, user.company_id) is None:
             logger.warning("AUTH_CONTEXT_USER_COMPANY_INVALID user_id=%s company_id=%s", user.id, user.company_id)
             logger.info("AUTH_USER_NOT_FOUND email=%s", email)
@@ -4256,7 +4262,6 @@ def list_admin_users(request: Request, db: Session = Depends(get_db)):
             "name": user.name,
             "role": user.role,
             "company_id": user.company_id,
-            "auth_user_id": user.auth_user_id,
             "access_scope": user.access_scope or "selected",
             "company_ids": company_ids,
             "active": user.disabled_at is None,
@@ -4398,7 +4403,7 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
         safe_detail = str(response_body.get("error") or "Erro desconhecido")
         logger.error("ADMIN_INVITE_ERROR type=SupabaseAdminError message=%s", safe_detail)
         raise HTTPException(status_code=502, detail=f"Não foi possível criar o convite no Supabase: {safe_detail}")
-    logger.info("ADMIN_INVITE_SUPABASE_SUCCESS email=%s", email)
+    logger.info("ADMIN_INVITE_SUCCESS email=%s", email)
     auth_user_id = ((response_body.get("user") or {}).get("id") or "").strip() or None
     action_link = (response_body.get("action_link") or "").strip()
     user = db.query(User).filter(User.email == email).first()
@@ -4426,7 +4431,6 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
         db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
     db.commit()
     db.refresh(user)
-    logger.info("ADMIN_INVITE_LOCAL_USER_SAVED email=%s", email)
     return {
         "success": True,
         "message": "Usuário criado/atualizado com sucesso.",
@@ -4447,11 +4451,11 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
 
 @app.post("/admin/users/{user_id}/send-password-reset")
 def send_admin_password_reset(user_id: str, request: Request, db: Session = Depends(get_db)):
-    current_user = require_platform_admin(request)
+    require_platform_admin(request)
     user = db.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="User not found.")
-    logger.info("ADMIN_PASSWORD_RESET_ATTEMPT requester=%s email=%s", current_user.id, user.email)
+    logger.info("ADMIN_PASSWORD_RESET_START user_id=%s", user.id)
     try:
         status, response_body = supabase_admin_request("/recover", payload={"email": user.email})
     except HTTPException as error:
@@ -4462,7 +4466,7 @@ def send_admin_password_reset(user_id: str, request: Request, db: Session = Depe
         logger.error("ADMIN_PASSWORD_RESET_ERROR type=SupabaseAdminError message=%s", safe_detail)
         raise HTTPException(status_code=502, detail=f"Não foi possível enviar redefinição de senha: {safe_detail}")
     action_link = (response_body.get("action_link") or "").strip()
-    logger.info("ADMIN_PASSWORD_RESET_SENT email=%s", user.email)
+    logger.info("ADMIN_PASSWORD_RESET_SUCCESS user_id=%s", user.id)
     return {"success": True, "message": ("Link de redefinição gerado com sucesso." if action_link else f"Redefinição enviada para {user.email}."), "email": user.email, "recovery_link": action_link or None}
 
 
@@ -4497,6 +4501,7 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
         active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
         other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
         if not other_active_admins:
+            logger.warning("ADMIN_LAST_PLATFORM_ADMIN_BLOCKED action=deactivate")
             raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
         if current_user.id == user.id and not other_active_admins:
             raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
@@ -4512,6 +4517,7 @@ def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Re
         db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
     db.commit()
     db.refresh(user)
+    logger.info("ADMIN_USER_REACTIVATED user_id=%s", user.id) if payload.active else logger.info("ADMIN_USER_DEACTIVATED user_id=%s", user.id)
     logger.info("ADMIN_USER_UPDATE_SUCCESS requester=%s user_id=%s", current_user.id, user.id)
     return {
         "id": user.id,
@@ -4536,6 +4542,7 @@ def delete_admin_user(user_id: str, request: Request, db: Session = Depends(get_
         active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
         other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
         if not other_active_admins:
+            logger.warning("ADMIN_LAST_PLATFORM_ADMIN_BLOCKED action=delete")
             raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
         if current_user.id == user.id and not other_active_admins:
             raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")

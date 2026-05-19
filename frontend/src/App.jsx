@@ -321,7 +321,11 @@ function UsersAdminPage({
       setForm((current) => ({ ...current, email: "", name: "" }));
       await loadAdminUsers();
     } catch (error) {
-      setSubmitMessage(error.message || "Não foi possível convidar usuário.");
+      setSubmitMessage(
+        error?.message === "Failed to fetch"
+          ? "Não foi possível conectar ao servidor. Verifique o deploy/backend."
+          : (error.message || "Não foi possível convidar usuário.")
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -478,7 +482,8 @@ function UsersAdminPage({
                 <div className="settings-actions">
                   {isEditing ? <button type="button" className="primary" onClick={() => handleSaveEdit(user.id)} disabled={isSavingEdit}>Salvar</button> : <button type="button" className="secondary" onClick={() => startEdit(user)}>Editar</button>}
                   {isEditing ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null}
-                  <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Redefinir senha</button>
+                  <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Enviar redefinição de senha</button>
+                  <button type="button" className="secondary" onClick={() => { setEditForm((current) => ({ ...current, active: user.active === false })); handleSaveEdit(user.id); }}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button>
                   <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir usuário</button>
                 </div>
               </article>
@@ -495,7 +500,7 @@ function UsersAdminPage({
                   <td>{editingUserId === user.id ? <input value={editForm.email} onChange={(event) => setEditForm((current) => ({ ...current, email: event.target.value }))} required /> : (user.email || "-")}</td>
                   <td>{editingUserId === user.id ? <select value={editForm.role} onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}><option value="platform_admin">platform_admin</option><option value="company_admin">company_admin</option><option value="operator">operator</option></select> : (user.role || "-")}</td>
                   <td>{editingUserId === user.id ? <select value={editForm.company_id} onChange={(event) => setEditForm((current) => ({ ...current, company_id: event.target.value }))}>{companies.map((company) => <option key={`edit-${user.id}-${company.id}`} value={company.id}>{company.name}</option>)}</select> : (user.company_id ? `${companyNameById.get(user.company_id) || user.company_id} (${user.company_id})` : "-")}</td>
-                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Redefinir senha</button> <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir</button></td>
+                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Enviar redefinição de senha</button> <button type="button" className="secondary" onClick={() => { setEditForm((current) => ({ ...current, active: user.active === false })); handleSaveEdit(user.id); }}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button> <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir</button></td>
                 </tr>
               ))}
             </tbody>
@@ -910,7 +915,7 @@ function Sidebar({ active, onNavigate, navItems }) {
   );
 }
 
-function LoginScreen({ email, password, error, isLoading, onEmailChange, onPasswordChange, onSubmit }) {
+function LoginScreen({ email, password, error, isLoading, onEmailChange, onPasswordChange, onSubmit, onForgotPassword }) {
   return (
     <main className="login-screen">
       <section className="login-panel" aria-labelledby="login-title">
@@ -951,6 +956,7 @@ function LoginScreen({ email, password, error, isLoading, onEmailChange, onPassw
           <button className="primary" type="submit" disabled={isLoading}>
             {isLoading ? "Entrando..." : "Entrar"}
           </button>
+          <button className="secondary" type="button" onClick={onForgotPassword} disabled={isLoading}>Esqueci minha senha</button>
         </form>
       </section>
     </main>
@@ -2825,6 +2831,22 @@ async function handleEnableNotifications() {
     }
   }
 
+  async function handleForgotPassword() {
+    if (!supabase) return;
+    const email = loginEmail.trim();
+    if (!email) {
+      setLoginError("Informe seu e-mail para receber o link de redefinição.");
+      return;
+    }
+    setLoginError("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    if (error) {
+      setLoginError(error.message || "Não foi possível enviar a redefinição.");
+      return;
+    }
+    setLoginError("Enviamos um link de redefinição para seu e-mail.");
+  }
+
   async function handleLogout() {
     resetTenantScopedUi();
     clearTenantQuestionStorage();
@@ -3813,6 +3835,7 @@ async function handleEnableNotifications() {
         onEmailChange={setLoginEmail}
         onPasswordChange={setLoginPassword}
         onSubmit={handleLogin}
+        onForgotPassword={handleForgotPassword}
       />
     );
   }
