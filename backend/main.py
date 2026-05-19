@@ -105,6 +105,17 @@ class PushUnsubscribeRequest(BaseModel):
     company_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class AdminUserInviteRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str | None = Field(default=None, max_length=255)
+    company_id: str = Field(..., min_length=1, max_length=64)
+    role: str = Field(..., min_length=1, max_length=50)
+
+
+class AdminSendPasswordResetRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+
+
 def normalize_admin_user_email(email: str) -> str:
     return email.strip().lower()
 
@@ -130,6 +141,50 @@ def generate_local_user_id(db: Session) -> str:
             return user_id
     logger.error("ADMIN_USER_LINK_REJECTED reason=user_id_collision")
     raise HTTPException(status_code=500, detail="Could not allocate user id.")
+
+
+def get_supabase_service_role_key() -> str:
+    service_role_key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    if not service_role_key:
+        logger.error("SUPABASE_ADMIN_REJECTED reason=missing_service_role_key")
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY is required.")
+    return service_role_key
+
+
+def supabase_admin_request(path: str, *, method: str = "POST", payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    auth_base_url = get_supabase_auth_base_url()
+    service_role_key = get_supabase_service_role_key()
+    url = f"{auth_base_url}{path}"
+    body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8") if payload is not None else None
+    request = UrlRequest(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "apikey": service_role_key,
+            "Authorization": f"Bearer {service_role_key}",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            response_text = response.read().decode("utf-8", errors="replace")
+            response_body = json.loads(response_text) if response_text else {}
+            return response.status, response_body
+    except HTTPError as error:
+        details_text = error.read().decode("utf-8", errors="replace")
+        details = {}
+        if details_text:
+            try:
+                details = json.loads(details_text)
+            except json.JSONDecodeError:
+                details = {"message": details_text}
+        logger.warning("SUPABASE_ADMIN_HTTP_ERROR status=%s body=%s", error.code, details)
+        raise HTTPException(status_code=502, detail="Supabase admin operation failed.") from error
+    except URLError as error:
+        logger.warning("SUPABASE_ADMIN_UNAVAILABLE error=%s", error)
+        raise HTTPException(status_code=502, detail="Supabase admin service unavailable.") from error
 
 
 MOCK_PLATFORM_ADMIN_USER = CurrentUserContext(
@@ -4246,6 +4301,73 @@ def link_supabase_user(payload: AdminUserLinkRequest, request: Request, db: Sess
         "company_id": user.company_id,
         "auth_user_id": user.auth_user_id,
     }
+
+
+@app.post("/admin/users/invite")
+def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Session = Depends(get_db)):
+    current_user = require_platform_admin(request)
+    email = normalize_admin_user_email(payload.email)
+    name = normalize_optional_admin_user_name(payload.name)
+    company_id = payload.company_id.strip()
+    role = payload.role.strip()
+    logger.info("ADMIN_USER_INVITE_ATTEMPT requester=%s email=%s company_id=%s role=%s", current_user.id, email, company_id, role)
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Invalid email.")
+    if role not in ALLOWED_ADMIN_LINK_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid role.")
+    if db.get(Company, company_id) is None:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    status, response_body = supabase_admin_request(
+        "/admin/generate_link",
+        payload={"type": "invite", "email": email, "data": {"name": name or email}},
+    )
+    auth_user_id = ((response_body.get("user") or {}).get("id") or "").strip() or None
+    action_link = (response_body.get("action_link") or "").strip()
+    email_sent = bool(action_link) and status in (200, 201)
+
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        user = User(
+            id=generate_local_user_id(db),
+            email=email,
+            name=name or email,
+            role=role,
+            company_id=company_id,
+            auth_user_id=auth_user_id,
+        )
+        db.add(user)
+    else:
+        user.name = name or user.name
+        user.role = role
+        user.company_id = company_id
+        if auth_user_id:
+            user.auth_user_id = auth_user_id
+    db.commit()
+    db.refresh(user)
+    logger.info("ADMIN_USER_INVITE_SUCCESS email=%s auth_user_id=%s has_action_link=%s", email, user.auth_user_id, bool(action_link))
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "company_id": user.company_id,
+        "auth_user_id": user.auth_user_id,
+        "invite_email_sent": email_sent,
+        "invite_link": action_link or None,
+    }
+
+
+@app.post("/admin/users/send-password-reset")
+def send_admin_password_reset(payload: AdminSendPasswordResetRequest, request: Request):
+    current_user = require_platform_admin(request)
+    email = normalize_admin_user_email(payload.email)
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Invalid email.")
+    logger.info("ADMIN_PASSWORD_RESET_ATTEMPT requester=%s email=%s", current_user.id, email)
+    supabase_admin_request("/recover", payload={"email": email})
+    logger.info("ADMIN_PASSWORD_RESET_SENT email=%s", email)
+    return {"ok": True, "email": email}
 
 
 @app.on_event("startup")

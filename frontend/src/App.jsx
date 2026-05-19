@@ -255,8 +255,10 @@ function UsersAdminPage({
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [submitMessage, setSubmitMessage] = useState("");
+  const [inviteLink, setInviteLink] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [form, setForm] = useState({ email: "", auth_user_id: "", name: "", company_id: "", role: "operator" });
+  const [isResettingEmail, setIsResettingEmail] = useState("");
+  const [form, setForm] = useState({ email: "", name: "", company_id: "", role: "operator" });
 
   useEffect(() => {
     const defaultCompanyId = currentCompany?.id || companies[0]?.id || "";
@@ -293,28 +295,44 @@ function UsersAdminPage({
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitMessage("");
+    setInviteLink("");
     setIsSubmitting(true);
     try {
-      const response = await apiFetch(`${API_URL}/admin/users/link-supabase`, {
+      const response = await apiFetch(`${API_URL}/admin/users/invite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
       const data = await response.json().catch(() => ({}));
       if (response.status === 403) {
-        setSubmitMessage("Acesso negado. Apenas platform_admin pode vincular usuários.");
+        setSubmitMessage("Acesso negado. Apenas platform_admin pode convidar usuários.");
         return;
       }
       if (!response.ok) {
-        throw new Error(data.detail || "Não foi possível vincular usuário.");
+        throw new Error(data.detail || "Não foi possível convidar usuário.");
       }
-      setSubmitMessage(`Usuário ${data.email} vinculado com sucesso.`);
-      setForm((current) => ({ ...current, email: "", auth_user_id: "", name: "" }));
+      setSubmitMessage(data.invite_email_sent ? `Usuário ${data.email} criado/vinculado e convite enviado.` : `Usuário ${data.email} criado/vinculado. Copie o link de convite.`);
+      setInviteLink(data.invite_link || "");
+      setForm((current) => ({ ...current, email: "", name: "" }));
       await loadAdminUsers();
     } catch (error) {
-      setSubmitMessage(error.message || "Não foi possível vincular usuário.");
+      setSubmitMessage(error.message || "Não foi possível convidar usuário.");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+  async function handleSendReset(email) {
+    setIsResettingEmail(email);
+    setSubmitMessage("");
+    try {
+      const response = await apiFetch(`${API_URL}/admin/users/send-password-reset`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Não foi possível enviar redefinição.");
+      setSubmitMessage(`Redefinição enviada para ${email}.`);
+    } catch (error) {
+      setSubmitMessage(error.message || "Não foi possível enviar redefinição.");
+    } finally {
+      setIsResettingEmail("");
     }
   }
 
@@ -324,7 +342,7 @@ function UsersAdminPage({
     <section className="settings-page">
       <ScreenHeader
         title="Usuários"
-        subtitle="Gestão local de vínculos"
+        subtitle="Convites e gestão de usuários"
         companies={companies}
         currentCompany={currentCompany}
         currentUser={currentUser}
@@ -339,10 +357,8 @@ function UsersAdminPage({
         notificationHelpText={notificationHelpText}
       />
       <div className="settings-card users-admin-card">
-        <p className="settings-warning">Crie primeiro o usuário no Supabase Auth, copie o UID e vincule aqui à empresa.</p>
         <form className="settings-form users-admin-form" onSubmit={handleSubmit}>
           <label>Email<input value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} required /></label>
-          <label>Auth User ID<input value={form.auth_user_id} onChange={(event) => setForm((current) => ({ ...current, auth_user_id: event.target.value }))} required /></label>
           <label>Nome<input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
           <label>Empresa
             <select value={form.company_id} onChange={(event) => setForm((current) => ({ ...current, company_id: event.target.value }))} required>
@@ -357,22 +373,24 @@ function UsersAdminPage({
             </select>
           </label>
           <div className="settings-actions">
-            <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Vinculando..." : "Vincular usuário"}</button>
+            <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Convidando..." : "Convidar usuário"}</button>
           </div>
         </form>
         {submitMessage ? <p className="settings-message">{submitMessage}</p> : null}
+        {inviteLink ? <div className="settings-actions"><button className="secondary" type="button" onClick={() => navigator.clipboard?.writeText(inviteLink)}>Copiar link</button></div> : null}
         {errorMessage ? <p className="settings-warning">{errorMessage}</p> : null}
         <div className="users-admin-table-wrap">
           <table className="users-admin-table">
-            <thead><tr><th>Nome</th><th>Email</th><th>Role</th><th>Empresa</th><th>Auth User ID</th></tr></thead>
+            <thead><tr><th>Nome</th><th>Email</th><th>Role</th><th>Empresa</th><th>Auth User ID</th><th>Ações</th></tr></thead>
             <tbody>
-              {loadingUsers ? <tr><td colSpan={5}>Carregando usuários...</td></tr> : users.map((user) => (
+              {loadingUsers ? <tr><td colSpan={6}>Carregando usuários...</td></tr> : users.map((user) => (
                 <tr key={user.id}>
                   <td>{user.name || "-"}</td>
                   <td>{user.email || "-"}</td>
                   <td>{user.role || "-"}</td>
                   <td>{user.company_id ? `${companyNameById.get(user.company_id) || user.company_id} (${user.company_id})` : "-"}</td>
                   <td>{user.auth_user_id || "-"}</td>
+                  <td><button type="button" className="secondary" onClick={() => handleSendReset(user.email)} disabled={isResettingEmail === user.email}>Enviar redefinição de senha</button></td>
                 </tr>
               ))}
             </tbody>
@@ -929,6 +947,18 @@ function ScreenHeader({
                     <span />
                   </button>
                 </label>
+                <button
+                  type="button"
+                  className="header-user-menu-logout"
+                  onClick={async () => {
+                    setIsUserMenuOpen(false);
+                    const passwordHandler = window.__marketplaceChangePassword;
+                    if (typeof passwordHandler === "function") await passwordHandler();
+                  }}
+                  role="menuitem"
+                >
+                  Alterar senha
+                </button>
                 <button
                   type="button"
                   className="header-user-menu-logout"
@@ -2702,6 +2732,33 @@ async function handleEnableNotifications() {
     if (supabase) await supabase.auth.signOut();
     setAuthSession(null);
   }
+
+  async function handleChangePassword() {
+    if (!supabase || !authSession) {
+      setQuestionNotice("Sessão inválida para alterar senha.");
+      return;
+    }
+    const newPassword = window.prompt("Digite a nova senha:");
+    if (!newPassword) return;
+    const confirmPassword = window.prompt("Confirme a nova senha:");
+    if (newPassword !== confirmPassword) {
+      setQuestionNotice("As senhas não conferem.");
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      setQuestionNotice(error.message || "Não foi possível alterar senha.");
+      return;
+    }
+    setQuestionNotice("Senha atualizada com sucesso.");
+  }
+
+  useEffect(() => {
+    window.__marketplaceChangePassword = handleChangePassword;
+    return () => {
+      delete window.__marketplaceChangePassword;
+    };
+  }, [authSession?.access_token]);
 
   async function loadMoreQuestions() {
     if (isLoadingMoreQuestions || !questionsPageInfo.has_more) return;
