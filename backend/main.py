@@ -718,7 +718,11 @@ def get_allowed_company_ids_for_user(user: CurrentUserContext) -> list[str]:
             local_user = db.get(User, user.id)
             if local_user is None:
                 return []
-            if (local_user.access_scope or "all") == "all":
+            access_scope = (local_user.access_scope or "").strip().lower() or "all"
+            if access_scope == "all":
+                return [company.id for company in db.query(Company).order_by(Company.name.asc()).all()]
+            if access_scope != "selected":
+                access_scope = "all"
                 return [company.id for company in db.query(Company).order_by(Company.name.asc()).all()]
             selected_ids = [
                 row.company_id
@@ -742,8 +746,6 @@ def get_current_company_id(request: Request | None = None) -> str:
                 if request is not None:
                     request.state.tenant_company_source = "header"
                 return requested_company_id
-            if requested_company_id:
-                logger.warning("AUTH_COMPANY_ACCESS_DENIED user_id=%s company_id=%s", current_user.id, requested_company_id)
         if allowed_company_ids:
             fallback_company_id = allowed_company_ids[0]
             if header_company_id and header_company_id.strip() and header_company_id.strip() != fallback_company_id:
@@ -752,6 +754,16 @@ def get_current_company_id(request: Request | None = None) -> str:
             if request is not None:
                 request.state.tenant_company_source = "allowed_fallback"
             return fallback_company_id
+        local_user = None
+        if current_user.source == "auth":
+            db = SessionLocal()
+            try:
+                local_user = db.get(User, current_user.id)
+            finally:
+                db.close()
+        access_scope = ((local_user.access_scope if local_user else "") or "").strip().lower() or "all"
+        if access_scope == "selected":
+            raise HTTPException(status_code=403, detail="Administrador sem empresas permitidas. Ajuste o acesso do usuário.")
         raise HTTPException(status_code=403, detail="Nenhuma empresa permitida para o usuário atual.")
     if current_user.source == "auth" and current_user.company_id and company_exists(current_user.company_id):
         if request is not None:
@@ -4162,6 +4174,8 @@ def get_me(request: Request, db: Session = Depends(get_db)):
     company = db.get(Company, company_id)
     company_name = company.name if company else "CPAP Express"
     logger.info("TENANT_ME company_id=%s user_id=%s role=%s auth_source=%s", company_id, user_id, role, current_user.source)
+    local_user = db.get(User, current_user.id) if current_user.source == "auth" else None
+    access_scope = ((local_user.access_scope if local_user else None) or ("all" if role == "platform_admin" else "selected"))
     return {
         "user": {
             "id": user_id,
@@ -4170,7 +4184,7 @@ def get_me(request: Request, db: Session = Depends(get_db)):
             "role": role,
             "source": current_user.source,
             "company_id": current_user.company_id,
-            "access_scope": (db.get(User, current_user.id).access_scope if current_user.source == "auth" and db.get(User, current_user.id) else ("all" if role == "platform_admin" else "selected")),
+            "access_scope": access_scope,
             "allowed_company_ids": allowed_company_ids,
         },
         "company": {
@@ -4207,6 +4221,7 @@ def debug_auth_context(request: Request):
 def debug_auth_company_access(request: Request, db: Session = Depends(get_db)):
     current_user = get_current_user(request)
     requested_company_id = (request.headers.get("X-Company-ID") or "").strip() or None
+    local_user = None
     if current_user.source == "auth":
         local_user = db.get(User, current_user.id)
         selected_rows = []
@@ -4221,9 +4236,12 @@ def debug_auth_company_access(request: Request, db: Session = Depends(get_db)):
         access_scope = "all" if current_user.role == "platform_admin" else "selected"
     return {
         "user_id": current_user.id,
+        "email": current_user.email,
         "role": current_user.role,
         "access_scope": access_scope,
         "company_id": current_user.company_id,
+        "disabled_at": local_user.disabled_at.isoformat() if current_user.source == "auth" and local_user is not None and local_user.disabled_at is not None else None,
+        "deleted_at": local_user.deleted_at.isoformat() if current_user.source == "auth" and local_user is not None and local_user.deleted_at is not None else None,
         "allowed_company_ids": get_allowed_company_ids_for_user(current_user),
         "selected_access_rows": selected_rows,
         "requested_company_id": requested_company_id,
