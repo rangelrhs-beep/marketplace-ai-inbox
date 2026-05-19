@@ -640,6 +640,7 @@ def find_user_for_auth_claims(claims: dict[str, Any]) -> CurrentUserContext:
                 detail="User is authenticated but not linked to a company.",
             )
         if user.disabled_at is not None:
+            logger.warning("AUTH_DISABLED_USER_BLOCKED user_id=%s", user.id)
             raise HTTPException(status_code=403, detail="Usuário desativado. Entre em contato com o administrador.")
         if not user.company_id or db.get(Company, user.company_id) is None:
             logger.warning("AUTH_CONTEXT_USER_COMPANY_INVALID user_id=%s company_id=%s", user.id, user.company_id)
@@ -708,17 +709,45 @@ def company_exists(company_id: str) -> bool:
     finally:
         db.close()
 
+def get_allowed_company_ids_for_user(user: CurrentUserContext) -> list[str]:
+    db = SessionLocal()
+    try:
+        if user.role == "platform_admin":
+            local_user = db.get(User, user.id)
+            if local_user is None:
+                return []
+            if (local_user.access_scope or "selected") == "all":
+                return [company.id for company in db.query(Company).order_by(Company.name.asc()).all()]
+            selected_ids = [
+                row.company_id
+                for row in db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).all()
+            ]
+            return sorted({company_id for company_id in selected_ids if company_id and company_exists(company_id)})
+        return [user.company_id] if user.company_id else []
+    finally:
+        db.close()
+
 
 def get_current_company_id(request: Request | None = None) -> str:
     current_user = get_current_user(request)
     header_company_id = request.headers.get("X-Company-ID") if request is not None else None
-    if current_user.role == "platform_admin" and header_company_id:
-        requested_company_id = header_company_id.strip()
-        if company_exists(requested_company_id):
+    allowed_company_ids = get_allowed_company_ids_for_user(current_user)
+    if current_user.role == "platform_admin":
+        if header_company_id:
+            requested_company_id = header_company_id.strip()
+            if requested_company_id in allowed_company_ids:
+                if request is not None:
+                    request.state.tenant_company_source = "header"
+                return requested_company_id
+            if requested_company_id:
+                logger.warning("AUTH_COMPANY_ACCESS_DENIED user_id=%s company_id=%s", current_user.id, requested_company_id)
+        if current_user.source == "auth" and allowed_company_ids:
+            fallback_company_id = allowed_company_ids[0]
+            if header_company_id and header_company_id.strip() and header_company_id.strip() != fallback_company_id:
+                logger.warning("AUTH_COMPANY_ACCESS_FALLBACK user_id=%s from=%s to=%s", current_user.id, header_company_id.strip(), fallback_company_id)
             if request is not None:
-                request.state.tenant_company_source = "header"
-            return requested_company_id
-        logger.warning("Tenant company override ignored; company not found company_id=%s", requested_company_id)
+                request.state.tenant_company_source = "auth_allowed_fallback"
+            return fallback_company_id
     if current_user.source == "auth" and current_user.company_id and company_exists(current_user.company_id):
         if request is not None:
             request.state.tenant_company_source = "auth_user"
@@ -4124,6 +4153,7 @@ def root_head_health():
 def get_me(request: Request, db: Session = Depends(get_db)):
     company_id, user_id, role = log_tenant_context(request)
     current_user = get_current_user(request)
+    allowed_company_ids = get_allowed_company_ids_for_user(current_user)
     company = db.get(Company, company_id)
     company_name = company.name if company else "CPAP Express"
     logger.info("TENANT_ME company_id=%s user_id=%s role=%s auth_source=%s", company_id, user_id, role, current_user.source)
@@ -4134,6 +4164,9 @@ def get_me(request: Request, db: Session = Depends(get_db)):
             "email": current_user.email,
             "role": role,
             "source": current_user.source,
+            "company_id": current_user.company_id,
+            "access_scope": (db.get(User, current_user.id).access_scope if current_user.source == "auth" and db.get(User, current_user.id) else ("all" if role == "platform_admin" else "selected")),
+            "allowed_company_ids": allowed_company_ids,
         },
         "company": {
             "id": company_id,
@@ -4141,7 +4174,7 @@ def get_me(request: Request, db: Session = Depends(get_db)):
         },
         "permissions": {
             "is_platform_admin": role == "platform_admin",
-            "can_switch_company": role == "platform_admin",
+            "can_switch_company": len(allowed_company_ids) > 1,
         },
     }
 
@@ -4176,9 +4209,12 @@ def debug_auth_token(request: Request):
 @app.get("/companies")
 def list_companies(request: Request, db: Session = Depends(get_db)):
     company_id, user_id, role = log_tenant_context(request)
+    current_user = get_current_user(request)
     if role != "platform_admin":
         raise HTTPException(status_code=403, detail="Acesso restrito ao administrador da plataforma.")
+    allowed_company_ids = set(get_allowed_company_ids_for_user(current_user))
     companies = db.query(Company).order_by(Company.name.asc()).all()
+    companies = [company for company in companies if company.id in allowed_company_ids]
     logger.info("TENANT_COMPANIES company_id=%s user_id=%s role=%s count=%s", company_id, user_id, role, len(companies))
     return [{"id": company.id, "name": company.name} for company in companies]
 

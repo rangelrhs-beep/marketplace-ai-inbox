@@ -418,6 +418,9 @@ function UsersAdminPage({
   }
 
   const companyNameById = new Map(companies.map((company) => [company.id, company.name]));
+  const activePlatformAdmins = users.filter((user) => user.role === "platform_admin" && user.active !== false);
+  const lastActivePlatformAdminId = activePlatformAdmins.length === 1 ? activePlatformAdmins[0].id : "";
+  const isLastPlatformAdmin = (user) => user.id === lastActivePlatformAdminId;
 
   return (
     <section className="settings-page">
@@ -474,6 +477,7 @@ function UsersAdminPage({
         <div className="users-admin-mobile-list">
           {loadingUsers ? <p>Carregando usuários...</p> : users.map((user) => {
             const isEditing = editingUserId === user.id;
+            const protectedLastAdmin = isLastPlatformAdmin(user);
             return (
               <article className="users-admin-mobile-card" key={`mobile-${user.id}`}>
                 {isEditing ? (
@@ -510,8 +514,9 @@ function UsersAdminPage({
                   {isEditing ? <button type="button" className="primary" onClick={() => handleSaveEdit(user.id)} disabled={isSavingEdit}>Salvar</button> : <button type="button" className="secondary" onClick={() => startEdit(user)}>Editar</button>}
                   {isEditing ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null}
                   <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Enviar redefinição de senha</button>
-                  <button type="button" className="secondary" onClick={() => handleSaveEdit(user.id, { active: user.active === false }, user.active === false ? "Usuário reativado com sucesso." : "Usuário desativado com sucesso.")}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button>
-                  <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir usuário</button>
+                  <button type="button" className="secondary" onClick={() => handleSaveEdit(user.id, { active: user.active === false }, user.active === false ? "Usuário reativado com sucesso." : "Usuário desativado com sucesso.")} disabled={protectedLastAdmin}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button>
+                  <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id || protectedLastAdmin}>Excluir usuário</button>
+                  {protectedLastAdmin ? <small>Último administrador da plataforma.</small> : null}
                 </div>
               </article>
             );
@@ -521,15 +526,17 @@ function UsersAdminPage({
           <table className="users-admin-table">
             <thead><tr><th>Nome</th><th>Email</th><th>Role</th><th>Empresa</th><th>Ações</th></tr></thead>
             <tbody>
-              {loadingUsers ? <tr><td colSpan={5}>Carregando usuários...</td></tr> : users.map((user) => (
+              {loadingUsers ? <tr><td colSpan={5}>Carregando usuários...</td></tr> : users.map((user) => {
+                const protectedLastAdmin = isLastPlatformAdmin(user);
+                return (
                 <tr key={user.id}>
                   <td>{editingUserId === user.id ? <input value={editForm.name} onChange={(event) => setEditForm((current) => ({ ...current, name: event.target.value }))} /> : (user.name || "-")}</td>
                   <td>{editingUserId === user.id ? <input value={editForm.email} onChange={(event) => setEditForm((current) => ({ ...current, email: event.target.value }))} required /> : (user.email || "-")}</td>
-                  <td>{editingUserId === user.id ? <select value={editForm.role} onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}><option value="platform_admin">platform_admin</option><option value="company_admin">company_admin</option><option value="operator">operator</option></select> : (user.role || "-")}</td>
+                  <td>{editingUserId === user.id ? <select value={editForm.role} onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))} disabled={protectedLastAdmin}><option value="platform_admin">platform_admin</option><option value="company_admin">company_admin</option><option value="operator">operator</option></select> : (user.role || "-")}</td>
                   <td>{editingUserId === user.id ? <select value={editForm.company_id} onChange={(event) => setEditForm((current) => ({ ...current, company_id: event.target.value }))}>{companies.map((company) => <option key={`edit-${user.id}-${company.id}`} value={company.id}>{company.name}</option>)}</select> : getUserCompaniesLabel(user, companyNameById)}</td>
-                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Enviar redefinição de senha</button> <button type="button" className="secondary" onClick={() => handleSaveEdit(user.id, { active: user.active === false }, user.active === false ? "Usuário reativado com sucesso." : "Usuário desativado com sucesso.")}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button> <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir</button></td>
+                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Enviar redefinição de senha</button> <button type="button" className="secondary" onClick={() => handleSaveEdit(user.id, { active: user.active === false }, user.active === false ? "Usuário reativado com sucesso." : "Usuário desativado com sucesso.")} disabled={protectedLastAdmin}>{user.active === false ? "Reativar usuário" : "Desativar usuário"}</button> <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id || protectedLastAdmin}>Excluir</button>{protectedLastAdmin ? <small> Último administrador da plataforma.</small> : null}</td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </div>
@@ -541,6 +548,10 @@ function UsersAdminPage({
 // TODO security: backend must enforce role access for platform/admin/debug routes regardless of frontend menu visibility.
 function getRoleAwareNavItems(role) {
   return navItemsByRole[role] || navItemsByRole.operator;
+}
+
+function canAccessScreen(role, screen) {
+  return getRoleAwareNavItems(role).some((item) => item.label === screen);
 }
 
 const initialIntegrations = [
@@ -2669,6 +2680,17 @@ export default function App() {
     setLastPendingCount(0);
   }
 
+  function resetAuthUiState(errorMessage = "") {
+    resetTenantScopedUi();
+    localStorage.removeItem(SELECTED_COMPANY_STORAGE_KEY);
+    clearTenantQuestionStorage();
+    setSelectedCompanyId(getStoredCompanyId());
+    setActive("Inbox");
+    setTenantContext(FALLBACK_TENANT_CONTEXT);
+    setCompanies([FALLBACK_TENANT_CONTEXT.company]);
+    if (errorMessage) setLoginError(errorMessage);
+  }
+
   function queueNewQuestionNotification(nextCount, sampleQuestion) {
     if (notificationDebounceRef.current) return;
     notificationDebounceRef.current = window.setTimeout(() => {
@@ -2847,6 +2869,7 @@ async function handleEnableNotifications() {
         throw new Error("Sessão não retornada pelo Supabase.");
       }
       await loadMeForSession(session);
+      setActive("Inbox");
       setAuthSession(session);
     } catch (error) {
       console.error("LOGIN_ERROR", { message: error.message });
@@ -2875,12 +2898,7 @@ async function handleEnableNotifications() {
   }
 
   async function handleLogout() {
-    resetTenantScopedUi();
-    clearTenantQuestionStorage();
-    localStorage.removeItem(SELECTED_COMPANY_STORAGE_KEY);
-    setSelectedCompanyId(getStoredCompanyId());
-    setTenantContext(FALLBACK_TENANT_CONTEXT);
-    setCompanies([FALLBACK_TENANT_CONTEXT.company]);
+    resetAuthUiState("");
     setLoginPassword("");
     setLoginError("");
     if (supabase) await supabase.auth.signOut();
@@ -3080,7 +3098,18 @@ async function handleEnableNotifications() {
           return;
         }
         const resolvedRole = tenant?.user?.role || "";
+        const roleForCheck = resolvedRole;
         const backendCompanyId = tenant?.company?.id || "";
+        const allowedCompanyIds = Array.isArray(tenant?.user?.allowed_company_ids) ? tenant.user.allowed_company_ids : [];
+        const nextSelectedCompanyId = allowedCompanyIds.includes(requestCompanyId)
+          ? requestCompanyId
+          : (backendCompanyId || allowedCompanyIds[0] || requestCompanyId);
+        if (nextSelectedCompanyId !== requestCompanyId) {
+          localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, nextSelectedCompanyId);
+          clearTenantQuestionStorage();
+          setSelectedCompanyId(nextSelectedCompanyId);
+          return;
+        }
         if (resolvedRole !== "platform_admin" && backendCompanyId) {
           // TODO security: enforce role-based tenant lock server-side for all admin-only routes.
           if (requestCompanyId !== backendCompanyId) {
@@ -3110,17 +3139,14 @@ async function handleEnableNotifications() {
             ...(tenant.permissions || {}),
           },
         });
-      } catch {
-        if (requestCompanyId === getStoredCompanyId()) {
-          setTenantContext({
-            ...FALLBACK_TENANT_CONTEXT,
-            company: {
-              ...FALLBACK_TENANT_CONTEXT.company,
-              id: requestCompanyId,
-              name: getCompanyNameById(companies, requestCompanyId, FALLBACK_TENANT_CONTEXT.company.name),
-            },
-          });
+        if (!canAccessScreen(roleForCheck, active)) {
+          console.info("AUTH_SAVED_SCREEN_RESET role=%s screen=%s", roleForCheck, active);
+          setActive("Inbox");
         }
+      } catch {
+        resetAuthUiState("Usuário desativado. Entre em contato com o administrador.");
+        if (supabase) await supabase.auth.signOut().catch(() => {});
+        setAuthSession(null);
       }
     }
 
