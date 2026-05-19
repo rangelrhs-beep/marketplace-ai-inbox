@@ -923,7 +923,7 @@ function ScreenHeader({
                 {userEmail ? <div className="header-user-menu-meta">{userEmail}</div> : null}
                 {companyName ? <div className="header-user-menu-meta">{companyName}</div> : null}
                 {userRole ? <div className="header-user-menu-meta">{userRole}</div> : null}
-                <div className="header-user-menu-notification-row">
+                <div className="header-user-menu-notification-row notification-toggle-row">
                   <span>{getNotificationStatusLabel(notificationPermission, notificationsEnabled)}</span>
                   <button
                     type="button"
@@ -2575,6 +2575,10 @@ export default function App() {
     }
   }
 
+  function handleNotificationToggle() {
+    return handleEnableNotifications();
+  }
+
   function switchCompany(companyId) {
     const previousCompanyId = getStoredCompanyId();
     console.log(`FRONTEND_TENANT_SWITCH from=${previousCompanyId} to=${companyId}`);
@@ -3733,7 +3737,7 @@ export default function App() {
             selectedCompanyId={selectedCompanyId}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
-            onEnableNotifications={handleEnableNotifications}
+            onEnableNotifications={handleNotificationToggle}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
@@ -3770,7 +3774,7 @@ export default function App() {
             permissions={currentPermissions}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
-            onEnableNotifications={handleEnableNotifications}
+            onEnableNotifications={handleNotificationToggle}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
@@ -3800,7 +3804,7 @@ export default function App() {
             permissions={currentPermissions}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
-            onEnableNotifications={handleEnableNotifications}
+            onEnableNotifications={handleNotificationToggle}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
@@ -3816,7 +3820,7 @@ export default function App() {
             onCompanyChange={switchCompany}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
-            onEnableNotifications={handleEnableNotifications}
+            onEnableNotifications={handleNotificationToggle}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
@@ -3835,7 +3839,7 @@ export default function App() {
             onCompanyChange={switchCompany}
             isAuthenticated={Boolean(authSession)}
             onLogout={handleLogout}
-            onEnableNotifications={handleEnableNotifications}
+            onEnableNotifications={handleNotificationToggle}
             notificationPermission={notificationPermission}
             notificationsEnabled={notificationsEnabled}
             notificationButtonLabel={notificationButtonLabel}
@@ -3856,7 +3860,7 @@ export default function App() {
                 onCompanyChange={switchCompany}
                 isAuthenticated={Boolean(authSession)}
                 onLogout={handleLogout}
-                onEnableNotifications={handleEnableNotifications}
+                onEnableNotifications={handleNotificationToggle}
                 notificationPermission={notificationPermission}
                 notificationsEnabled={notificationsEnabled}
                 notificationButtonLabel={notificationButtonLabel}

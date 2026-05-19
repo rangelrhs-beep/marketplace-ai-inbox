@@ -343,6 +343,10 @@ button:disabled {
   font-weight: 700;
 }
 
+.notification-toggle-row {
+  min-height: 28px;
+}
+
 .header-user-menu-help {
   max-width: 260px;
   margin: 0 4px 8px;
