@@ -1733,6 +1733,23 @@ button:disabled {
   gap: 8px;
 }
 
+.company-access-selector {
+  display: grid;
+  gap: 8px;
+}
+
+.company-access-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.company-access-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px;
+}
+
 @media (max-width: 840px) {
   .users-admin-mobile-list {
     display: grid;

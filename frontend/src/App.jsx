@@ -108,6 +108,32 @@ function getUserCompaniesLabel(user, companyNameById) {
   return user.company_id ? `${companyNameById.get(user.company_id) || user.company_id} (${user.company_id})` : "-";
 }
 
+function CompanyAccessSelector({ companies, accessScope, companyIds, onScopeChange, onCompanyToggle }) {
+  return (
+    <div className="company-access-selector">
+      <span>Acesso de empresas</span>
+      <label className="company-access-option">
+        <input type="radio" name="access_scope" value="all" checked={accessScope === "all"} onChange={() => onScopeChange("all")} />
+        <span>Todas as empresas</span>
+      </label>
+      <label className="company-access-option">
+        <input type="radio" name="access_scope" value="selected" checked={accessScope === "selected"} onChange={() => onScopeChange("selected")} />
+        <span>Empresas selecionadas</span>
+      </label>
+      {accessScope === "selected" ? (
+        <div className="company-access-checkboxes">
+          {companies.map((company) => (
+            <label key={`company-access-${company.id}`} className="company-access-option">
+              <input type="checkbox" checked={companyIds.includes(company.id)} onChange={() => onCompanyToggle(company.id)} />
+              <span>{company.name}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 async function apiFetchWithRetry(url, options = {}, { retries = 1, retryDelayMs = 500 } = {}) {
   let attempt = 0;
   while (true) {
@@ -384,6 +410,18 @@ function UsersAdminPage({
       setSubmitMessage(successMessage || `Usuário ${data.email} atualizado com sucesso.`);
       setEditingUserId("");
       await loadAdminUsers();
+      if (currentUser?.id && currentUser.id === userId) {
+        const meResponse = await apiFetch(`${API_URL}/me`);
+        const meData = await meResponse.json().catch(() => ({}));
+        const companiesResponse = await apiFetch(`${API_URL}/companies`);
+        await companiesResponse.json().catch(() => []);
+        const allowedCompanyIds = Array.isArray(meData?.user?.allowed_company_ids) ? meData.user.allowed_company_ids : [];
+        const storedCompanyId = getStoredCompanyId();
+        if (allowedCompanyIds.length > 0 && !allowedCompanyIds.includes(storedCompanyId)) {
+          localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, allowedCompanyIds[0]);
+          window.location.reload();
+        }
+      }
     } catch (error) {
       setSubmitMessage(getErrorMessageFromException(error, "Não foi possível atualizar usuário."));
     } finally {
@@ -456,17 +494,13 @@ function UsersAdminPage({
               <option value="operator">operator</option>
             </select>
           </label>
-          {form.role === "platform_admin" ? <label>Acesso de empresas
-            <select value={form.access_scope} onChange={(event) => setForm((current) => ({ ...current, access_scope: event.target.value }))}>
-              <option value="all">Todas as empresas</option>
-              <option value="selected">Empresas selecionadas</option>
-            </select>
-          </label> : null}
-          {form.role === "platform_admin" && form.access_scope === "selected" ? <label>Empresas selecionadas
-            <select multiple value={form.company_ids} onChange={(event) => setForm((current) => ({ ...current, company_ids: Array.from(event.target.selectedOptions).map((o) => o.value) }))}>
-              {companies.map((company) => <option key={`create-company-${company.id}`} value={company.id}>{company.name}</option>)}
-            </select>
-          </label> : null}
+          {form.role === "platform_admin" ? <CompanyAccessSelector
+            companies={companies}
+            accessScope={form.access_scope}
+            companyIds={form.company_ids}
+            onScopeChange={(scope) => setForm((current) => ({ ...current, access_scope: scope }))}
+            onCompanyToggle={(companyId) => setForm((current) => ({ ...current, company_ids: current.company_ids.includes(companyId) ? current.company_ids.filter((id) => id !== companyId) : [...current.company_ids, companyId] }))}
+          /> : null}
           <div className="settings-actions">
             <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Convidando..." : "Criar / Convidar usuário"}</button>
           </div>
@@ -494,16 +528,13 @@ function UsersAdminPage({
                         <option value="platform_admin">platform_admin</option><option value="company_admin">company_admin</option><option value="operator">operator</option>
                       </select>
                     </label>
-                    {editForm.role === "platform_admin" ? <label>Acesso de empresas
-                      <select value={editForm.access_scope} onChange={(event) => setEditForm((current) => ({ ...current, access_scope: event.target.value }))}>
-                        <option value="all">Todas as empresas</option><option value="selected">Empresas selecionadas</option>
-                      </select>
-                    </label> : null}
-                    {editForm.role === "platform_admin" && editForm.access_scope === "selected" ? <label>Empresas selecionadas
-                      <select multiple value={editForm.company_ids} onChange={(event) => setEditForm((current) => ({ ...current, company_ids: Array.from(event.target.selectedOptions).map((o) => o.value) }))}>
-                        {companies.map((company) => <option key={`mobile-edit-access-${user.id}-${company.id}`} value={company.id}>{company.name}</option>)}
-                      </select>
-                    </label> : null}
+                    {editForm.role === "platform_admin" ? <CompanyAccessSelector
+                      companies={companies}
+                      accessScope={editForm.access_scope}
+                      companyIds={editForm.company_ids}
+                      onScopeChange={(scope) => setEditForm((current) => ({ ...current, access_scope: scope }))}
+                      onCompanyToggle={(companyId) => setEditForm((current) => ({ ...current, company_ids: current.company_ids.includes(companyId) ? current.company_ids.filter((id) => id !== companyId) : [...current.company_ids, companyId] }))}
+                    /> : null}
                   </div>
                 ) : (
                   <div className="users-admin-mobile-meta">
