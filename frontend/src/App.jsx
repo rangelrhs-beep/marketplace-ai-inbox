@@ -259,10 +259,11 @@ function UsersAdminPage({
   const [inviteEmailSent, setInviteEmailSent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResettingEmail, setIsResettingEmail] = useState("");
+  const [isDeletingUserId, setIsDeletingUserId] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
-  const [editForm, setEditForm] = useState({ email: "", name: "", company_id: "", role: "operator" });
+  const [editForm, setEditForm] = useState({ email: "", name: "", company_id: "", role: "operator", access_scope: "selected", company_ids: [], active: true });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
-  const [form, setForm] = useState({ email: "", name: "", company_id: "", role: "operator" });
+  const [form, setForm] = useState({ email: "", name: "", company_id: "", role: "operator", access_scope: "selected", company_ids: [] });
 
   useEffect(() => {
     const defaultCompanyId = currentCompany?.id || companies[0]?.id || "";
@@ -313,16 +314,14 @@ function UsersAdminPage({
         setSubmitMessage("Acesso negado. Apenas platform_admin pode convidar usuários.");
         return;
       }
-      if (!response.ok) {
-        throw new Error(data.detail || "Não foi possível convidar usuário.");
-      }
-      setInviteEmailSent(Boolean(data.invite_email_sent));
-      setSubmitMessage(data.invite_email_sent ? `Usuário ${data.email} criado/vinculado. Convite enviado por e-mail.` : `Usuário ${data.email} criado/vinculado. Copie o link de convite.`);
+      if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível convidar usuário.");
+      setInviteEmailSent(Boolean(data.invite_link));
+      setSubmitMessage(data.message || "Usuário criado/vinculado com sucesso.");
       setInviteLink(data.invite_link || "");
       setForm((current) => ({ ...current, email: "", name: "" }));
       await loadAdminUsers();
     } catch (error) {
-      setSubmitMessage(error.message || "Não foi possível convidar usuário.");
+      setSubmitMessage(error?.message === "Failed to fetch" ? "Não foi possível conectar ao servidor. Verifique o deploy/backend." : (error.message || "Não foi possível convidar usuário."));
     } finally {
       setIsSubmitting(false);
     }
@@ -349,6 +348,9 @@ function UsersAdminPage({
       name: user.name || "",
       company_id: user.company_id || companies[0]?.id || "",
       role: user.role || "operator",
+      access_scope: user.access_scope || "selected",
+      company_ids: user.company_ids || [],
+      active: user.active !== false,
     });
     setSubmitMessage("");
   }
@@ -363,7 +365,7 @@ function UsersAdminPage({
         body: JSON.stringify(editForm),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Não foi possível atualizar usuário.");
+      if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível atualizar usuário.");
       setSubmitMessage(`Usuário ${data.email} atualizado com sucesso.`);
       setEditingUserId("");
       await loadAdminUsers();
@@ -372,6 +374,32 @@ function UsersAdminPage({
     } finally {
       setIsSavingEdit(false);
     }
+  }
+  async function handleSendReset(userId) {
+    setIsResettingEmail(userId);
+    setSubmitMessage("");
+    try {
+      const response = await apiFetch(`${API_URL}/admin/users/${userId}/send-password-reset`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível enviar redefinição.");
+      setSubmitMessage(data.message || "Redefinição enviada.");
+    } catch (error) {
+      setSubmitMessage(error?.message === "Failed to fetch" ? "Não foi possível conectar ao servidor. Verifique o deploy/backend." : (error.message || "Não foi possível enviar redefinição."));
+    } finally { setIsResettingEmail(""); }
+  }
+
+  async function handleDeleteUser(userId) {
+    if (!window.confirm("Tem certeza que deseja excluir este usuário? O histórico será preservado.")) return;
+    setIsDeletingUserId(userId);
+    try {
+      const response = await apiFetch(`${API_URL}/admin/users/${userId}`, { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível excluir usuário.");
+      setSubmitMessage(data.message || "Usuário excluído.");
+      await loadAdminUsers();
+    } catch (error) {
+      setSubmitMessage(error.message || "Não foi possível excluir usuário.");
+    } finally { setIsDeletingUserId(""); }
   }
 
   const companyNameById = new Map(companies.map((company) => [company.id, company.name]));
@@ -410,6 +438,11 @@ function UsersAdminPage({
               <option value="operator">operator</option>
             </select>
           </label>
+          {form.role === "platform_admin" ? <label>Empresas permitidas
+            <select multiple value={form.company_ids} onChange={(event) => setForm((current) => ({ ...current, company_ids: Array.from(event.target.selectedOptions).map((o) => o.value) }))}>
+              {companies.map((company) => <option key={`create-company-${company.id}`} value={company.id}>{company.name}</option>)}
+            </select>
+          </label> : null}
           <div className="settings-actions">
             <button className="primary" type="submit" disabled={isSubmitting}>{isSubmitting ? "Convidando..." : "Criar / Convidar usuário"}</button>
           </div>
@@ -445,7 +478,8 @@ function UsersAdminPage({
                 <div className="settings-actions">
                   {isEditing ? <button type="button" className="primary" onClick={() => handleSaveEdit(user.id)} disabled={isSavingEdit}>Salvar</button> : <button type="button" className="secondary" onClick={() => startEdit(user)}>Editar</button>}
                   {isEditing ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null}
-                  <button type="button" className="secondary" onClick={() => handleSendReset(user.email)} disabled={isResettingEmail === user.email}>Redefinir senha</button>
+                  <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Redefinir senha</button>
+                  <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir usuário</button>
                 </div>
               </article>
             );
@@ -461,7 +495,7 @@ function UsersAdminPage({
                   <td>{editingUserId === user.id ? <input value={editForm.email} onChange={(event) => setEditForm((current) => ({ ...current, email: event.target.value }))} required /> : (user.email || "-")}</td>
                   <td>{editingUserId === user.id ? <select value={editForm.role} onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}><option value="platform_admin">platform_admin</option><option value="company_admin">company_admin</option><option value="operator">operator</option></select> : (user.role || "-")}</td>
                   <td>{editingUserId === user.id ? <select value={editForm.company_id} onChange={(event) => setEditForm((current) => ({ ...current, company_id: event.target.value }))}>{companies.map((company) => <option key={`edit-${user.id}-${company.id}`} value={company.id}>{company.name}</option>)}</select> : (user.company_id ? `${companyNameById.get(user.company_id) || user.company_id} (${user.company_id})` : "-")}</td>
-                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.email)} disabled={isResettingEmail === user.email}>Redefinir senha</button></td>
+                  <td><button type="button" className="secondary" onClick={() => editingUserId === user.id ? handleSaveEdit(user.id) : startEdit(user)} disabled={isSavingEdit}>{editingUserId === user.id ? "Salvar" : "Editar"}</button> {editingUserId === user.id ? <button type="button" className="secondary" onClick={() => setEditingUserId("")}>Cancelar</button> : null} <button type="button" className="secondary" onClick={() => handleSendReset(user.id)} disabled={isResettingEmail === user.id}>Redefinir senha</button> <button type="button" className="danger" onClick={() => handleDeleteUser(user.id)} disabled={isDeletingUserId === user.id}>Excluir</button></td>
                 </tr>
               ))}
             </tbody>

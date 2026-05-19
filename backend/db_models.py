@@ -34,10 +34,26 @@ class User(Base):
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="admin")
     company_id = Column(String(64), ForeignKey("companies.id"), nullable=False)
+    access_scope = Column(String(16), nullable=False, default="selected")
+    disabled_at = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     company = relationship("Company", back_populates="users")
     push_subscriptions = relationship("PushSubscription", back_populates="user")
+    company_access = relationship("UserCompanyAccess", back_populates="user")
+
+
+class UserCompanyAccess(Base):
+    __tablename__ = "user_company_access"
+    __table_args__ = (UniqueConstraint("user_id", "company_id", name="uq_user_company_access_user_company"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
+    company_id = Column(String(64), ForeignKey("companies.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="company_access")
 
 
 class Integration(Base):

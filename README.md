@@ -145,7 +145,7 @@ Authentication and tenant resolution:
 Supabase Auth user linking:
 
 - Manual `POST /admin/users/link-supabase` still exists for exceptional support/debug workflows.
-- Normal onboarding now happens in-app from **Usuários** using `POST /admin/users/invite` with `email`, `name`, `company_id`, and `role` only (no manual Auth User ID in UI).
+- Normal onboarding now happens in-app from **Usuários** using `POST /admin/users/invite` with `email`, `name`, `role`, and company access (`company_id`, optional `company_ids`, optional `access_scope=all|selected`) only (no manual Auth User ID in UI).
 - Backend uses `SUPABASE_SERVICE_ROLE_KEY` server-side to create/invite in Supabase Auth and upsert local `users`, linking `auth_user_id` automatically when Supabase returns it.
 
 User roles:
@@ -165,14 +165,16 @@ Admin user onboarding and password management:
 
 - `platform_admin` has an admin-only **Usuários** screen in the app UI.
 - The page calls `GET /admin/users` to list local users and displays `name`, `email`, `role`, `company_id` (and company name when available on the frontend company list), and `auth_user_id`.
-- The page includes an invite form that calls `POST /admin/users/invite` with `email`, `name`, `company_id`, and `role` (`platform_admin`, `company_admin`, `operator`).
-- Backend invite flow requires `platform_admin`, validates `company_id` and role, and uses Supabase Admin Auth API with `SUPABASE_SERVICE_ROLE_KEY` (backend-only secret) to generate/send invite links.
-- Backend upserts the local `users` row (`email`, `name`, `role`, `company_id`) and links `auth_user_id` when returned by Supabase.
+- The page includes an invite form that calls `POST /admin/users/invite` with `email`, `name`, `role`, and company access fields (`company_id`, optional `company_ids`, optional `access_scope`).
+- Backend invite flow requires `platform_admin`, validates role + company access, and uses Supabase Admin Auth API with `SUPABASE_SERVICE_ROLE_KEY` (backend-only secret) to generate/send invite links.
+- Backend upserts the local `users` row (`email`, `name`, `role`, `company_id`, `access_scope`, `disabled_at`, `deleted_at`) and links `auth_user_id` when returned by Supabase.
+- For selected cross-company access, backend stores tenant mapping in `user_company_access` (`user_id`, `company_id`); for `platform_admin` with `access_scope=all`, company switching is unrestricted.
 - If invite email delivery is not configured, backend returns `invite_link`; frontend shows **Copiar link de convite** so admins can share it manually. If Supabase email delivery is active, frontend shows **Convite enviado por e-mail**.
-- The users table/mobile cards include **Editar** and save changes with `PUT /admin/users/{user_id}` (`platform_admin` only), validating role/company and updating local user mapping; if `email` changes and `auth_user_id` exists, backend updates Supabase Auth email too.
-- The users table includes an action **Enviar redefinição de senha** that calls `POST /admin/users/send-password-reset` (`platform_admin` only), triggering Supabase recovery email flow without exposing tokens/secrets.
+- The users table/mobile cards include **Editar** and save changes with `PUT /admin/users/{user_id}` (`platform_admin` only), validating role/company access and updating local user mapping; if `email` changes and `auth_user_id` exists, backend updates Supabase Auth email too.
+- Admin password reset action uses `POST /admin/users/{user_id}/send-password-reset` (`platform_admin` only), triggering Supabase recovery email flow without exposing tokens/secrets.
+- Admin soft delete uses `DELETE /admin/users/{user_id}` and sets `deleted_at`, preserving historical data.
 - If backend returns `403`, the page shows a friendly access message and keeps backend as permission source of truth.
-- Optional **Desativar usuário** is still TODO (not implemented yet) to avoid risky schema change during this fix-only increment.
+- Deactivate/reactivate is managed by `disabled_at` via `PUT /admin/users/{user_id}` (`active=true/false`) without hard deleting records.
 
 Password change flow:
 
