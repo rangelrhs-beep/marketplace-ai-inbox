@@ -119,13 +119,13 @@ class AdminSendPasswordResetRequest(BaseModel):
 
 
 class AdminUserUpdateRequest(BaseModel):
-    email: str = Field(..., min_length=3, max_length=255)
+    email: str | None = Field(default=None, min_length=3, max_length=255)
     name: str | None = Field(default=None, max_length=255)
     company_id: str | None = Field(default=None, min_length=1, max_length=64)
-    company_ids: list[str] = Field(default_factory=list)
+    company_ids: list[str] | None = Field(default=None)
     access_scope: str | None = Field(default=None, min_length=3, max_length=16)
-    role: str = Field(..., min_length=1, max_length=50)
-    active: bool = True
+    role: str | None = Field(default=None, min_length=1, max_length=50)
+    active: bool | None = None
 
 
 def normalize_admin_user_email(email: str) -> str:
@@ -4473,63 +4473,73 @@ def send_admin_password_reset(user_id: str, request: Request, db: Session = Depe
 @app.put("/admin/users/{user_id}")
 def update_admin_user(user_id: str, payload: AdminUserUpdateRequest, request: Request, db: Session = Depends(get_db)):
     current_user = require_platform_admin(request)
-    email = normalize_admin_user_email(payload.email)
-    name = normalize_optional_admin_user_name(payload.name)
-    role = payload.role.strip()
-    company_id, company_ids, access_scope = normalize_company_access(role, payload.company_id, payload.company_ids, payload.access_scope)
-    logger.info("ADMIN_USER_UPDATE_ATTEMPT requester=%s user_id=%s company_id=%s role=%s", current_user.id, user_id, company_id, role)
-    if not email or "@" not in email:
-        raise HTTPException(status_code=422, detail="Invalid email.")
-    if role not in ALLOWED_ADMIN_LINK_ROLES:
-        raise HTTPException(status_code=422, detail="Invalid role.")
-    for item_company_id in company_ids or [company_id]:
-        if item_company_id and db.get(Company, item_company_id) is None:
-            raise HTTPException(status_code=404, detail=f"Company not found: {item_company_id}")
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found.")
-    email_owner = db.query(User).filter(User.email == email).first()
-    if email_owner is not None and email_owner.id != user.id:
-        raise HTTPException(status_code=409, detail="Email already linked to another user.")
+    logger.info("ADMIN_USER_UPDATE_START user_id=%s", user_id)
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
 
-    if user.auth_user_id and email != user.email:
-        logger.info("ADMIN_USER_UPDATE_AUTH_EMAIL requester=%s user_id=%s", current_user.id, user.id)
-        supabase_admin_request(f"/admin/users/{user.auth_user_id}", payload={"email": email}, method="PUT")
+        email = normalize_admin_user_email(payload.email) if payload.email is not None else user.email
+        name = normalize_optional_admin_user_name(payload.name) if payload.name is not None else (user.name or user.email)
+        role = (payload.role.strip() if payload.role is not None else user.role)
+        active = payload.active if payload.active is not None else (user.disabled_at is None)
+        payload_company_ids = payload.company_ids if payload.company_ids is not None else [row.company_id for row in db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).all()]
+        company_id, company_ids, access_scope = normalize_company_access(role, payload.company_id if payload.company_id is not None else user.company_id, payload_company_ids, payload.access_scope if payload.access_scope is not None else user.access_scope)
 
-    will_be_inactive = not payload.active
-    if (user.role == "platform_admin" or role == "platform_admin") and will_be_inactive:
-        active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
-        other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
-        if not other_active_admins:
-            logger.warning("ADMIN_LAST_PLATFORM_ADMIN_BLOCKED action=deactivate")
-            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
-        if current_user.id == user.id and not other_active_admins:
-            raise HTTPException(status_code=400, detail="Não é possível remover o último administrador da plataforma.")
+        if not email or "@" not in email:
+            raise HTTPException(status_code=422, detail="Invalid email.")
+        if role not in ALLOWED_ADMIN_LINK_ROLES:
+            raise HTTPException(status_code=422, detail="Invalid role.")
+        for item_company_id in company_ids or [company_id]:
+            if item_company_id and db.get(Company, item_company_id) is None:
+                raise HTTPException(status_code=404, detail=f"Company not found: {item_company_id}")
 
-    user.email = email
-    user.name = name or user.email
-    user.company_id = company_id
-    user.role = role
-    user.access_scope = access_scope
-    user.disabled_at = None if payload.active else datetime.utcnow()
-    db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).delete()
-    for selected_company_id in company_ids:
-        db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
-    db.commit()
-    db.refresh(user)
-    logger.info("ADMIN_USER_REACTIVATED user_id=%s", user.id) if payload.active else logger.info("ADMIN_USER_DEACTIVATED user_id=%s", user.id)
-    logger.info("ADMIN_USER_UPDATE_SUCCESS requester=%s user_id=%s", current_user.id, user.id)
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "company_id": user.company_id,
-        "auth_user_id": user.auth_user_id,
-        "access_scope": user.access_scope or "selected",
-        "company_ids": company_ids,
-        "active": user.disabled_at is None,
-    }
+        email_owner = db.query(User).filter(User.email == email).first()
+        if email_owner is not None and email_owner.id != user.id:
+            raise HTTPException(status_code=409, detail="Email already linked to another user.")
+
+        if user.auth_user_id and email != user.email:
+            logger.info("ADMIN_USER_UPDATE_AUTH_EMAIL requester=%s user_id=%s", current_user.id, user.id)
+            supabase_admin_request(f"/admin/users/{user.auth_user_id}", payload={"email": email}, method="PUT")
+
+        is_current_platform_admin = user.role == "platform_admin"
+        will_be_platform_admin = role == "platform_admin"
+        will_be_inactive = not active
+        if is_current_platform_admin and (will_be_inactive or not will_be_platform_admin):
+            active_platform_admins = db.query(User).filter(User.role == "platform_admin", User.deleted_at.is_(None), User.disabled_at.is_(None)).all()
+            other_active_admins = [admin for admin in active_platform_admins if admin.id != user.id]
+            if not other_active_admins:
+                logger.warning("ADMIN_LAST_PLATFORM_ADMIN_BLOCKED action=%s", "deactivate" if will_be_inactive else "demote")
+                raise HTTPException(status_code=409, detail="Não é possível remover o último administrador da plataforma.")
+
+        user.email = email
+        user.name = name or user.email
+        user.company_id = company_id
+        user.role = role
+        user.access_scope = access_scope
+        user.disabled_at = None if active else datetime.utcnow()
+        db.query(UserCompanyAccess).filter(UserCompanyAccess.user_id == user.id).delete()
+        for selected_company_id in company_ids:
+            db.add(UserCompanyAccess(user_id=user.id, company_id=selected_company_id))
+        db.commit()
+        db.refresh(user)
+        if payload.active is not None:
+            logger.info("ADMIN_USER_REACTIVATED user_id=%s", user.id) if active else logger.info("ADMIN_USER_DEACTIVATED user_id=%s", user.id)
+        logger.info("ADMIN_USER_UPDATE_SUCCESS user_id=%s", user.id)
+        return {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "role": user.role,
+            "company_id": user.company_id,
+            "auth_user_id": user.auth_user_id,
+            "access_scope": user.access_scope or "selected",
+            "company_ids": company_ids,
+            "active": user.disabled_at is None,
+        }
+    except HTTPException as error:
+        logger.error("ADMIN_USER_UPDATE_ERROR user_id=%s message=%s", user_id, error.detail)
+        raise
 
 
 @app.delete("/admin/users/{user_id}")
