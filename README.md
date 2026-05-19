@@ -175,13 +175,22 @@ Frontend role-based UI behavior:
 - `operator`: never sees company selector, frontend forces tenant context to backend `/me.company.id`, and sees only Inbox/Pendentes/Respondidas menus.
 - Frontend menu visibility is UX-only; backend route authorization remains the source of truth and must enforce role permissions server-side for admin/debug routes.
 
-Admin user management UI:
+Admin user onboarding and password management:
 
 - `platform_admin` has an admin-only **Usuários** screen in the app UI.
 - The page calls `GET /admin/users` to list local users and displays `name`, `email`, `role`, `company_id` (and company name when available on the frontend company list), and `auth_user_id`.
-- The page includes a local linking form that calls `POST /admin/users/link-supabase` with `email`, `auth_user_id`, `name`, `company_id`, and `role` (`platform_admin`, `company_admin`, `operator`).
-- The UI explicitly keeps Supabase Auth user creation manual in this phase: create user in Supabase Auth first, copy UID, then link locally in **Usuários**.
+- The page includes an invite form that calls `POST /admin/users/invite` with `email`, `name`, `company_id`, and `role` (`platform_admin`, `company_admin`, `operator`).
+- Backend invite flow requires `platform_admin`, validates `company_id` and role, and uses Supabase Admin Auth API with `SUPABASE_SERVICE_ROLE_KEY` (backend-only secret) to generate/send invite links.
+- Backend upserts the local `users` row (`email`, `name`, `role`, `company_id`) and links `auth_user_id` when returned by Supabase.
+- If invite email delivery is not configured, backend returns `invite_link`; frontend shows **Copiar link** so admins can share it manually.
+- The users table includes an action **Enviar redefinição de senha** that calls `POST /admin/users/send-password-reset` (`platform_admin` only), triggering Supabase recovery email flow without exposing tokens/secrets.
 - If backend returns `403`, the page shows a friendly access message and keeps backend as permission source of truth.
+
+Password change flow:
+
+- Logged-in users can change their own password from the app menu via **Alterar senha**.
+- Frontend uses Supabase session auth (`supabase.auth.updateUser({ password: newPassword })`), requiring only new password + confirmation in UI.
+- Users cannot change another user's password directly; cross-user reset is admin-only via backend endpoint above.
 
 Admin company onboarding:
 
