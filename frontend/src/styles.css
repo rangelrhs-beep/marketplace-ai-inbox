@@ -332,6 +332,17 @@ button:disabled {
   padding: 0 4px 8px;
 }
 
+.header-user-menu-notification-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 4px 10px;
+  color: #44506a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .header-user-menu-help {
   max-width: 260px;
   margin: 0 4px 8px;
