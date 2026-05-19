@@ -691,3 +691,30 @@ Add tests whenever changing tenant isolation, question listing, Mercado Livre sy
   - company-scoped users are limited to their own `company_id`
 - Web Push delivery from Mercado Livre webhook is intentionally not enabled yet.
   - TODO kept in webhook flow: send Web Push for subscribed users per `company_id` only when full Web Push sending is implemented safely.
+
+## 2026-05-19 Audit & Safe Cleanup Notes
+
+This session performed a security/performance/cleanup audit with low-risk changes only, preserving behavior and tenant isolation rules.
+
+### Security and tenant isolation checks
+
+- Kept existing backend tenant/auth resolution model unchanged (`get_current_user`, `get_current_company_id`, role-based company switching only for `platform_admin`).
+- Confirmed `GET /questions` remains local-DB only and manual history import stays on `POST /integrations/mercadolivre/questions/import-history`.
+- Confirmed no re-enable of live Mercado Livre history merge in `GET /questions`.
+- Confirmed service worker policy remains API/network-no-store safe (no auth/API cache persistence).
+
+### Safe cleanup implemented
+
+- Removed temporary debug UI labels from production view:
+  - `Empresa atual`
+  - `Perguntas carregadas`
+  - `Perguntas visíveis`
+  - `Notif UI v2`
+- Reduced noisy frontend debug logging (`console.log`) while keeping error logging paths.
+- Reduced noisy backend buyer enrichment `print(...)` traces and large sample dumps; preserved core structured backend logs for auth/tenant/performance flows.
+
+### Known limitations (unchanged)
+
+- Some debug routes still exist and should remain restricted operationally.
+- Buyer enrichment remains best-effort and may fallback when Mercado Livre user APIs fail.
+- Deprecated `datetime.utcnow()` warnings exist in tests and can be migrated later to timezone-aware datetime in a separate low-risk maintenance task.
