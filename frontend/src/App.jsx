@@ -837,7 +837,6 @@ function LoginScreen({ email, password, error, isLoading, onEmailChange, onPassw
 function CompanySwitcher({ companies, currentCompany, permissions, currentUserRole, onChange }) {
   const canSwitch = permissions?.can_switch_company && currentUserRole === "platform_admin";
   if (!canSwitch || companies.length <= 1) {
-    if (canSwitch) console.log("Company selector fallback", { companiesCount: companies.length, companies });
     return (
       <div className="company-title-fallback">
         <span>{currentCompany?.name || "CPAP Express"}</span>
@@ -896,12 +895,6 @@ function ScreenHeader({
     return () => document.removeEventListener("click", handleDocumentClick);
   }, []);
 
-  useEffect(() => {
-    if (isUserMenuOpen) {
-      console.log(`NOTIFICATION_MENU_RENDER rawPermission=${notificationPermission} active=${isNotificationsActive}`);
-    }
-  }, [isUserMenuOpen, notificationPermission, isNotificationsActive]);
-
   return (
     <header className="topbar">
       <div>
@@ -923,7 +916,6 @@ function ScreenHeader({
                 {userEmail ? <div className="header-user-menu-meta">{userEmail}</div> : null}
                 {companyName ? <div className="header-user-menu-meta">{companyName}</div> : null}
                 {userRole ? <div className="header-user-menu-meta">{userRole}</div> : null}
-                <div className="header-user-menu-meta">Notif UI v2</div>
                 <label className="notification-toggle-row">
                   <span className="notification-toggle-label">
                     {isNotificationsActive ? "Notificações Ativas" : "Notificações Inativas"}
@@ -2582,7 +2574,6 @@ async function handleEnableNotifications() {
 
   function switchCompany(companyId) {
     const previousCompanyId = getStoredCompanyId();
-    console.log(`FRONTEND_TENANT_SWITCH from=${previousCompanyId} to=${companyId}`);
     questionsAbortControllersRef.current.forEach((controller) => controller.abort());
     questionsAbortControllersRef.current.clear();
     inFlightQuestionsRequestsRef.current.clear();
@@ -2595,13 +2586,10 @@ async function handleEnableNotifications() {
     try {
       const response = await apiFetch(`${API_URL}/companies`);
       const data = await response.json();
-      console.log("/companies response", data);
       if (response.ok && Array.isArray(data)) {
-        if (data.length <= 1) console.log("/companies returned one or zero companies", data);
         setCompanies(data.length ? data : [FALLBACK_TENANT_CONTEXT.company]);
       }
     } catch {
-      console.log("/companies request failed; using fallback company");
       setCompanies([FALLBACK_TENANT_CONTEXT.company]);
     }
   }
@@ -2614,7 +2602,6 @@ async function handleEnableNotifications() {
 
 
   async function loadMeForSession(session, requestCompanyId = getStoredCompanyId()) {
-    console.log("ME_LOAD_START", { companyId: requestCompanyId });
     try {
       const headers = new Headers();
       if (requestCompanyId) headers.set("X-Company-ID", requestCompanyId);
@@ -2628,10 +2615,6 @@ async function handleEnableNotifications() {
       if (!response.ok) {
         throw new Error(tenant.detail || "Não foi possível carregar dados do usuário.");
       }
-      console.log("ME_LOAD_SUCCESS", {
-        companyId: tenant?.company?.id || requestCompanyId,
-        role: tenant?.user?.role || "unknown",
-      });
       return tenant;
     } catch (error) {
       console.error("ME_LOAD_ERROR", { message: error.message });
@@ -2653,7 +2636,6 @@ async function handleEnableNotifications() {
     )
       .then(({ data }) => {
         if (!isMounted) return;
-        console.log("AUTH_SESSION_LOADED", { hasSession: Boolean(data.session) });
         setAuthSession(data.session || null);
       })
       .catch((error) => {
@@ -2667,7 +2649,6 @@ async function handleEnableNotifications() {
       });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      console.log("AUTH_SESSION_LOADED", { hasSession: Boolean(session) });
       setAuthSession(session || null);
       setIsAuthLoading(false);
     });
@@ -2681,7 +2662,6 @@ async function handleEnableNotifications() {
   async function handleLogin(event) {
     event.preventDefault();
     if (!supabase) return;
-    console.log("LOGIN_START");
     setLoginError("");
     setIsAuthLoading(true);
     try {
@@ -2698,7 +2678,6 @@ async function handleEnableNotifications() {
       if (!session?.access_token) {
         throw new Error("Sessão não retornada pelo Supabase.");
       }
-      console.log("LOGIN_SUCCESS");
       await loadMeForSession(session);
       setAuthSession(session);
     } catch (error) {
@@ -2828,7 +2807,6 @@ async function handleEnableNotifications() {
   async function refreshIntegrationHealth(companyId = selectedCompanyId) {
     const requestCompanyId = companyId || getStoredCompanyId();
     const requestCompanyName = getCompanyNameById(companies, requestCompanyId, requestCompanyId);
-    console.log(`INTEGRATION_HEALTH_REQUEST company=${requestCompanyId}`);
     setIsIntegrationHealthLoading(true);
     setIntegrationHealth(initialIntegrationHealth);
     setIntegrations(() => integrationState());
@@ -2842,12 +2820,8 @@ async function handleEnableNotifications() {
       }
       const responseCompanyIds = Array.from(new Set(data.map(getHealthCompanyId).filter(Boolean)));
       const responseCompanyId = responseCompanyIds[0] || "missing";
-      console.log(`INTEGRATION_HEALTH_RESPONSE company=${requestCompanyId} responseCompany=${responseCompanyId}`);
       const staleResponseCompanyId = responseCompanyIds.find((id) => id !== requestCompanyId);
       if (staleResponseCompanyId || requestCompanyId !== getStoredCompanyId()) {
-        console.log(
-          `INTEGRATION_HEALTH_STALE_IGNORED expected=${requestCompanyId} found=${staleResponseCompanyId || getStoredCompanyId()}`
-        );
         return initialIntegrationHealth;
       }
       const mercadoLivreHealth = data.filter((health) => {
@@ -2892,11 +2866,6 @@ async function handleEnableNotifications() {
       try {
         const tenant = await loadMeForSession(authSession, requestCompanyId);
         if (requestCompanyId !== getStoredCompanyId()) {
-          console.log("/me response ignored stale company response", {
-            requested: requestCompanyId,
-            current: getStoredCompanyId(),
-            found: tenant?.company?.id,
-          });
           return;
         }
         const resolvedRole = tenant?.user?.role || "";
@@ -2904,11 +2873,6 @@ async function handleEnableNotifications() {
         if (resolvedRole !== "platform_admin" && backendCompanyId) {
           // TODO security: enforce role-based tenant lock server-side for all admin-only routes.
           if (requestCompanyId !== backendCompanyId) {
-            console.log("/me response forced non-platform tenant", {
-              requested: requestCompanyId,
-              forced: backendCompanyId,
-              role: resolvedRole,
-            });
             localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, backendCompanyId);
             clearTenantQuestionStorage();
             setSelectedCompanyId(backendCompanyId);
@@ -2916,10 +2880,6 @@ async function handleEnableNotifications() {
           }
         }
         if (backendCompanyId && backendCompanyId !== requestCompanyId) {
-          console.log("/me response selected authenticated company", {
-            requested: requestCompanyId,
-            found: backendCompanyId,
-          });
           localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, backendCompanyId);
           clearTenantQuestionStorage();
           setSelectedCompanyId(backendCompanyId);
@@ -3095,14 +3055,10 @@ async function handleEnableNotifications() {
     const companyId = selectedCompanyId || currentCompany?.id || getStoredCompanyId();
     const filtered = questions.filter((question) => {
       if (!question.company_id || question.company_id !== companyId) {
-        console.log(
-          `FRONTEND_DROPPED_WRONG_TENANT expected=${companyId} found=${question.company_id || "missing"} external_id=${question.external_id}`
-        );
         return false;
       }
       return true;
     });
-    console.log(`FRONTEND_VISIBLE_QUESTIONS company=${companyId} count=${filtered.length}`);
     return filtered;
   }, [questions, selectedCompanyId, currentCompany?.id]);
 
@@ -3140,25 +3096,7 @@ async function handleEnableNotifications() {
 
   const finalCards = useMemo(() => {
     const companyId = selectedCompanyId || currentCompany?.id || getStoredCompanyId();
-    const cards = filteredConversationGroups.filter((card) => {
-      const belongs = cardBelongsToCompany(card, companyId);
-      if (!belongs) {
-        console.log(
-          `FRONTEND_DROPPED_WRONG_TENANT expected=${companyId} found=${getCardCompanyId(card) || "missing"} external_id=${card.external_id}`
-        );
-      }
-      return belongs;
-    });
-    console.log("RENDER_COMPANY", companyId);
-    console.log(
-      "RENDER_VISIBLE_CARDS",
-      cards.slice(0, 5).map((card) => ({
-        external_id: card.external_id,
-        company_id: getCardCompanyId(card),
-        title: card.product_title || card.product,
-      }))
-    );
-    return cards;
+    return filteredConversationGroups.filter((card) => cardBelongsToCompany(card, companyId));
   }, [filteredConversationGroups, selectedCompanyId, currentCompany?.id]);
   const selectedQuestion = isQuestionsLoading
     ? null
@@ -3938,14 +3876,6 @@ async function handleEnableNotifications() {
                 </select>
               </label>
             ) : null}
-          </div>
-
-          <div className="tenant-debug">
-            Empresa atual: {selectedCompanyId}
-            <br />
-            Perguntas carregadas: {questions.length}
-            <br />
-            Perguntas visíveis: {visibleQuestions.length}
           </div>
 
           <div className="question-list">
