@@ -194,6 +194,12 @@ def get_supabase_auth_base_url() -> str:
     return f"{base_url}/auth/v1"
 
 
+
+
+def get_frontend_url() -> str:
+    configured = (os.getenv("FRONTEND_URL") or "").strip()
+    return configured.rstrip("/") or "https://marketplace-ai-inbox.vercel.app"
+
 def supabase_admin_request(path: str, *, method: str = "POST", payload: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
     auth_base_url = get_supabase_auth_base_url()
     service_role_key = get_supabase_service_role_key()
@@ -4480,7 +4486,7 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
     try:
         status, response_body = supabase_admin_request(
             "/admin/generate_link",
-            payload={"type": "invite", "email": email, "data": {"name": name or email}},
+            payload={"type": "invite", "email": email, "data": {"name": name or email}, "redirect_to": get_frontend_url()},
         )
     except HTTPException as error:
         logger.error("ADMIN_INVITE_ERROR type=%s message=%s", type(error).__name__, error.detail)
@@ -4520,7 +4526,7 @@ def invite_admin_user(payload: AdminUserInviteRequest, request: Request, db: Ses
     db.refresh(user)
     return {
         "success": True,
-        "message": "Usuário criado/atualizado com sucesso.",
+        "message": ("Convite enviado por e-mail." if not action_link else "Link de convite gerado com sucesso."),
         "invite_link": action_link or None,
         "user": {
             "id": user.id,
@@ -4544,7 +4550,7 @@ def send_admin_password_reset(user_id: str, request: Request, db: Session = Depe
         raise HTTPException(status_code=404, detail="User not found.")
     logger.info("ADMIN_PASSWORD_RESET_START user_id=%s", user.id)
     try:
-        status, response_body = supabase_admin_request("/recover", payload={"email": user.email})
+        status, response_body = supabase_admin_request("/recover", payload={"email": user.email, "redirect_to": get_frontend_url()})
     except HTTPException as error:
         logger.error("ADMIN_PASSWORD_RESET_ERROR type=%s message=%s", type(error).__name__, error.detail)
         raise

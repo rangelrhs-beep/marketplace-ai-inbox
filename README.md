@@ -734,3 +734,10 @@ Required safeguards (must remain enforced):
 Future enterprise option:
 
 - If enterprise/compliance requirements demand stronger physical isolation, evolve to dedicated database per enterprise client while preserving the same `company_id` domain model at the application layer.
+
+## Supabase Authentication URL Configuration
+
+Configure the Supabase Auth project URLs exactly as follows:
+
+- Site URL: `https://marketplace-ai-inbox.vercel.app`
+- Redirect URLs: `https://marketplace-ai-inbox.vercel.app/*`

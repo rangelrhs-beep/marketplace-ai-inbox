@@ -31,6 +31,7 @@ const supabase = isSupabaseAuthConfigured
   : null;
 
 const AUTH_REQUEST_TIMEOUT_MS = 15000;
+const DEFAULT_FRONTEND_URL = "https://marketplace-ai-inbox.vercel.app";
 
 function withTimeout(promise, timeoutMs, timeoutMessage) {
   let timeoutId;
@@ -356,7 +357,7 @@ function UsersAdminPage({
         return;
       }
       if (!response.ok) throw new Error(data.detail || data.message || "Não foi possível convidar usuário.");
-      setInviteEmailSent(Boolean(data.invite_link));
+      setInviteEmailSent(!data.invite_link);
       setSubmitMessage(data.message || "Usuário criado/vinculado com sucesso.");
       setInviteLink(data.invite_link || "");
       setForm((current) => ({ ...current, email: "", name: "" }));
@@ -1026,6 +1027,28 @@ function LoginScreen({ email, password, error, isLoading, onEmailChange, onPassw
             {isLoading ? "Entrando..." : "Entrar"}
           </button>
           <button className="secondary" type="button" onClick={onForgotPassword} disabled={isLoading}>Esqueci minha senha</button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function PasswordRecoveryScreen({ password, confirmPassword, message, isSaving, onPasswordChange, onConfirmPasswordChange, onSubmit }) {
+  return (
+    <main className="login-screen">
+      <section className="login-panel" aria-labelledby="password-recovery-title">
+        <h1 id="password-recovery-title">Definir nova senha</h1>
+        <form className="login-form" onSubmit={onSubmit}>
+          <label>
+            Nova senha
+            <input type="password" value={password} onChange={(event) => onPasswordChange(event.target.value)} autoComplete="new-password" required />
+          </label>
+          <label>
+            Confirmar senha
+            <input type="password" value={confirmPassword} onChange={(event) => onConfirmPasswordChange(event.target.value)} autoComplete="new-password" required />
+          </label>
+          {message ? <div className="login-error">{message}</div> : null}
+          <button className="primary" type="submit" disabled={isSaving}>{isSaving ? "Salvando..." : "Salvar nova senha"}</button>
         </form>
       </section>
     </main>
@@ -2579,6 +2602,11 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [isRecoveryFlow, setIsRecoveryFlow] = useState(false);
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryConfirmPassword, setRecoveryConfirmPassword] = useState("");
+  const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [isSavingRecoveryPassword, setIsSavingRecoveryPassword] = useState(false);
   const [tenantContext, setTenantContext] = useState(FALLBACK_TENANT_CONTEXT);
   const [companies, setCompanies] = useState([FALLBACK_TENANT_CONTEXT.company]);
   const [selectedCompanyId, setSelectedCompanyId] = useState(getStoredCompanyId);
@@ -2672,6 +2700,22 @@ export default function App() {
         typeof nextIntegrations === "function" ? nextIntegrations(current.integrations) : nextIntegrations,
     }));
   }
+
+  useEffect(() => {
+    if (!supabase) return;
+    const hashParams = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+    const queryParams = new URLSearchParams(window.location.search || "");
+    const flowType = (hashParams.get("type") || queryParams.get("type") || "").toLowerCase();
+    const hasAccessToken = Boolean(hashParams.get("access_token") || queryParams.get("access_token"));
+    const errorDescription = hashParams.get("error_description") || queryParams.get("error_description") || hashParams.get("error") || queryParams.get("error") || "";
+    if (errorDescription) {
+      setRecoveryMessage(decodeURIComponent(errorDescription));
+    }
+    if ((flowType === "recovery" || flowType === "invite") && hasAccessToken) {
+      setIsRecoveryFlow(true);
+      setLoginError("");
+    }
+  }, []);
 
   function resetTenantScopedUi() {
     setIsQuestionsLoading(true);
@@ -2922,12 +2966,37 @@ async function handleEnableNotifications() {
       return;
     }
     setLoginError("");
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: DEFAULT_FRONTEND_URL });
     if (error) {
       setLoginError(error.message || "Não foi possível enviar a redefinição.");
       return;
     }
     setLoginError("Enviamos um link de redefinição para seu e-mail.");
+  }
+
+  async function handleRecoveryPasswordSubmit(event) {
+    event.preventDefault();
+    if (!supabase) return;
+    if (recoveryPassword !== recoveryConfirmPassword) {
+      setRecoveryMessage("As senhas não conferem.");
+      return;
+    }
+    setIsSavingRecoveryPassword(true);
+    setRecoveryMessage("");
+    const { error } = await supabase.auth.updateUser({ password: recoveryPassword });
+    if (error) {
+      setRecoveryMessage(error.message || "Não foi possível salvar a nova senha.");
+      setIsSavingRecoveryPassword(false);
+      return;
+    }
+    setRecoveryMessage("Senha atualizada com sucesso. Faça login para continuar.");
+    setIsRecoveryFlow(false);
+    setRecoveryPassword("");
+    setRecoveryConfirmPassword("");
+    window.history.replaceState({}, document.title, window.location.pathname);
+    await supabase.auth.signOut().catch(() => {});
+    setAuthSession(null);
+    setIsSavingRecoveryPassword(false);
   }
 
   async function handleLogout() {
@@ -3924,6 +3993,20 @@ async function handleEnableNotifications() {
           <p>Carregando dados da sessão...</p>
         </div>
       </div>
+    );
+  }
+
+  if (isSupabaseAuthConfigured && isRecoveryFlow) {
+    return (
+      <PasswordRecoveryScreen
+        password={recoveryPassword}
+        confirmPassword={recoveryConfirmPassword}
+        message={recoveryMessage}
+        isSaving={isSavingRecoveryPassword}
+        onPasswordChange={setRecoveryPassword}
+        onConfirmPasswordChange={setRecoveryConfirmPassword}
+        onSubmit={handleRecoveryPasswordSubmit}
+      />
     );
   }
 
