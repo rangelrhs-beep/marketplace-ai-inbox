@@ -717,3 +717,20 @@ This session performed a security/performance/cleanup audit with low-risk change
 - Some debug routes still exist and should remain restricted operationally.
 - Buyer enrichment remains best-effort and may fallback when Mercado Livre user APIs fail.
 - Deprecated `datetime.utcnow()` warnings exist in tests and can be migrated later to timezone-aware datetime in a separate low-risk maintenance task.
+
+## Tenant Isolation Strategy
+
+Current strategy: shared database with strict `company_id` isolation. This is an acceptable architecture for the current SaaS stage because it keeps operational complexity low while preserving tenant separation through backend enforcement, role checks, and tenant-scoped data models.
+
+Required safeguards (must remain enforced):
+
+- Backend `company_id` enforcement on every tenant-scoped route/query/write.
+- Regression tests for tenant isolation and auth/JWT context validation.
+- No global Mercado Livre token fallback; tokens must stay company-scoped.
+- No live Mercado Livre history merge in `GET /questions` (local DB only).
+- Keep webhook routing by `seller_id` to the mapped tenant company.
+- Plan and add Supabase RLS policies in a future hardening phase.
+
+Future enterprise option:
+
+- If enterprise/compliance requirements demand stronger physical isolation, evolve to dedicated database per enterprise client while preserving the same `company_id` domain model at the application layer.
