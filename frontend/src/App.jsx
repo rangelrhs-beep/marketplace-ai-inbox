@@ -2575,6 +2575,7 @@ export default function App() {
   const debouncedQuestionsLoadRef = useRef(null);
   const [authSession, setAuthSession] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isSupabaseAuthConfigured);
+  const [isTenantContextLoading, setIsTenantContextLoading] = useState(Boolean(isSupabaseAuthConfigured));
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -2718,6 +2719,7 @@ export default function App() {
     setSelectedCompanyId(getStoredCompanyId());
     setActive("Inbox");
     setTenantContext(FALLBACK_TENANT_CONTEXT);
+    setIsTenantContextLoading(Boolean(isSupabaseAuthConfigured));
     setCompanies([FALLBACK_TENANT_CONTEXT.company]);
     if (errorMessage) setLoginError(errorMessage);
   }
@@ -2929,11 +2931,12 @@ async function handleEnableNotifications() {
   }
 
   async function handleLogout() {
+    setIsTenantContextLoading(Boolean(isSupabaseAuthConfigured));
     resetAuthUiState("");
     setLoginPassword("");
     setLoginError("");
-    if (supabase) await supabase.auth.signOut();
     setAuthSession(null);
+    if (supabase) await supabase.auth.signOut();
   }
 
   async function handleChangePassword() {
@@ -3116,9 +3119,11 @@ async function handleEnableNotifications() {
   useEffect(() => {
     if (isSupabaseAuthConfigured && !authSession) {
       setIsQuestionsLoading(false);
+      setIsTenantContextLoading(false);
       return;
     }
 
+    setIsTenantContextLoading(true);
     resetTenantScopedUi();
     const requestCompanyId = selectedCompanyId;
 
@@ -3174,10 +3179,12 @@ async function handleEnableNotifications() {
           console.info("AUTH_SAVED_SCREEN_RESET role=%s screen=%s", roleForCheck, active);
           setActive("Inbox");
         }
+        setIsTenantContextLoading(false);
       } catch {
         resetAuthUiState("Usuário desativado. Entre em contato com o administrador.");
         if (supabase) await supabase.auth.signOut().catch(() => {});
         setAuthSession(null);
+        setIsTenantContextLoading(false);
       }
     }
 
@@ -3908,6 +3915,17 @@ async function handleEnableNotifications() {
 
   const notificationsEnabled = appNotificationsEnabled;
   const notificationButtonLabel = getNotificationButtonLabel(notificationPermission, notificationsEnabled);
+
+  if (isSupabaseAuthConfigured && isTenantContextLoading) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <h1>Marketplace AI Inbox</h1>
+          <p>Carregando dados da sessão...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (isSupabaseAuthConfigured && !authSession) {
     return (
