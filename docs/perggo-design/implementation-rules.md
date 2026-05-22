@@ -207,24 +207,37 @@ Follow this order unless explicitly instructed otherwise:
 2. Brand assets
 3. Base shell/layout/navigation
 4. Splash/loading/login/password screens
-5. Company selection
-6. Home
-7. Pendentes
-8. Question detail
-9. Edit answer
-10. Rewrite with AI
-11. Respondidas
-12. High priority
-13. Product detail
-14. Integrations
-15. AI rules
-16. Notifications center
-17. Search/filter sheet
-18. Settings
-19. Users/team
-20. Error/offline state
+5. Invite accepted / recovery email sent states
+6. Company selection
+7. Home
+8. Pendentes
+9. Question detail
+10. Edit answer
+11. Rewrite with AI
+12. Answer sent confirmation
+13. Already answered elsewhere state
+14. Respondidas
+15. High priority
+16. Product detail
+17. Integrations
+18. Token expired / reconnect marketplace
+19. AI rules
+20. Notifications center
+21. Search/filter sheet
+22. Settings
+23. Company details
+24. Users/team
+25. Plan and billing
+26. Error/offline state
 
 ---
+
+
+Any future UI task that completes a question-answering flow must account for:
+- success confirmation
+- duplicate/already-answered state
+- error state
+- pending-to-answered transition
 
 ## Final rule
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the official planned mobile screen map for Perggo.
+This document defines the official planned mobile screen map for Perggo (27 screens/states).
 
 Use it together with:
 
@@ -714,3 +714,187 @@ After creating the file, report:
 - Files created.
 - Confirmation that no frontend/backend code was changed.
 - Any notes or risks.
+
+---
+
+# 21. Invite Accepted / Password Created Screen
+
+## Purpose
+
+Confirms that the user successfully created a password after accepting an invite or password recovery flow.
+
+## When it appears
+
+After the user saves a new password from an invite/recovery link.
+
+## Required content
+
+- Title:
+  - “Senha criada com sucesso”
+- Message:
+  - “Agora você já pode acessar sua empresa no Perggo.”
+- Action:
+  - “Entrar no Perggo”
+
+## Technical behavior
+
+- Must appear after successful `supabase.auth.updateUser({ password })` when appropriate.
+- Should clean callback URL state.
+- Should route the user safely to login or authenticated app flow.
+
+---
+
+# 22. Password Recovery Email Sent Screen
+
+## Purpose
+
+Confirms that the password recovery email was requested.
+
+## When it appears
+
+After the user clicks “Esqueci minha senha” and submits an email successfully.
+
+## Required content
+
+- Title:
+  - “Enviamos um link para seu e-mail”
+- Message:
+  - “Verifique sua caixa de entrada e spam.”
+- Action:
+  - “Voltar ao login”
+
+## Technical behavior
+
+- Do not reveal whether an email exists in the system in a way that creates account enumeration risk.
+- Keep message friendly and generic.
+- Preserve existing Supabase password recovery flow.
+
+---
+
+# 23. Answer Sent Confirmation Screen / Modal
+
+## Purpose
+
+Confirms that an answer was approved and sent successfully.
+
+## When it appears
+
+After the user approves and sends an answer from the question detail/edit/rewrite flow.
+
+## Required content
+
+- Title:
+  - “Resposta enviada com sucesso”
+- Details:
+  - “Marketplace: Mercado Livre”
+  - “Produto: {product_title}”
+- Action:
+  - “Ver próxima pendente”
+
+## Technical behavior
+
+- Must only appear after backend confirms the answer was sent.
+- Should not appear for failed or duplicate sends.
+- Should update/remove the question from Pendentes.
+- Should keep the answer visible in Respondidas.
+
+---
+
+# 24. Already Answered Elsewhere Screen / State
+
+## Purpose
+
+Handles the case where a question was already answered outside Perggo, such as directly in Mercado Livre or by another attendant.
+
+## Required content
+
+- Title/message:
+  - “Resposta já realizada por outro usuário”
+- Optional details:
+  - “Esta pergunta foi respondida fora do Perggo.”
+  - “Ela foi movida para Respondidas.”
+
+## Technical behavior
+
+- The question must leave Pendentes.
+- The question must appear in Respondidas with source:
+  - “Respondida no portal”
+- Do not allow duplicate answer sending.
+- Preserve existing portal-answer detection.
+
+---
+
+# 25. Token Expired / Reconnect Marketplace Screen
+
+## Purpose
+
+Shows a clear action when a marketplace token expires or the integration becomes disconnected.
+
+## Required content
+
+- Title:
+  - “Mercado Livre desconectado”
+- Message:
+  - “Para continuar recebendo perguntas, reconecte sua conta.”
+- Action:
+  - “Reconectar Mercado Livre”
+
+## Technical behavior
+
+- Must use existing integration health/token status.
+- Should deep-link or route to integration reconnect flow.
+- Do not expose raw token details.
+- Future marketplaces should reuse the same pattern.
+
+---
+
+# 26. Company Details Screen
+
+## Purpose
+
+Allows admins to view and edit company-level information.
+
+## Required content
+
+Fields/sections:
+
+- Nome da empresa
+- CNPJ
+- Logo
+- Responsável
+- Plano
+- Marketplaces conectados
+- Usuários vinculados
+
+## Technical behavior
+
+- Must respect role permissions.
+- Company admin/platform admin only where allowed.
+- Company data is tenant-scoped.
+- Editing can be basic initially.
+- Do not expose data from other companies.
+
+---
+
+# 27. Plan and Billing Screen
+
+## Purpose
+
+Shows plan and billing information for SaaS readiness.
+
+## Required content
+
+- Plano atual
+- Quantidade de usuários
+- Marketplaces ativos
+- Limite de perguntas/mês
+- Action:
+  - “Falar com suporte”
+  - or “Alterar plano”
+
+## Technical behavior
+
+- Can initially be read-only or marked “Em breve”.
+- Must not imply active billing automation unless implemented.
+- Should be accessible from Configurações/Mais according to role permissions.
+

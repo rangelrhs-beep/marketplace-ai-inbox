@@ -355,3 +355,17 @@ Recommended order:
 10. Rework Mais / Settings / Admin screens.
 
 Each step must be tested before moving to the next one.
+
+## 12. Planned mobile screens and additional states
+
+Perggo currently includes the original operational mobile screens plus additional confirmation/admin states.
+
+Additional states to include in planning:
+- Convite aceito
+- Recuperar senha enviada
+- Resposta enviada
+- Pergunta já respondida no portal
+- Token expirado
+- Dados da empresa
+- Plano e cobrança
+
