@@ -6,8 +6,8 @@ These files are the official Perggo visual source assets.
 - `perggo-logo-source.png`
 - `perggo-wordmark-source.png`
 
-Current PNG files may be temporary source files.
+The current assets are final transparent Perggo source assets.
 
-Future final assets should be provided as transparent PNG and/or SVG.
+These assets should be used as the source for the Perggo redesign.
 
-Do not generate, redraw, recolor, or otherwise modify the Perggo logo assets without explicit approval.
+They must not be modified, redrawn, recolored, or replaced without explicit approval.
