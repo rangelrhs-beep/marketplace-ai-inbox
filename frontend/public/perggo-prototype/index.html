@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Perggo — Figma in Code (Public Prototype)</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero section">
+      <h1>Perggo</h1>
+      <p class="slogan">O inbox inteligente dos marketplaces</p>
+      <p class="disclaimer">Protótipo estático público (HTML/CSS), sem comportamento de app.</p>
+    </header>
+
+    <main>
+      <section class="section">
+        <h2>Official logo assets (source paths)</h2>
+        <div class="grid logos-grid">
+          <article class="card"><h3>Ícone</h3><p class="path">frontend/src/assets/perggo/perggo-icon-source.png</p></article>
+          <article class="card"><h3>Logo</h3><p class="path">frontend/src/assets/perggo/perggo-logo-source.png</p></article>
+          <article class="card"><h3>Wordmark</h3><p class="path">frontend/src/assets/perggo/perggo-wordmark-source.png</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Color palette</h2>
+        <div class="grid palette-grid">
+          <div class="swatch card"><span class="color color-gradient"></span><strong>Primary Gradient</strong><small>#4A6BFF → #8B5CFF</small></div>
+          <div class="swatch card"><span class="color color-primary"></span><strong>Primary Blue</strong><small>#4A6BFF</small></div>
+          <div class="swatch card"><span class="color color-secondary"></span><strong>Purple</strong><small>#8B5CFF</small></div>
+          <div class="swatch card"><span class="color color-success"></span><strong>Success</strong><small>#22C55E</small></div>
+          <div class="swatch card"><span class="color color-warning"></span><strong>Warning</strong><small>#F59E0B</small></div>
+          <div class="swatch card"><span class="color color-surface"></span><strong>Surface</strong><small>#FFFFFF</small></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Typography scale</h2>
+        <div class="card type-scale">
+          <p class="type-xl">Título XL — Perggo em foco</p>
+          <p class="type-lg">Título LG — Resumo da operação</p>
+          <p class="type-md">Título MD — Perguntas pendentes</p>
+          <p class="type-base">Texto base — Interface clara, simples e confiável.</p>
+          <p class="type-sm">Texto auxiliar — Atualizado há 5 minutos.</p>
+          <p class="type-xs">Label XS — status</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Base components</h2>
+        <div class="grid components-grid">
+          <article class="card component-block"><h3>Buttons</h3><div class="row"><button class="btn btn-primary" type="button">Aprovar e responder</button><button class="btn btn-secondary" type="button">Editar resposta</button></div></article>
+          <article class="card component-block"><h3>Input</h3><label for="sample-input" class="label">Pergunta do cliente</label><input id="sample-input" class="input" type="text" value="Esse produto serve no modelo XYZ?" readonly /></article>
+          <article class="card component-block"><h3>Card Base</h3><p>Produto: CPAP Máscara Full Face</p><p class="muted">Pergunta recebida há 12 minutos.</p></article>
+          <article class="card component-block"><h3>Badge & Chips</h3><div class="row"><span class="badge">Alta prioridade</span><span class="chip chip-active">Todos</span><span class="chip">Mercado Livre</span><span class="chip">Alta prioridade</span></div></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Navigation components</h2>
+        <div class="grid nav-grid">
+          <article class="card"><h3>Simple Screen Header</h3><div class="screen-header"><strong>Pendentes</strong><span class="muted">Perguntas aguardando resposta</span></div></article>
+          <article class="card"><h3>Bottom Navigation</h3><nav class="bottom-nav" aria-label="Navegação inferior de exemplo"><span class="tab tab-active">Início</span><span class="tab">Pendentes</span><span class="tab">Respondidas</span><span class="tab">Mais</span></nav></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>27 reference screens (grouped by flow)</h2>
+        <div class="grid screen-grid">
+          <article class="card screen-card"><h3>Screen 01</h3><p><strong>01-splash.png</strong></p><p class="muted">Flow: Entry</p><p class="path">docs/perggo-design/reference-screens/01-splash.png</p></article>
+          <article class="card screen-card"><h3>Screen 02</h3><p><strong>02-loading.png</strong></p><p class="muted">Flow: Entry</p><p class="path">docs/perggo-design/reference-screens/02-loading.png</p></article>
+          <article class="card screen-card"><h3>Screen 03</h3><p><strong>03-login.png</strong></p><p class="muted">Flow: Auth</p><p class="path">docs/perggo-design/reference-screens/03-login.png</p></article>
+          <article class="card screen-card"><h3>Screen 04</h3><p><strong>04-password-reset.png</strong></p><p class="muted">Flow: Auth</p><p class="path">docs/perggo-design/reference-screens/04-password-reset.png</p></article>
+          <article class="card screen-card"><h3>Screen 05</h3><p><strong>05-company-selection.png</strong></p><p class="muted">Flow: Tenant Context</p><p class="path">docs/perggo-design/reference-screens/05-company-selection.png</p></article>
+          <article class="card screen-card"><h3>Screen 06</h3><p><strong>06-home-summary.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/06-home-summary.png</p></article>
+          <article class="card screen-card"><h3>Screen 07</h3><p><strong>07-pending-list.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/07-pending-list.png</p></article>
+          <article class="card screen-card"><h3>Screen 08</h3><p><strong>08-question-detail.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/08-question-detail.png</p></article>
+          <article class="card screen-card"><h3>Screen 09</h3><p><strong>09-edit-answer.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/09-edit-answer.png</p></article>
+          <article class="card screen-card"><h3>Screen 10</h3><p><strong>10-rewrite-with-ai.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/10-rewrite-with-ai.png</p></article>
+          <article class="card screen-card"><h3>Screen 11</h3><p><strong>11-answered-list.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/11-answered-list.png</p></article>
+          <article class="card screen-card"><h3>Screen 12</h3><p><strong>12-high-priority.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/12-high-priority.png</p></article>
+          <article class="card screen-card"><h3>Screen 13</h3><p><strong>13-product-detail.png</strong></p><p class="muted">Flow: Core Operation</p><p class="path">docs/perggo-design/reference-screens/13-product-detail.png</p></article>
+          <article class="card screen-card"><h3>Screen 14</h3><p><strong>14-integrations.png</strong></p><p class="muted">Flow: More / Config</p><p class="path">docs/perggo-design/reference-screens/14-integrations.png</p></article>
+          <article class="card screen-card"><h3>Screen 15</h3><p><strong>15-ai-rules.png</strong></p><p class="muted">Flow: More / Config</p><p class="path">docs/perggo-design/reference-screens/15-ai-rules.png</p></article>
+          <article class="card screen-card"><h3>Screen 16</h3><p><strong>16-notifications.png</strong></p><p class="muted">Flow: More / Config</p><p class="path">docs/perggo-design/reference-screens/16-notifications.png</p></article>
+          <article class="card screen-card"><h3>Screen 17</h3><p><strong>17-search-filters.png</strong></p><p class="muted">Flow: Cross-screen Utility</p><p class="path">docs/perggo-design/reference-screens/17-search-filters.png</p></article>
+          <article class="card screen-card"><h3>Screen 18</h3><p><strong>18-settings.png</strong></p><p class="muted">Flow: More / Config</p><p class="path">docs/perggo-design/reference-screens/18-settings.png</p></article>
+          <article class="card screen-card"><h3>Screen 19</h3><p><strong>19-users-team.png</strong></p><p class="muted">Flow: Admin</p><p class="path">docs/perggo-design/reference-screens/19-users-team.png</p></article>
+          <article class="card screen-card"><h3>Screen 20</h3><p><strong>20-error-offline.png</strong></p><p class="muted">Flow: Global State</p><p class="path">docs/perggo-design/reference-screens/20-error-offline.png</p></article>
+          <article class="card screen-card"><h3>Screen 21</h3><p><strong>21-invite-accepted.png</strong></p><p class="muted">Flow: Auth Confirmation</p><p class="path">docs/perggo-design/reference-screens/21-invite-accepted.png</p></article>
+          <article class="card screen-card"><h3>Screen 22</h3><p><strong>22-password-recovery-sent.png</strong></p><p class="muted">Flow: Auth Confirmation</p><p class="path">docs/perggo-design/reference-screens/22-password-recovery-sent.png</p></article>
+          <article class="card screen-card"><h3>Screen 23</h3><p><strong>23-answer-sent-confirmation.png</strong></p><p class="muted">Flow: Operation Confirmation</p><p class="path">docs/perggo-design/reference-screens/23-answer-sent-confirmation.png</p></article>
+          <article class="card screen-card"><h3>Screen 24</h3><p><strong>24-already-answered-elsewhere.png</strong></p><p class="muted">Flow: Operation Safety</p><p class="path">docs/perggo-design/reference-screens/24-already-answered-elsewhere.png</p></article>
+          <article class="card screen-card"><h3>Screen 25</h3><p><strong>25-token-expired-reconnect.png</strong></p><p class="muted">Flow: Integration Safety</p><p class="path">docs/perggo-design/reference-screens/25-token-expired-reconnect.png</p></article>
+          <article class="card screen-card"><h3>Screen 26</h3><p><strong>26-company-details.png</strong></p><p class="muted">Flow: Admin / Company</p><p class="path">docs/perggo-design/reference-screens/26-company-details.png</p></article>
+          <article class="card screen-card"><h3>Screen 27</h3><p><strong>27-plan-billing.png</strong></p><p class="muted">Flow: Admin / SaaS</p><p class="path">docs/perggo-design/reference-screens/27-plan-billing.png</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Implementation checklist</h2>
+        <ul class="card checklist">
+          <li>Preservar autenticação existente.</li>
+          <li>Preservar isolamento de tenant/empresa.</li>
+          <li>Preservar integração com Mercado Livre.</li>
+          <li>Não inventar novo estilo visual fora das referências oficiais.</li>
+          <li>Citar a tela de referência exata antes de implementar.</li>
+          <li>Implementar tela por tela, com diffs pequenos e seguros.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
