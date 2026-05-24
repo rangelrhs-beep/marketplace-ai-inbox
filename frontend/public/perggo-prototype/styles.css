@@ -1,0 +1,103 @@
+:root {
+  --bg: #f6f8ff;
+  --surface: #ffffff;
+  --text: #1f2a44;
+  --muted: #62708a;
+  --border: #e5eaf5;
+  --primary: #4a6bff;
+  --secondary: #8b5cff;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --radius: 18px;
+  --shadow: 0 10px 28px rgba(74, 107, 255, 0.12);
+  --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: radial-gradient(circle at top, #eef2ff, var(--bg) 42%);
+  color: var(--text);
+}
+
+main, .hero { width: min(1100px, 92vw); margin: 0 auto; }
+.section { margin: 2rem auto; }
+h1, h2, h3 { margin: 0 0 .75rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.1rem; }
+
+.hero {
+  padding: 3rem 1.25rem;
+  text-align: center;
+  background: var(--gradient);
+  color: white;
+  border-radius: 0 0 28px 28px;
+  box-shadow: var(--shadow);
+}
+.hero__brand { display: flex; gap: 1rem; justify-content: center; align-items: center; flex-wrap: wrap; }
+.hero__icon { width: 62px; height: 62px; object-fit: contain; }
+.hero__wordmark { max-height: 38px; width: auto; object-fit: contain; }
+.slogan { font-size: 1.05rem; margin: .25rem 0; }
+.disclaimer { font-size: .9rem; opacity: .95; }
+
+.grid { display: grid; gap: 1rem; }
+.logos-grid, .components-grid, .palette-grid, .screen-grid { grid-template-columns: 1fr; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  box-shadow: 0 6px 18px rgba(15, 34, 74, 0.08);
+}
+
+.asset-preview { width: 100%; max-height: 110px; object-fit: contain; background: #fbfcff; border-radius: 12px; padding: .5rem; }
+.path, .muted { color: var(--muted); font-size: .9rem; word-break: break-all; }
+
+.color { display: block; height: 42px; border-radius: 10px; border: 1px solid #d9e0ef; margin-bottom: .5rem; }
+.color-gradient { background: var(--gradient); }
+.color-primary { background: var(--primary); }
+.color-secondary { background: var(--secondary); }
+.color-success { background: var(--success); }
+.color-warning { background: var(--warning); }
+.color-surface { background: var(--surface); }
+
+.type-xl { font-size: 2rem; font-weight: 700; }
+.type-lg { font-size: 1.5rem; font-weight: 600; }
+.type-md { font-size: 1.25rem; font-weight: 600; }
+.type-base { font-size: 1rem; }
+.type-sm { font-size: .875rem; color: var(--muted); }
+.type-xs { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+.row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.btn { border: 0; border-radius: 999px; padding: .65rem 1rem; font-weight: 600; }
+.btn-primary { background: var(--gradient); color: #fff; }
+.btn-secondary { background: #ecf1ff; color: #35466b; }
+.input { width: 100%; padding: .7rem .8rem; border: 1px solid #cdd8f1; border-radius: 12px; }
+.label { display: block; margin-bottom: .4rem; font-weight: 600; }
+.badge { background: #fff2e0; color: #a15b00; padding: .3rem .6rem; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+.chip { background: #f2f5ff; color: #43557c; padding: .3rem .6rem; border-radius: 999px; font-size: .8rem; }
+.chip-active { background: #dfe7ff; color: #2f4281; }
+
+.bottom-nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; }
+.tab { text-align: center; padding: .65rem .25rem; border-radius: 12px; background: #f2f6ff; color: #4e5f85; font-weight: 600; }
+.tab-active { background: var(--gradient); color: #fff; }
+
+.screen-card img { width: 100%; border-radius: 12px; border: 1px solid #e4e8f4; }
+.screen-card figcaption { margin-top: .5rem; font-size: .85rem; color: var(--muted); }
+
+.checklist { margin: 0; padding-left: 1.25rem; }
+.checklist li { margin: .45rem 0; }
+
+@media (min-width: 700px) {
+  .logos-grid { grid-template-columns: repeat(3, 1fr); }
+  .palette-grid { grid-template-columns: repeat(3, 1fr); }
+  .components-grid { grid-template-columns: repeat(2, 1fr); }
+  .screen-grid { grid-template-columns: repeat(3, 1fr); }
+  .nav-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (min-width: 1000px) {
+  .screen-grid { grid-template-columns: repeat(4, 1fr); }
+}
