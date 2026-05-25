@@ -994,6 +994,7 @@ function Sidebar({ active, onNavigate, navItems }) {
 function AuthBrand({ showTagline = false }) {
   return (
     <div className="auth-brand">
+      {/* Auth brand intentionally uses icon + wordmark separately; do not use perggo-logo-source here. */}
       <img src={perggoIcon} alt="Ícone Perggo" className="auth-brand-icon" />
       <img src={perggoWordmark} alt="Perggo" className="auth-brand-wordmark" />
       {showTagline ? <p className="auth-brand-tagline">O inbox inteligente dos marketplaces</p> : null}
