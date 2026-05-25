@@ -37,7 +37,7 @@ button:disabled {
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   justify-content: center;
   overflow: hidden;
   padding: 20px 18px 30px;
@@ -76,8 +76,8 @@ button:disabled {
   position: relative;
   z-index: 1;
   width: min(100%, 430px);
-  margin: auto;
-  padding: 14px 6px;
+  margin: clamp(28px, 11vh, 88px) auto 0;
+  padding: 8px 6px 18px;
 }
 
 .auth-content-center {
@@ -88,13 +88,13 @@ button:disabled {
   display: grid;
   justify-items: center;
   gap: 10px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
 }
 
 .auth-brand-icon {
-  width: 54px;
-  max-width: 54px;
-  max-height: 54px;
+  width: 50px;
+  max-width: 50px;
+  max-height: 50px;
   height: auto;
 }
 

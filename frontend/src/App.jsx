@@ -22,7 +22,6 @@ import {
   Users,
   X,
 } from "lucide-react";
-import perggoLogo from "./assets/perggo/perggo-logo-source.png";
 import perggoIcon from "./assets/perggo/perggo-icon-source.png";
 import perggoWordmark from "./assets/perggo/perggo-wordmark-source.png";
 
