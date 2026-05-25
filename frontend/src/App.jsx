@@ -23,7 +23,6 @@ import {
   X,
 } from "lucide-react";
 import perggoIcon from "./assets/perggo/perggo-icon-source.png";
-import perggoWordmark from "./assets/perggo/perggo-wordmark-source.png";
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
@@ -994,9 +993,9 @@ function Sidebar({ active, onNavigate, navItems }) {
 function AuthBrand({ showTagline = false }) {
   return (
     <div className="auth-brand">
-      {/* Auth brand intentionally uses icon + wordmark separately; do not use perggo-logo-source here. */}
+      {/* Using text wordmark here because perggo-wordmark-source.png includes the icon and would duplicate the auth brand. */}
       <img src={perggoIcon} alt="Ícone Perggo" className="auth-brand-icon" />
-      <img src={perggoWordmark} alt="Perggo" className="auth-brand-wordmark" />
+      <span className="auth-brand-wordmark">Perggo</span>
       {showTagline ? <p className="auth-brand-tagline">O inbox inteligente dos marketplaces</p> : null}
     </div>
   );

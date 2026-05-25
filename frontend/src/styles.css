@@ -99,9 +99,14 @@ button:disabled {
 }
 
 .auth-brand-wordmark {
-  width: min(214px, 64vw);
-  max-height: 56px;
-  object-fit: contain;
+  display: block;
+  margin: 0;
+  color: #101e36;
+  font-size: clamp(44px, 12.5vw, 58px);
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
 }
 
 .auth-brand-tagline {
