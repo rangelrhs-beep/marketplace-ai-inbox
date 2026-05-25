@@ -7,7 +7,11 @@ import {
   Clock3,
   ExternalLink,
   Inbox,
+  Mail,
   MessageCircle,
+  Lock,
+  Eye,
+  EyeOff,
   PlugZap,
   RefreshCw,
   Send,
@@ -18,7 +22,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import perggoLogo from "./assets/perggo/perggo-logo-source.png";
+import perggoIcon from "./assets/perggo/perggo-icon-source.png";
 
 const API_URL = (import.meta.env.VITE_API_URL || "https://marketplace-ai-backend-ky72.onrender.com").replace(/\/$/, "");
 const AI_REWRITE_URL = `${API_URL}/ai/rewrite`;
@@ -988,18 +992,24 @@ function Sidebar({ active, onNavigate, navItems }) {
 
 function AuthBrand({ showTagline = false }) {
   return (
-    <div className="perggo-brand">
-      <img src={perggoLogo} alt="Perggo" className="perggo-logo" />
-      {showTagline ? <p className="perggo-tagline">O inbox inteligente dos marketplaces</p> : null}
+    <div className="auth-brand">
+      {/* Using text wordmark here because perggo-wordmark-source.png includes the icon and would duplicate the auth brand. */}
+      <img src={perggoIcon} alt="Ícone Perggo" className="auth-brand-icon" />
+      <span className="auth-brand-wordmark">Perggo</span>
+      {showTagline ? <p className="auth-brand-tagline">O inbox inteligente dos marketplaces</p> : null}
     </div>
   );
 }
 
 function LoadingScreen({ message }) {
   return (
-    <main className="login-screen">
-      <section className="login-panel login-panel-centered">
-        <AuthBrand />
+    <main className="auth-shell">
+      <div className="auth-background" aria-hidden="true">
+        <span className="auth-aura auth-aura-top" />
+        <span className="auth-aura auth-aura-bottom" />
+      </div>
+      <section className="auth-content auth-content-center" aria-live="polite">
+        <AuthBrand showTagline />
         <p className="loading-copy">{message}</p>
         <div className="loading-dots" aria-label="Carregando" />
       </section>
@@ -1008,47 +1018,80 @@ function LoadingScreen({ message }) {
 }
 
 function LoginScreen({ email, password, error, isLoading, onEmailChange, onPasswordChange, onSubmit, onForgotPassword, onBackToLogin, recoverySent }) {
+  const [showPassword, setShowPassword] = useState(false);
+
+  const handleCreateAccountClick = () => {
+    window.alert("Criação de conta disponível somente por convite da sua empresa.");
+  };
+
+  const handleInviteClick = () => {
+    window.alert("Use o link de convite enviado pela sua empresa para acessar o Perggo.");
+  };
+
   return (
-    <main className="login-screen">
-      <section className="login-panel" aria-labelledby="login-title">
+    <main className="auth-shell">
+      <div className="auth-background" aria-hidden="true">
+        <span className="auth-aura auth-aura-top" />
+        <span className="auth-aura auth-aura-bottom" />
+      </div>
+      <section className="auth-content" aria-labelledby="login-title">
         <AuthBrand showTagline />
         {recoverySent ? (
-          <>
-            <h1 id="login-title">Enviamos um link para seu e-mail</h1>
-            <p>Verifique sua caixa de entrada e spam.</p>
-            <button className="primary" type="button" onClick={onBackToLogin}>Voltar ao login</button>
-          </>
+          <div className="auth-success-state">
+            <h1 id="login-title" className="auth-title">Enviamos um link para seu e-mail</h1>
+            <p className="auth-subtitle">Verifique sua caixa de entrada e spam.</p>
+            <button className="auth-primary-btn" type="button" onClick={onBackToLogin}>Voltar ao login</button>
+          </div>
         ) : (
           <>
-            <h1 id="login-title">Bem-vindo de volta</h1>
-            <p>Entre para acessar sua central de respostas</p>
+            <h1 id="login-title" className="auth-title">Bem-vindo de volta</h1>
+            <p className="auth-subtitle">Entre para acessar sua central de respostas</p>
 
             <form className="login-form" onSubmit={onSubmit}>
-              <label>
-                E-mail
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => onEmailChange(event.target.value)}
-                  autoComplete="email"
-                  required
-                />
+              <label className="auth-field">
+                <span className="auth-field-label">E-mail</span>
+                <span className="auth-input-wrap">
+                  <Mail size={18} className="auth-input-icon-left" aria-hidden="true" />
+                  <input
+                    className="auth-input"
+                    type="email"
+                    value={email}
+                    onChange={(event) => onEmailChange(event.target.value)}
+                    autoComplete="email"
+                    required
+                  />
+                </span>
               </label>
-              <label>
-                Senha
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => onPasswordChange(event.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
+              <label className="auth-field">
+                <span className="auth-field-label">Senha</span>
+                <span className="auth-input-wrap">
+                  <Lock size={18} className="auth-input-icon-left" aria-hidden="true" />
+                  <input
+                    className="auth-input"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(event) => onPasswordChange(event.target.value)}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    className="auth-input-action"
+                    type="button"
+                    onClick={() => setShowPassword((current) => !current)}
+                    aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                  >
+                    {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+                  </button>
+                </span>
               </label>
+
+              <button className="auth-forgot-link" type="button" onClick={onForgotPassword} disabled={isLoading}>Esqueci minha senha</button>
               {error ? <div className="login-error">{error}</div> : null}
-              <button className="primary" type="submit" disabled={isLoading}>
+              <button className="auth-primary-btn" type="submit" disabled={isLoading}>
                 {isLoading ? "Entrando..." : "Entrar"}
               </button>
-              <button className="secondary" type="button" onClick={onForgotPassword} disabled={isLoading}>Esqueci minha senha</button>
+              <button className="auth-secondary-btn" type="button" onClick={handleCreateAccountClick}>Criar conta</button>
+              <button className="auth-tertiary-link" type="button" onClick={handleInviteClick}>Fui convidado</button>
             </form>
           </>
         )}
@@ -1059,31 +1102,41 @@ function LoginScreen({ email, password, error, isLoading, onEmailChange, onPassw
 
 function PasswordRecoveryScreen({ password, confirmPassword, message, isSaving, onPasswordChange, onConfirmPasswordChange, onSubmit, isSuccess, onBackToLogin }) {
   return (
-    <main className="login-screen">
-      <section className="login-panel" aria-labelledby="password-recovery-title">
-        <AuthBrand />
+    <main className="auth-shell">
+      <div className="auth-background" aria-hidden="true">
+        <span className="auth-aura auth-aura-top" />
+        <span className="auth-aura auth-aura-bottom" />
+      </div>
+      <section className="auth-content" aria-labelledby="password-recovery-title">
+        <AuthBrand showTagline />
         {isSuccess ? (
-          <>
-            <h1 id="password-recovery-title">Senha criada com sucesso</h1>
-            <p>Agora você já pode acessar sua empresa no Perggo.</p>
-            <button className="primary" type="button" onClick={onBackToLogin}>Entrar no Perggo</button>
-          </>
+          <div className="auth-success-state">
+            <h1 id="password-recovery-title" className="auth-title">Senha criada com sucesso</h1>
+            <p className="auth-subtitle">Agora você já pode acessar sua empresa no Perggo.</p>
+            <button className="auth-primary-btn" type="button" onClick={onBackToLogin}>Entrar no Perggo</button>
+          </div>
         ) : (
           <>
-            <h1 id="password-recovery-title">Definir nova senha</h1>
-            <p>Crie uma senha segura para acessar sua conta.</p>
+            <h1 id="password-recovery-title" className="auth-title">Definir nova senha</h1>
+            <p className="auth-subtitle">Crie uma senha segura para acessar sua conta.</p>
             <form className="login-form" onSubmit={onSubmit}>
-              <label>
-                Nova senha
-                <input type="password" value={password} onChange={(event) => onPasswordChange(event.target.value)} autoComplete="new-password" required />
+              <label className="auth-field">
+                <span className="auth-field-label">Nova senha</span>
+                <span className="auth-input-wrap">
+                  <Lock size={18} className="auth-input-icon-left" aria-hidden="true" />
+                  <input className="auth-input" type="password" value={password} onChange={(event) => onPasswordChange(event.target.value)} autoComplete="new-password" required />
+                </span>
               </label>
-              <label>
-                Confirmar senha
-                <input type="password" value={confirmPassword} onChange={(event) => onConfirmPasswordChange(event.target.value)} autoComplete="new-password" required />
+              <label className="auth-field">
+                <span className="auth-field-label">Confirmar senha</span>
+                <span className="auth-input-wrap">
+                  <Lock size={18} className="auth-input-icon-left" aria-hidden="true" />
+                  <input className="auth-input" type="password" value={confirmPassword} onChange={(event) => onConfirmPasswordChange(event.target.value)} autoComplete="new-password" required />
+                </span>
               </label>
               <small className="recovery-helper">Depois de salvar, você poderá acessar sua empresa no Perggo.</small>
               {message ? <div className="login-error">{message}</div> : null}
-              <button className="primary" type="submit" disabled={isSaving}>{isSaving ? "Salvando..." : "Salvar nova senha"}</button>
+              <button className="auth-primary-btn" type="submit" disabled={isSaving}>{isSaving ? "Salvando..." : "Salvar nova senha"}</button>
             </form>
           </>
         )}
